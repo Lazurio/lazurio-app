@@ -16,6 +16,12 @@ describe("destinationOf", () => {
     assert.strictEqual(tagOf("https://lazurio.io/"), "Lazurio");
   });
 
+  it("treats a name with the root's trailing dot as the same name", () => {
+    assert.strictEqual(tagOf("https://launchpad.example-env.lazurio.io./"), "Lazurio");
+    assert.strictEqual(tagOf("https://lazurio.io./"), "Lazurio");
+    assert.strictEqual(tagOf("https://evil-lazurio.io./"), "SystemBrowser");
+  });
+
   it("hands look-alike and foreign hosts to the system's browser", () => {
     assert.strictEqual(tagOf("https://lazurio.io.attacker.example/"), "SystemBrowser");
     assert.strictEqual(tagOf("https://evil-lazurio.io/"), "SystemBrowser");

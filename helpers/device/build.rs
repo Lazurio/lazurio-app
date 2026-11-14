@@ -4,7 +4,13 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = "../../proto";
     println!("cargo:rerun-if-changed={proto_root}");
-    let descriptors = protox::compile(["lazurio/app/helper/v1/helper.proto"], [proto_root])?;
+    let descriptors = protox::compile(
+        [
+            "lazurio/app/helper/v1/helper.proto",
+            "lazurio/app/tailnet/v1/tailnet.proto",
+        ],
+        [proto_root],
+    )?;
     prost_build::Config::new().compile_fds(descriptors)?;
     Ok(())
 }

@@ -1,13 +1,17 @@
 // Command lazurio-tailnet is the tailnet helper of Lazurio App. The app's main process starts it,
 // and it speaks the helper protocol of proto/lazurio/app/helper/v1 over its standard input and
-// output. Its log goes to standard error as JSON lines. The tailnet node itself (tsnet) comes with
-// the first verification of the plan.
+// output. It holds one tsnet node for each tailnet the person belongs to and a local proxy through
+// which only the app's own views reach them (decision 0248). Its log goes to standard error as
+// JSON lines.
 package main
 
 import (
 	"bufio"
 	"log/slog"
 	"os"
+
+	helperv1 "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/helper/v1"
+	tailnetv1 "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/tailnet/v1"
 )
 
 // version is set at build time with -ldflags "-X main.version=<version>".
@@ -15,7 +19,29 @@ var version = "0.0.0-dev"
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := serve(bufio.NewReader(os.Stdin), os.Stdout, version); err != nil {
+	out := NewOutbox(os.Stdout)
+	nodes := NewNodes(func(state *tailnetv1.NodeState) {
+		if err := out.Send(&helperv1.HelperMessage{
+			Kind: &helperv1.HelperMessage_NodeState{NodeState: state},
+		}); err != nil {
+			logger.Error("cannot report a node's state", "error", err)
+		}
+	}, logger)
+	proxy, err := StartProxy(nodes)
+	if err != nil {
+		logger.Error("helper stopped", "error", err)
+		os.Exit(1)
+	}
+	endpoint := &tailnetv1.ProxyEndpoint{
+		Host:     "127.0.0.1",
+		Port:     proxy.Port(),
+		Username: proxy.username,
+		Password: proxy.password,
+	}
+	err = serve(bufio.NewReader(os.Stdin), out, version, nodes, endpoint)
+	nodes.Close()
+	_ = proxy.Close()
+	if err != nil {
 		logger.Error("helper stopped", "error", err)
 		os.Exit(1)
 	}

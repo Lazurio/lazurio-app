@@ -9,6 +9,8 @@ import * as NodePath from "node:path";
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
+import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../src/shared/bridge.ts";
+
 const HOSTILE_PAGE = `<!doctype html><title>hostile</title><p id="hostile">hostile</p>`;
 
 let server: NodeHttp.Server;
@@ -143,5 +145,23 @@ describe("Lazurio App GEN4", () => {
     await inRemotePage(`location.href = "file:///etc/passwd"; true`);
     const url = await inRemotePage(`location.href`);
     assert.strictEqual(url, remoteUrl);
+  });
+
+  // Last: it replaces what the window shows.
+  it("shows every later change of status in its local window", async () => {
+    const changed: AppStatus = {
+      appVersion: "0.0.0",
+      generation: "GEN4",
+      helpers: [],
+      tailnets: [{ tailnet: "e2e", state: "running", addresses: ["100.64.0.1"] }],
+    };
+    await app.evaluate(
+      ({ BrowserWindow }, { channel, status }) => {
+        for (const window of BrowserWindow.getAllWindows())
+          window.webContents.send(channel, status);
+      },
+      { channel: STATUS_CHANGED_CHANNEL, status: changed },
+    );
+    await shell.locator('[data-tailnet="e2e"][data-state="running"]').waitFor();
   });
 });

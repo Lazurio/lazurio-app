@@ -10,6 +10,8 @@
         "src/ui/main.tsx",
         "scripts/*.ts",
         "e2e/*.test.ts",
+        // The status test runs it as the tailnet helper, by path (e2e/status.e2e.test.ts).
+        "e2e/fake-tailnet-helper.ts",
         "vite.ui.config.ts",
       ],
     },

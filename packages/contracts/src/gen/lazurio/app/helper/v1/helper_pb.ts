@@ -7,18 +7,21 @@
 // A helper reads AppMessage from its standard input and writes HelperMessage to its standard
 // output, each framed by its length as a varint (protobuf's size-delimited encoding). The helper
 // listens on nothing for this conversation. Its first message is Hello, unsolicited, with
-// request_id 0. A helper's own work (tailnet, Device) lives in its own package and joins this
-// envelope in a later version; nothing here is removed or renumbered (buf breaking, FILE).
+// request_id 0. A helper's own work lives in its own package and joins this envelope from field
+// 10 on; a helper answers a kind it does not serve with Failure. Nothing here is removed or
+// renumbered (buf breaking, FILE).
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { NodeState, ProxyEndpoint, StartNode } from "../../tailnet/v1/tailnet_pb.ts";
+import { file_lazurio_app_tailnet_v1_tailnet } from "../../tailnet/v1/tailnet_pb.ts";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file lazurio/app/helper/v1/helper.proto.
  */
 export const file_lazurio_app_helper_v1_helper: GenFile = /*@__PURE__*/
-  fileDesc("CiJsYXp1cmlvL2FwcC9oZWxwZXIvdjEvaGVscGVyLnByb3RvEhVsYXp1cmlvLmFwcC5oZWxwZXIudjEiigEKCkFwcE1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBIrCgRwaW5nGAIgASgLMhsubGF6dXJpby5hcHAuaGVscGVyLnYxLlBpbmdIABIzCghzaHV0ZG93bhgDIAEoCzIfLmxhenVyaW8uYXBwLmhlbHBlci52MS5TaHV0ZG93bkgAQgYKBGtpbmQiugEKDUhlbHBlck1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBItCgVoZWxsbxgCIAEoCzIcLmxhenVyaW8uYXBwLmhlbHBlci52MS5IZWxsb0gAEisKBHBvbmcYAyABKAsyGy5sYXp1cmlvLmFwcC5oZWxwZXIudjEuUG9uZ0gAEjEKB2ZhaWx1cmUYBCABKAsyHi5sYXp1cmlvLmFwcC5oZWxwZXIudjEuRmFpbHVyZUgAQgYKBGtpbmQiTgoFSGVsbG8SGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRITCgtoZWxwZXJfbmFtZRgCIAEoCRIWCg5oZWxwZXJfdmVyc2lvbhgDIAEoCSIVCgRQaW5nEg0KBW5vbmNlGAEgASgMIhUKBFBvbmcSDQoFbm9uY2UYASABKAwiCgoIU2h1dGRvd24iKAoHRmFpbHVyZRIMCgRjb2RlGAEgASgJEg8KB21lc3NhZ2UYAiABKAlCU1pRZ2l0aHViLmNvbS9MYXp1cmlvL2xhenVyaW8tYXBwL2hlbHBlcnMvdGFpbG5ldC9nZW4vbGF6dXJpby9hcHAvaGVscGVyL3YxO2hlbHBlcnYxYgZwcm90bzM");
+  fileDesc("CiJsYXp1cmlvL2FwcC9oZWxwZXIvdjEvaGVscGVyLnByb3RvEhVsYXp1cmlvLmFwcC5oZWxwZXIudjEiwwEKCkFwcE1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBIrCgRwaW5nGAIgASgLMhsubGF6dXJpby5hcHAuaGVscGVyLnYxLlBpbmdIABIzCghzaHV0ZG93bhgDIAEoCzIfLmxhenVyaW8uYXBwLmhlbHBlci52MS5TaHV0ZG93bkgAEjcKCnN0YXJ0X25vZGUYCiABKAsyIS5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLlN0YXJ0Tm9kZUgAQgYKBGtpbmQitAIKDUhlbHBlck1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBItCgVoZWxsbxgCIAEoCzIcLmxhenVyaW8uYXBwLmhlbHBlci52MS5IZWxsb0gAEisKBHBvbmcYAyABKAsyGy5sYXp1cmlvLmFwcC5oZWxwZXIudjEuUG9uZ0gAEjEKB2ZhaWx1cmUYBCABKAsyHi5sYXp1cmlvLmFwcC5oZWxwZXIudjEuRmFpbHVyZUgAEjcKCm5vZGVfc3RhdGUYCiABKAsyIS5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLk5vZGVTdGF0ZUgAEj8KDnByb3h5X2VuZHBvaW50GAsgASgLMiUubGF6dXJpby5hcHAudGFpbG5ldC52MS5Qcm94eUVuZHBvaW50SABCBgoEa2luZCJOCgVIZWxsbxIYChBwcm90b2NvbF92ZXJzaW9uGAEgASgNEhMKC2hlbHBlcl9uYW1lGAIgASgJEhYKDmhlbHBlcl92ZXJzaW9uGAMgASgJIhUKBFBpbmcSDQoFbm9uY2UYASABKAwiFQoEUG9uZxINCgVub25jZRgBIAEoDCIKCghTaHV0ZG93biIoCgdGYWlsdXJlEgwKBGNvZGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCUJTWlFnaXRodWIuY29tL0xhenVyaW8vbGF6dXJpby1hcHAvaGVscGVycy90YWlsbmV0L2dlbi9sYXp1cmlvL2FwcC9oZWxwZXIvdjE7aGVscGVydjFiBnByb3RvMw", [file_lazurio_app_tailnet_v1_tailnet]);
 
 /**
  * A message from the app's main process to a helper.
@@ -49,6 +52,14 @@ export type AppMessage = Message<"lazurio.app.helper.v1.AppMessage"> & {
      */
     value: Shutdown;
     case: "shutdown";
+  } | {
+    /**
+     * The tailnet helper (lazurio.app.tailnet.v1).
+     *
+     * @generated from field: lazurio.app.tailnet.v1.StartNode start_node = 10;
+     */
+    value: StartNode;
+    case: "startNode";
   } | { case: undefined; value?: undefined };
 };
 
@@ -93,6 +104,20 @@ export type HelperMessage = Message<"lazurio.app.helper.v1.HelperMessage"> & {
      */
     value: Failure;
     case: "failure";
+  } | {
+    /**
+     * The tailnet helper (lazurio.app.tailnet.v1).
+     *
+     * @generated from field: lazurio.app.tailnet.v1.NodeState node_state = 10;
+     */
+    value: NodeState;
+    case: "nodeState";
+  } | {
+    /**
+     * @generated from field: lazurio.app.tailnet.v1.ProxyEndpoint proxy_endpoint = 11;
+     */
+    value: ProxyEndpoint;
+    case: "proxyEndpoint";
   } | { case: undefined; value?: undefined };
 };
 

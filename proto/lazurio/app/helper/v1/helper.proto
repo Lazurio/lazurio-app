@@ -5,9 +5,12 @@ syntax = "proto3";
 // A helper reads AppMessage from its standard input and writes HelperMessage to its standard
 // output, each framed by its length as a varint (protobuf's size-delimited encoding). The helper
 // listens on nothing for this conversation. Its first message is Hello, unsolicited, with
-// request_id 0. A helper's own work (tailnet, Device) lives in its own package and joins this
-// envelope in a later version; nothing here is removed or renumbered (buf breaking, FILE).
+// request_id 0. A helper's own work lives in its own package and joins this envelope from field
+// 10 on; a helper answers a kind it does not serve with Failure. Nothing here is removed or
+// renumbered (buf breaking, FILE).
 package lazurio.app.helper.v1;
+
+import "lazurio/app/tailnet/v1/tailnet.proto";
 
 option go_package = "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/helper/v1;helperv1";
 
@@ -20,6 +23,9 @@ message AppMessage {
   oneof kind {
     Ping ping = 2;
     Shutdown shutdown = 3;
+
+    // The tailnet helper (lazurio.app.tailnet.v1).
+    lazurio.app.tailnet.v1.StartNode start_node = 10;
   }
 }
 
@@ -32,6 +38,10 @@ message HelperMessage {
     Hello hello = 2;
     Pong pong = 3;
     Failure failure = 4;
+
+    // The tailnet helper (lazurio.app.tailnet.v1).
+    lazurio.app.tailnet.v1.NodeState node_state = 10;
+    lazurio.app.tailnet.v1.ProxyEndpoint proxy_endpoint = 11;
   }
 }
 
