@@ -16,6 +16,7 @@ func validRequest() *tailnetv1.StartNode {
 		Hostname:       "alice-macbook-app",
 		StateDirectory: "/var/lib/lazurio-app/tailnets/example",
 		Domains:        []string{"example-org.lazurio.io"},
+		StateKey:       make([]byte, stateKeySize),
 	}
 }
 
@@ -34,6 +35,8 @@ func TestValidateStartRefusesWhatCouldMisdirectTheNode(t *testing.T) {
 		"relative state":        func(r *tailnetv1.StartNode) { r.StateDirectory = "tailnets/example" },
 		"no domains":            func(r *tailnetv1.StartNode) { r.Domains = nil },
 		"a bare label":          func(r *tailnetv1.StartNode) { r.Domains = []string{"io"} },
+		"no state key":          func(r *tailnetv1.StartNode) { r.StateKey = nil },
+		"a short state key":     func(r *tailnetv1.StartNode) { r.StateKey = make([]byte, 16) },
 	}
 	for name, change := range cases {
 		request := validRequest()

@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@lazurio/app-shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
@@ -14,6 +15,7 @@ import * as Hardening from "./Hardening.ts";
 import * as Helpers from "./Helpers.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
+import * as NodeKeys from "./NodeKeys.ts";
 import * as Tailnet from "./Tailnet.ts";
 
 // Lazurio App GEN4 (decision 0248): the main process. It serves the app's own windows, guards
@@ -99,6 +101,20 @@ const helperBinaries = Effect.fn("main.helperBinaries")(function* (
   ];
 });
 
+// The system's keystore for the tailnet nodes' state keys (NodeKeys, ADR 0003). A development
+// build on Linux without a keyring seals with Chromium's fixed password, which NodeKeys accepts
+// only from a development build; a packaged app never asks for it.
+const keystoreOn = (platform: string, development: boolean): NodeKeys.Keystore => {
+  if (development && platform === "linux") Electron.safeStorage.setUsePlainTextEncryption(true);
+  return {
+    available: () => Electron.safeStorage.isEncryptionAvailable(),
+    backend: () =>
+      platform === "linux" ? Electron.safeStorage.getSelectedStorageBackend() : undefined,
+    seal: (text) => Electron.safeStorage.encryptString(text),
+    open: (sealed) => Electron.safeStorage.decryptString(Buffer.from(sealed)),
+  };
+};
+
 const program = Effect.gen(function* () {
   const hooks = yield* testHooks;
   yield* Effect.promise(() => Electron.app.whenReady());
@@ -110,6 +126,9 @@ const program = Effect.gen(function* () {
   yield* LocalScheme.serve(path.join(appPath, "dist-ui"));
 
   const helpers = yield* Helpers.startAll(yield* helperBinaries(hooks.tailnetHelper));
+  const fileSystem = yield* FileSystem.FileSystem;
+  const keystore = keystoreOn(yield* HostProcess.Platform, !Electron.app.isPackaged);
+  const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
   const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
   const tailnets: Tailnet.Tailnets =
     tailnetHelper !== undefined && Option.isSome(tailnetHelper.connection)
@@ -118,7 +137,13 @@ const program = Effect.gen(function* () {
           tailnets: yield* developmentTailnets,
           session: Electron.session.fromPartition(MainWindow.REMOTE_PARTITION),
           observer: hooks.observer,
-          stateRoot: path.join(Electron.app.getPath("userData"), "tailnets"),
+          stateRoot,
+          stateKeyOf: (tailnet) =>
+            NodeKeys.stateKey({
+              keystore,
+              path: path.join(stateRoot, `${tailnet}.key`),
+              allowWithoutKeystore: !Electron.app.isPackaged,
+            }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
         })
       : { current: () => [], subscribe: () => () => {} };
   const status = (): AppStatus => ({

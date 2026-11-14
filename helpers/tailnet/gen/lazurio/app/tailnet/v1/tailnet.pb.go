@@ -39,7 +39,11 @@ type StartNode struct {
 	StateDirectory string `protobuf:"bytes,4,opt,name=state_directory,json=stateDirectory,proto3" json:"state_directory,omitempty"`
 	// The DNS suffixes of the tailnet's Environments. The proxy sends a name ending in one of them
 	// to this node and no other name.
-	Domains       []string `protobuf:"bytes,5,rep,name=domains,proto3" json:"domains,omitempty"`
+	Domains []string `protobuf:"bytes,5,rep,name=domains,proto3" json:"domains,omitempty"`
+	// The 32-byte key that seals the node's state at rest (AES-256-GCM). The app keeps it only
+	// sealed by the system's keystore and gives it to the helper here; a node without it does not
+	// start, and the helper never writes the state in the clear (ADR 0003).
+	StateKey      []byte `protobuf:"bytes,6,opt,name=state_key,json=stateKey,proto3" json:"state_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -105,6 +109,13 @@ func (x *StartNode) GetStateDirectory() string {
 func (x *StartNode) GetDomains() []string {
 	if x != nil {
 		return x.Domains
+	}
+	return nil
+}
+
+func (x *StartNode) GetStateKey() []byte {
+	if x != nil {
+		return x.StateKey
 	}
 	return nil
 }
@@ -480,14 +491,15 @@ var File_lazurio_app_tailnet_v1_tailnet_proto protoreflect.FileDescriptor
 
 const file_lazurio_app_tailnet_v1_tailnet_proto_rawDesc = "" +
 	"\n" +
-	"$lazurio/app/tailnet/v1/tailnet.proto\x12\x16lazurio.app.tailnet.v1\"\xa5\x01\n" +
+	"$lazurio/app/tailnet/v1/tailnet.proto\x12\x16lazurio.app.tailnet.v1\"\xc2\x01\n" +
 	"\tStartNode\x12\x18\n" +
 	"\atailnet\x18\x01 \x01(\tR\atailnet\x12\x1f\n" +
 	"\vcontrol_url\x18\x02 \x01(\tR\n" +
 	"controlUrl\x12\x1a\n" +
 	"\bhostname\x18\x03 \x01(\tR\bhostname\x12'\n" +
 	"\x0fstate_directory\x18\x04 \x01(\tR\x0estateDirectory\x12\x18\n" +
-	"\adomains\x18\x05 \x03(\tR\adomains\"\xaf\x02\n" +
+	"\adomains\x18\x05 \x03(\tR\adomains\x12\x1b\n" +
+	"\tstate_key\x18\x06 \x01(\fR\bstateKey\"\xaf\x02\n" +
 	"\tNodeState\x12\x18\n" +
 	"\atailnet\x18\x01 \x01(\tR\atailnet\x12>\n" +
 	"\bstarting\x18\x02 \x01(\v2 .lazurio.app.tailnet.v1.StartingH\x00R\bstarting\x12E\n" +
