@@ -253,29 +253,13 @@ importers:
         version: 1.4.0(@types/node@24.12.4)(@vitest/ui@5.0.5)(jiti@2.7.0)(typescript@5.4.5)(yaml@2.9.1)
 
   apps/desktop:
-    dependencies:
+    devDependencies:
       '@bufbuild/protobuf':
         specifier: 'catalog:'
         version: 2.17.0
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(redis@6.3.1)
-      '@lazurio/app-contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@lazurio/app-shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      effect:
-        specifier: 'catalog:'
-        version: 4.1.2
-      react:
-        specifier: 'catalog:'
-        version: 19.3.0
-      react-dom:
-        specifier: 'catalog:'
-        version: 19.3.0(react@19.3.0)
-    devDependencies:
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.67.1
@@ -285,6 +269,12 @@ importers:
       '@electron/fuses':
         specifier: 'catalog:'
         version: 1.8.0
+      '@lazurio/app-contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@lazurio/app-shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@types/node':
         specifier: 'catalog:'
         version: 24.12.4
@@ -297,6 +287,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: 'catalog:'
         version: 6.1.2(@voidzero-dev/vite-plus-core@1.4.0(@types/node@24.12.4)(jiti@2.7.0)(typescript@5.4.5)(yaml@2.9.1))
+      effect:
+        specifier: 'catalog:'
+        version: 4.1.2
       electron:
         specifier: 'catalog:'
         version: 44.10.1(supports-color@7.2.0)
@@ -306,6 +299,12 @@ importers:
       playwright-core:
         specifier: 'catalog:'
         version: 1.64.1
+      react:
+        specifier: 'catalog:'
+        version: 19.3.0
+      react-dom:
+        specifier: 'catalog:'
+        version: 19.3.0(react@19.3.0)
       vite-plus:
         specifier: 1.4.0
         version: 1.4.0(@types/node@24.12.4)(@vitest/ui@5.0.5)(jiti@2.7.0)(typescript@5.4.5)(yaml@2.9.1)
