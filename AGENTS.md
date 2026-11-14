@@ -10,7 +10,7 @@ Lazurio App GEN4: a native app on Electron for macOS and Windows that shows the 
   - `src/ui` is the local windows, in React.
   - `src/shared` is the bridge contract.
   - `e2e` holds the end-to-end tests.
-- `helpers/tailnet`: the tailnet helper in Go (tsnet comes with the first verification).
+- `helpers/tailnet`: the tailnet helper in Go: one tsnet node per tailnet and a loopback proxy with a password per start, which sends only a tailnet's own names to its node (`proto/lazurio/app/tailnet/v1`). tsnet is pinned to a commit of tailscale's `main` with the tailnet DNS fix (`96467f7d1642`), because no release has it yet.
 - `helpers/device`: the Device helper in Rust (the engine `Lazurio/agent-desktop` comes later).
 - `proto`: the protocol between the main process and the helpers. Its generated code lives in `packages/contracts/src/gen` and `helpers/tailnet/gen`.
 - `packages/contracts`: the generated protocol code and its framing.

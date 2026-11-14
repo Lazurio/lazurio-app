@@ -11,12 +11,14 @@ import { destinationOf } from "./Navigation.ts";
 // The main window: a local window with the preload bridge, and below it at most one remote view
 // for a page of the web Lazurio, which gets no preload and its own session.
 
-const REMOTE_PARTITION = "persist:lazurio-remote";
+// The session of every remote view; the tailnet gives it its PAC script (Tailnet.ts).
+export const REMOTE_PARTITION = "persist:lazurio-remote";
 const HEADER_HEIGHT = 120;
 
 export interface MainWindowOptions {
   readonly preloadPath: string;
-  readonly status: AppStatus;
+  // Reads the app's current status whenever a local window asks.
+  readonly status: () => AppStatus;
   readonly remoteUrl: Option.Option<string>;
 }
 
@@ -27,12 +29,12 @@ const isLocalSender = (event: Electron.IpcMainInvokeEvent): boolean => {
   return url !== undefined && destinationOf(url)._tag === "Local";
 };
 
-const serveStatus = (status: AppStatus) =>
+const serveStatus = (status: () => AppStatus) =>
   Effect.acquireRelease(
     Effect.sync(() =>
       Electron.ipcMain.handle(STATUS_CHANNEL, (event) => {
         if (!isLocalSender(event)) throw new Error("refused: not a local window of the app");
-        return status;
+        return status();
       }),
     ),
     () => Effect.sync(() => Electron.ipcMain.removeHandler(STATUS_CHANNEL)),

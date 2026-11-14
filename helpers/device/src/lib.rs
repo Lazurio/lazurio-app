@@ -6,13 +6,26 @@ use std::io::{self, Read, Write};
 
 use prost::Message;
 
-/// The code generated from `proto/lazurio/app/helper/v1/helper.proto`.
+/// The code generated from `proto/`, in modules that follow its packages.
 #[allow(clippy::all, clippy::pedantic)]
-pub mod helper_v1 {
-    include!(concat!(env!("OUT_DIR"), "/lazurio.app.helper.v1.rs"));
+pub mod lazurio {
+    pub mod app {
+        pub mod helper {
+            pub mod v1 {
+                include!(concat!(env!("OUT_DIR"), "/lazurio.app.helper.v1.rs"));
+            }
+        }
+        pub mod tailnet {
+            pub mod v1 {
+                include!(concat!(env!("OUT_DIR"), "/lazurio.app.tailnet.v1.rs"));
+            }
+        }
+    }
 }
 
-use helper_v1::{AppMessage, Failure, Hello, HelperMessage, Pong, app_message, helper_message};
+use lazurio::app::helper::v1::{
+    AppMessage, Failure, Hello, HelperMessage, Pong, app_message, helper_message,
+};
 
 /// The version of the helper protocol this helper speaks.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -55,7 +68,8 @@ pub fn serve<R: Read, W: Write>(
                 helper_message::Kind::Pong(Pong { nonce: ping.nonce })
             }
             Some(app_message::Kind::Shutdown(_)) => return Ok(()),
-            None => helper_message::Kind::Failure(Failure {
+            // This helper serves no other helper's work, such as the tailnet's.
+            Some(_) | None => helper_message::Kind::Failure(Failure {
                 code: "unknown_request".to_owned(),
                 message: "the helper does not serve this kind of request".to_owned(),
             }),
@@ -131,7 +145,8 @@ fn read_byte<R: Read>(input: &mut R) -> io::Result<Option<u8>> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    use super::helper_v1::{Ping, Shutdown};
+    use super::lazurio::app::helper::v1::{Ping, Shutdown};
+    use super::lazurio::app::tailnet::v1::StartNode;
     use super::*;
 
     fn frames(messages: &[AppMessage]) -> Vec<u8> {
@@ -161,7 +176,7 @@ mod tests {
             },
             AppMessage {
                 request_id: 8,
-                kind: None,
+                kind: Some(app_message::Kind::StartNode(StartNode::default())),
             },
             AppMessage {
                 request_id: 9,

@@ -11,6 +11,10 @@
     "./helper/v1": {
       "types": "./src/gen/lazurio/app/helper/v1/helper_pb.ts",
       "import": "./src/gen/lazurio/app/helper/v1/helper_pb.ts"
+    },
+    "./tailnet/v1": {
+      "types": "./src/gen/lazurio/app/tailnet/v1/tailnet_pb.ts",
+      "import": "./src/gen/lazurio/app/tailnet/v1/tailnet_pb.ts"
     }
   },
   "scripts": {

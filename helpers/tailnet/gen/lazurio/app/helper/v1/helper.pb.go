@@ -9,12 +9,14 @@
 // A helper reads AppMessage from its standard input and writes HelperMessage to its standard
 // output, each framed by its length as a varint (protobuf's size-delimited encoding). The helper
 // listens on nothing for this conversation. Its first message is Hello, unsolicited, with
-// request_id 0. A helper's own work (tailnet, Device) lives in its own package and joins this
-// envelope in a later version; nothing here is removed or renumbered (buf breaking, FILE).
+// request_id 0. A helper's own work lives in its own package and joins this envelope from field
+// 10 on; a helper answers a kind it does not serve with Failure. Nothing here is removed or
+// renumbered (buf breaking, FILE).
 
 package helperv1
 
 import (
+	v1 "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/tailnet/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -39,6 +41,7 @@ type AppMessage struct {
 	//
 	//	*AppMessage_Ping
 	//	*AppMessage_Shutdown
+	//	*AppMessage_StartNode
 	Kind          isAppMessage_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -106,6 +109,15 @@ func (x *AppMessage) GetShutdown() *Shutdown {
 	return nil
 }
 
+func (x *AppMessage) GetStartNode() *v1.StartNode {
+	if x != nil {
+		if x, ok := x.Kind.(*AppMessage_StartNode); ok {
+			return x.StartNode
+		}
+	}
+	return nil
+}
+
 type isAppMessage_Kind interface {
 	isAppMessage_Kind()
 }
@@ -118,9 +130,16 @@ type AppMessage_Shutdown struct {
 	Shutdown *Shutdown `protobuf:"bytes,3,opt,name=shutdown,proto3,oneof"`
 }
 
+type AppMessage_StartNode struct {
+	// The tailnet helper (lazurio.app.tailnet.v1).
+	StartNode *v1.StartNode `protobuf:"bytes,10,opt,name=start_node,json=startNode,proto3,oneof"`
+}
+
 func (*AppMessage_Ping) isAppMessage_Kind() {}
 
 func (*AppMessage_Shutdown) isAppMessage_Kind() {}
+
+func (*AppMessage_StartNode) isAppMessage_Kind() {}
 
 // A message from a helper to the app's main process.
 type HelperMessage struct {
@@ -132,6 +151,8 @@ type HelperMessage struct {
 	//	*HelperMessage_Hello
 	//	*HelperMessage_Pong
 	//	*HelperMessage_Failure
+	//	*HelperMessage_NodeState
+	//	*HelperMessage_ProxyEndpoint
 	Kind          isHelperMessage_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -208,6 +229,24 @@ func (x *HelperMessage) GetFailure() *Failure {
 	return nil
 }
 
+func (x *HelperMessage) GetNodeState() *v1.NodeState {
+	if x != nil {
+		if x, ok := x.Kind.(*HelperMessage_NodeState); ok {
+			return x.NodeState
+		}
+	}
+	return nil
+}
+
+func (x *HelperMessage) GetProxyEndpoint() *v1.ProxyEndpoint {
+	if x != nil {
+		if x, ok := x.Kind.(*HelperMessage_ProxyEndpoint); ok {
+			return x.ProxyEndpoint
+		}
+	}
+	return nil
+}
+
 type isHelperMessage_Kind interface {
 	isHelperMessage_Kind()
 }
@@ -224,11 +263,24 @@ type HelperMessage_Failure struct {
 	Failure *Failure `protobuf:"bytes,4,opt,name=failure,proto3,oneof"`
 }
 
+type HelperMessage_NodeState struct {
+	// The tailnet helper (lazurio.app.tailnet.v1).
+	NodeState *v1.NodeState `protobuf:"bytes,10,opt,name=node_state,json=nodeState,proto3,oneof"`
+}
+
+type HelperMessage_ProxyEndpoint struct {
+	ProxyEndpoint *v1.ProxyEndpoint `protobuf:"bytes,11,opt,name=proxy_endpoint,json=proxyEndpoint,proto3,oneof"`
+}
+
 func (*HelperMessage_Hello) isHelperMessage_Kind() {}
 
 func (*HelperMessage_Pong) isHelperMessage_Kind() {}
 
 func (*HelperMessage_Failure) isHelperMessage_Kind() {}
+
+func (*HelperMessage_NodeState) isHelperMessage_Kind() {}
+
+func (*HelperMessage_ProxyEndpoint) isHelperMessage_Kind() {}
 
 // The helper's first message. The main process stops a helper whose protocol it does not speak.
 type Hello struct {
@@ -480,20 +532,27 @@ var File_lazurio_app_helper_v1_helper_proto protoreflect.FileDescriptor
 
 const file_lazurio_app_helper_v1_helper_proto_rawDesc = "" +
 	"\n" +
-	"\"lazurio/app/helper/v1/helper.proto\x12\x15lazurio.app.helper.v1\"\xa5\x01\n" +
+	"\"lazurio/app/helper/v1/helper.proto\x12\x15lazurio.app.helper.v1\x1a$lazurio/app/tailnet/v1/tailnet.proto\"\xe9\x01\n" +
 	"\n" +
 	"AppMessage\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\x121\n" +
 	"\x04ping\x18\x02 \x01(\v2\x1b.lazurio.app.helper.v1.PingH\x00R\x04ping\x12=\n" +
-	"\bshutdown\x18\x03 \x01(\v2\x1f.lazurio.app.helper.v1.ShutdownH\x00R\bshutdownB\x06\n" +
-	"\x04kind\"\xdb\x01\n" +
+	"\bshutdown\x18\x03 \x01(\v2\x1f.lazurio.app.helper.v1.ShutdownH\x00R\bshutdown\x12B\n" +
+	"\n" +
+	"start_node\x18\n" +
+	" \x01(\v2!.lazurio.app.tailnet.v1.StartNodeH\x00R\tstartNodeB\x06\n" +
+	"\x04kind\"\xef\x02\n" +
 	"\rHelperMessage\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\x124\n" +
 	"\x05hello\x18\x02 \x01(\v2\x1c.lazurio.app.helper.v1.HelloH\x00R\x05hello\x121\n" +
 	"\x04pong\x18\x03 \x01(\v2\x1b.lazurio.app.helper.v1.PongH\x00R\x04pong\x12:\n" +
-	"\afailure\x18\x04 \x01(\v2\x1e.lazurio.app.helper.v1.FailureH\x00R\afailureB\x06\n" +
+	"\afailure\x18\x04 \x01(\v2\x1e.lazurio.app.helper.v1.FailureH\x00R\afailure\x12B\n" +
+	"\n" +
+	"node_state\x18\n" +
+	" \x01(\v2!.lazurio.app.tailnet.v1.NodeStateH\x00R\tnodeState\x12N\n" +
+	"\x0eproxy_endpoint\x18\v \x01(\v2%.lazurio.app.tailnet.v1.ProxyEndpointH\x00R\rproxyEndpointB\x06\n" +
 	"\x04kind\"z\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1f\n" +
@@ -524,25 +583,31 @@ func file_lazurio_app_helper_v1_helper_proto_rawDescGZIP() []byte {
 
 var file_lazurio_app_helper_v1_helper_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_lazurio_app_helper_v1_helper_proto_goTypes = []any{
-	(*AppMessage)(nil),    // 0: lazurio.app.helper.v1.AppMessage
-	(*HelperMessage)(nil), // 1: lazurio.app.helper.v1.HelperMessage
-	(*Hello)(nil),         // 2: lazurio.app.helper.v1.Hello
-	(*Ping)(nil),          // 3: lazurio.app.helper.v1.Ping
-	(*Pong)(nil),          // 4: lazurio.app.helper.v1.Pong
-	(*Shutdown)(nil),      // 5: lazurio.app.helper.v1.Shutdown
-	(*Failure)(nil),       // 6: lazurio.app.helper.v1.Failure
+	(*AppMessage)(nil),       // 0: lazurio.app.helper.v1.AppMessage
+	(*HelperMessage)(nil),    // 1: lazurio.app.helper.v1.HelperMessage
+	(*Hello)(nil),            // 2: lazurio.app.helper.v1.Hello
+	(*Ping)(nil),             // 3: lazurio.app.helper.v1.Ping
+	(*Pong)(nil),             // 4: lazurio.app.helper.v1.Pong
+	(*Shutdown)(nil),         // 5: lazurio.app.helper.v1.Shutdown
+	(*Failure)(nil),          // 6: lazurio.app.helper.v1.Failure
+	(*v1.StartNode)(nil),     // 7: lazurio.app.tailnet.v1.StartNode
+	(*v1.NodeState)(nil),     // 8: lazurio.app.tailnet.v1.NodeState
+	(*v1.ProxyEndpoint)(nil), // 9: lazurio.app.tailnet.v1.ProxyEndpoint
 }
 var file_lazurio_app_helper_v1_helper_proto_depIdxs = []int32{
 	3, // 0: lazurio.app.helper.v1.AppMessage.ping:type_name -> lazurio.app.helper.v1.Ping
 	5, // 1: lazurio.app.helper.v1.AppMessage.shutdown:type_name -> lazurio.app.helper.v1.Shutdown
-	2, // 2: lazurio.app.helper.v1.HelperMessage.hello:type_name -> lazurio.app.helper.v1.Hello
-	4, // 3: lazurio.app.helper.v1.HelperMessage.pong:type_name -> lazurio.app.helper.v1.Pong
-	6, // 4: lazurio.app.helper.v1.HelperMessage.failure:type_name -> lazurio.app.helper.v1.Failure
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	7, // 2: lazurio.app.helper.v1.AppMessage.start_node:type_name -> lazurio.app.tailnet.v1.StartNode
+	2, // 3: lazurio.app.helper.v1.HelperMessage.hello:type_name -> lazurio.app.helper.v1.Hello
+	4, // 4: lazurio.app.helper.v1.HelperMessage.pong:type_name -> lazurio.app.helper.v1.Pong
+	6, // 5: lazurio.app.helper.v1.HelperMessage.failure:type_name -> lazurio.app.helper.v1.Failure
+	8, // 6: lazurio.app.helper.v1.HelperMessage.node_state:type_name -> lazurio.app.tailnet.v1.NodeState
+	9, // 7: lazurio.app.helper.v1.HelperMessage.proxy_endpoint:type_name -> lazurio.app.tailnet.v1.ProxyEndpoint
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_lazurio_app_helper_v1_helper_proto_init() }
@@ -553,11 +618,14 @@ func file_lazurio_app_helper_v1_helper_proto_init() {
 	file_lazurio_app_helper_v1_helper_proto_msgTypes[0].OneofWrappers = []any{
 		(*AppMessage_Ping)(nil),
 		(*AppMessage_Shutdown)(nil),
+		(*AppMessage_StartNode)(nil),
 	}
 	file_lazurio_app_helper_v1_helper_proto_msgTypes[1].OneofWrappers = []any{
 		(*HelperMessage_Hello)(nil),
 		(*HelperMessage_Pong)(nil),
 		(*HelperMessage_Failure)(nil),
+		(*HelperMessage_NodeState)(nil),
+		(*HelperMessage_ProxyEndpoint)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

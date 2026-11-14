@@ -8,10 +8,13 @@ import * as Path from "effect/Path";
 
 import * as Electron from "electron";
 
+import type { TailnetStatus } from "../shared/bridge.ts";
+
 import * as Hardening from "./Hardening.ts";
 import * as Helpers from "./Helpers.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
+import * as Tailnet from "./Tailnet.ts";
 
 // Lazurio App GEN4 (decision 0248): the main process. It serves the app's own windows, guards
 // every web contents, starts the helper processes and opens the main window.
@@ -36,6 +39,14 @@ const testHooks = Effect.gen(function* () {
     },
   };
   return { observer, remoteUrl };
+});
+
+// Development only, and never in a packaged app: the tailnets to join, as a JSON array of
+// Tailnet.TailnetConfig. A released app gets them from the person's Lazurio account.
+const developmentTailnets = Effect.gen(function* () {
+  if (Electron.app.isPackaged) return [];
+  const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
+  return Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [];
 });
 
 const helperBinaries = Effect.gen(function* () {
@@ -80,9 +91,25 @@ const program = Effect.gen(function* () {
   yield* LocalScheme.serve(path.join(appPath, "dist-ui"));
 
   const helpers = yield* Helpers.startAll(yield* helperBinaries);
+  const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
+  const tailnetStatuses =
+    tailnetHelper !== undefined && Option.isSome(tailnetHelper.connection)
+      ? yield* Tailnet.run({
+          connection: tailnetHelper.connection.value,
+          tailnets: yield* developmentTailnets,
+          session: Electron.session.fromPartition(MainWindow.REMOTE_PARTITION),
+          observer: hooks.observer,
+          stateRoot: path.join(Electron.app.getPath("userData"), "tailnets"),
+        })
+      : (): ReadonlyArray<TailnetStatus> => [];
   yield* MainWindow.open({
     preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
-    status: { appVersion: Electron.app.getVersion(), generation: "GEN4", helpers },
+    status: () => ({
+      appVersion: Electron.app.getVersion(),
+      generation: "GEN4",
+      helpers: helpers.map((helper) => helper.status),
+      tailnets: tailnetStatuses(),
+    }),
     remoteUrl: hooks.remoteUrl,
   });
 

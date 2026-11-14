@@ -30,6 +30,25 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
           ))}
         </ul>
       </section>
+      <section aria-label={text.tailnets}>
+        <h2>{text.tailnets}</h2>
+        {current.tailnets.length === 0 ? (
+          <p className="shell__empty">{text.noTailnets}</p>
+        ) : (
+          <ul className="shell__helpers">
+            {current.tailnets.map((tailnet) => (
+              <li key={tailnet.tailnet} data-tailnet={tailnet.tailnet} data-state={tailnet.state}>
+                <span>{tailnet.tailnet}</span>
+                <span>
+                  {tailnet.state === "running"
+                    ? `${text.running} · ${tailnet.addresses.join(", ")}`
+                    : text[tailnet.state]}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   );
 }

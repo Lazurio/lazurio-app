@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+// The work of the tailnet helper: one user-space tailnet node for each tailnet the person belongs
+// to, all at once, and one local proxy through which only the app's own views reach them
+// (decision 0248). The messages travel in the envelope of lazurio.app.helper.v1.
+package lazurio.app.tailnet.v1;
+
+option go_package = "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/tailnet/v1;tailnetv1";
+
+// Starts the node of one tailnet. The helper answers with the node's state at once, and sends
+// every later change on its own.
+message StartNode {
+  // The app's name for the tailnet, for example the Organization's. Unique among the nodes.
+  string tailnet = 1;
+
+  // The tailnet's control server (Headscale), an https:// address without credentials.
+  string control_url = 2;
+
+  // The node's name in the tailnet.
+  string hostname = 3;
+
+  // Where the node keeps its state. The app gives each tailnet its own directory.
+  string state_directory = 4;
+
+  // The DNS suffixes of the tailnet's Environments. The proxy sends a name ending in one of them
+  // to this node and no other name.
+  repeated string domains = 5;
+}
+
+// The state of one node.
+message NodeState {
+  string tailnet = 1;
+
+  oneof state {
+    Starting starting = 2;
+    NeedsLogin needs_login = 3;
+    Running running = 4;
+    Stopped stopped = 5;
+  }
+}
+
+// The node is connecting to its control server.
+message Starting {}
+
+// The person has to sign in before the node can join; the app opens the address in the system's
+// browser. Approval of the Device follows the Organization's rules and is not reported here.
+message NeedsLogin {
+  string login_url = 1;
+}
+
+// The node is part of the tailnet.
+message Running {
+  repeated string addresses = 1;
+}
+
+// The node stopped, with a reason for the log.
+message Stopped {
+  string reason = 1;
+}
+
+// The local proxy of the helper. Sent once, unsolicited, right after Hello. It listens only on
+// the loopback address and accepts only CONNECT with these credentials, which change on every
+// start of the helper.
+message ProxyEndpoint {
+  string host = 1;
+  uint32 port = 2;
+  string username = 3;
+  string password = 4;
+}

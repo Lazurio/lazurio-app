@@ -79,3 +79,16 @@ body {
 .shell__helpers li[data-state="failed"] span:last-child {
   color: var(--problem);
 }
+
+.shell__empty {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.shell__helpers li[data-state="running"] span:last-child {
+  color: var(--ok);
+}
+
+.shell__helpers li[data-state="stopped"] span:last-child {
+  color: var(--problem);
+}

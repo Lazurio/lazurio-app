@@ -8,6 +8,12 @@ export const messages = {
     helpers: "Pomocné procesy",
     ready: "Běží",
     failed: "Nespustil se",
+    tailnets: "Tailnety",
+    noTailnets: "Žádný tailnet",
+    starting: "Připojuje se",
+    "needs-login": "Čeká na přihlášení",
+    running: "Připojeno",
+    stopped: "Zastaveno",
   },
   en: {
     generation: "Generation",
@@ -15,6 +21,12 @@ export const messages = {
     helpers: "Helper processes",
     ready: "Running",
     failed: "Did not start",
+    tailnets: "Tailnets",
+    noTailnets: "No tailnet",
+    starting: "Connecting",
+    "needs-login": "Waiting for sign-in",
+    running: "Connected",
+    stopped: "Stopped",
   },
 } as const;
 
