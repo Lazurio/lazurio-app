@@ -1,0 +1,16 @@
+import { StrictMode, Suspense } from "react";
+import { createRoot } from "react-dom/client";
+
+import { App } from "./App.tsx";
+import "./styles.css";
+
+const root = document.getElementById("root");
+if (root !== null) {
+  createRoot(root).render(
+    <StrictMode>
+      <Suspense>
+        <App status={window.lazurio.status()} />
+      </Suspense>
+    </StrictMode>,
+  );
+}

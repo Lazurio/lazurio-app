@@ -1,0 +1,41 @@
+{
+  "name": "@lazurio/app-desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Lazurio App GEN4 for macOS and Windows",
+  "license": "Elastic-2.0",
+  "author": "Lazurio",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "ensure:electron": "node scripts/ensure-electron.ts",
+    "build": "vp pack && vp build --config vite.ui.config.ts",
+    "start": "electron .",
+    "typecheck": "effect-tsgo tsc@7.0.2 --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir src",
+    "test:e2e": "vp test run --config ../../vite.config.ts --dir e2e",
+    "package:dir": "electron-builder --dir",
+    "check:fuses": "node scripts/check-fuses.ts"
+  },
+  "devDependencies": {
+    "@bufbuild/protobuf": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/tsgo": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@electron/fuses": "catalog:",
+    "@lazurio/app-contracts": "workspace:*",
+    "@lazurio/app-shared": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "effect": "catalog:",
+    "electron": "catalog:",
+    "electron-builder": "catalog:",
+    "playwright-core": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "productName": "Lazurio App"
+}

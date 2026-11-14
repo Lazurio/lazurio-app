@@ -1,0 +1,81 @@
+/* Placeholder look until the tokens of the Lazurio design system arrive with the window slice. */
+:root {
+  color-scheme: light dark;
+  --surface: #ffffff;
+  --text: #16181d;
+  --muted: #5b6270;
+  --line: #e3e6eb;
+  --ok: #1f7a4d;
+  --problem: #b42318;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #111318;
+    --text: #eceef2;
+    --muted: #a3a9b5;
+    --line: #2a2e37;
+    --ok: #5bd39a;
+    --problem: #ff8a80;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.shell {
+  padding: 24px;
+}
+
+.shell__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.shell__header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.shell__facts {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.shell__facts dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.shell__helpers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.shell__helpers li {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.shell__helpers li[data-state="ready"] span:last-child {
+  color: var(--ok);
+}
+
+.shell__helpers li[data-state="failed"] span:last-child {
+  color: var(--problem);
+}

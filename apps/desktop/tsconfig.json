@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "jsx": "react-jsx",
+    "types": ["node", "electron"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "esnext.disposable"]
+  },
+  "include": ["src", "e2e", "scripts", "*.config.ts", "../../scripts/lib"]
+}

@@ -1,0 +1,50 @@
+# Lazurio App GEN4. The identity io.lazurio.app never changes (decisions 0241 and 0248): macOS
+# keeps the person's Accessibility and Screen Recording permissions with it and its signing team.
+appId: io.lazurio.app
+productName: Lazurio App
+executableName: lazurio-app
+copyright: Copyright © 2026 Lazurio
+directories:
+  output: release
+files:
+  - dist-electron/**
+  - dist-ui/**
+  - package.json
+asar: true
+extraResources:
+  - from: ../../helpers/tailnet/bin
+    to: helpers
+    filter:
+      - lazurio-tailnet
+      - lazurio-tailnet.exe
+  - from: ../../helpers/device/target/release
+    to: helpers
+    filter:
+      - lazurio-device
+      - lazurio-device.exe
+# Read back from the built app by `pnpm check:fuses` (scripts/check-fuses.ts).
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: false
+mac:
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - dir
+publish:
+  provider: github
+  owner: Lazurio
+  repo: lazurio-app

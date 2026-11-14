@@ -1,0 +1,16 @@
+# Run through `pnpm proto:generate` (scripts/proto-generate.ts), which builds protoc-gen-go from the
+# version pinned in helpers/tailnet/go.mod first. Rust generates its code in helpers/device/build.rs.
+version: v2
+inputs:
+  - directory: proto
+clean: true
+plugins:
+  - local: node_modules/.bin/protoc-gen-es
+    out: packages/contracts/src/gen
+    opt:
+      - target=ts
+      - import_extension=ts
+  - local: .cache/bin/protoc-gen-go
+    out: helpers/tailnet/gen
+    opt:
+      - paths=source_relative

@@ -1,0 +1,121 @@
+# Every pull request and every push to main, on Linux (docs/adr/0001). macOS and Windows run in
+# desktop-platforms.yml. Actions are pinned to commits.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typescript:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - name: Protocol stays compatible with main
+        if: github.event_name == 'pull_request'
+        run: |
+          if git cat-file -e origin/main:proto 2>/dev/null; then pnpm proto:breaking; else echo "main has no proto yet"; fi
+
+  generated:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm proto:generate
+      - name: Generated code is committed
+        run: git diff --exit-code -- packages/contracts/src/gen helpers/tailnet/gen
+
+  go:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: helpers/tailnet
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: helpers/tailnet
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  rust:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: helpers/device
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # rustup 1.28+ installs the toolchain of rust-toolchain.toml only when asked.
+      - run: rustup toolchain install
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: helpers/device/Cargo.toml
+          command: check
+
+  desktop-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers
+      - run: pnpm --filter @lazurio/app-desktop build
+      - name: Operating system sandbox for Electron
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sandbox="$(dirname "$(cd apps/desktop && node -p "require('electron')")")/chrome-sandbox"
+          sudo chown root:root "$sandbox"
+          sudo chmod 4755 "$sandbox"
+      - name: End-to-end
+        env:
+          LAZURIO_APP_E2E_OS_SANDBOX: "true"
+        run: xvfb-run -a pnpm --filter @lazurio/app-desktop test:e2e
+      - run: pnpm build:helpers --release
+      - run: pnpm --filter @lazurio/app-desktop package:dir
+      - run: pnpm --filter @lazurio/app-desktop check:fuses

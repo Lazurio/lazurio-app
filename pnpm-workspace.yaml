@@ -1,0 +1,71 @@
+packages:
+  - apps/*
+  - packages/*
+  - scripts
+  - tools/*
+
+# A release younger than seven days is not installed (supply-chain safety), in minutes.
+minimumReleaseAge: 10080
+
+# Only the packages named here may run install scripts.
+allowBuilds:
+  # Its bin resolves the platform package without the install script, which only swaps in the binary.
+  "@bufbuild/buf": false
+  # Electron 44 ships no install script; apps/desktop runs its install.js (ensure:electron).
+  electron: false
+  # Squirrel.Windows tooling of electron-builder; NSIS is the Windows target here.
+  electron-winstaller: false
+  esbuild: true
+
+# Versions follow the catalog of Lazurio/t3code, the base of Lazurio App GEN5, so that code moves
+# there without a rewrite. Bump one here only after the fork bumps it (docs/adr/0001).
+catalog:
+  "@bufbuild/buf": 1.75.0
+  "@bufbuild/protobuf": 2.17.0
+  "@bufbuild/protoc-gen-es": 2.17.0
+  "@effect/platform-node": 4.1.2
+  "@effect/tsgo": 0.67.1
+  "@effect/vitest": 4.1.2
+  # The major electron-builder 26 writes the fuses with, to read them back.
+  "@electron/fuses": 1.8.0
+  "@oxlint/plugins": 1.89.0
+  "@types/node": 24.12.4
+  "@types/react": 19.3.0
+  "@types/react-dom": 19.3.0
+  "@vitejs/plugin-react": 6.1.2
+  effect: 4.1.2
+  electron: 44.10.1
+  electron-builder: 26.16.1
+  knip: 6.34.0
+  playwright-core: 1.64.1
+  react: 19.3.0
+  react-dom: 19.3.0
+  vite-plus: 1.4.0
+
+# @effect/vitest imports vite-plus/test instead of a second vitest, as in Lazurio/t3code
+# (the patch is copied unchanged from the fork).
+overrides:
+  "@effect/vitest>vitest": "-"
+  # Vite is Vite+ core, as in Lazurio/t3code.
+  vite: npm:@voidzero-dev/vite-plus-core@1.4.0
+  vite-plus: "catalog:"
+
+# A catalog: spec here resolves through the vite-plus override above.
+packageExtensions:
+  "@effect/vitest@*":
+    dependencies:
+      vite-plus: "catalog:"
+
+patchedDependencies:
+  "@effect/vitest@4.1.2": patches/@effect__vitest@4.1.2.patch
+
+# Unmet peers fail resolution, so a pin outside a dependency's peer range is caught when the
+# lockfile changes instead of scrolling past as a warning.
+strictPeerDependencies: true
+
+peerDependencyRules:
+  allowAny:
+    - typescript
+    - vite
+  allowedVersions:
+    vite: "*"

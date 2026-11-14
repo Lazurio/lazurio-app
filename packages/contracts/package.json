@@ -1,0 +1,30 @@
+{
+  "name": "@lazurio/app-contracts",
+  "private": true,
+  "license": "Elastic-2.0",
+  "type": "module",
+  "exports": {
+    "./framing": {
+      "types": "./src/framing.ts",
+      "import": "./src/framing.ts"
+    },
+    "./helper/v1": {
+      "types": "./src/gen/lazurio/app/helper/v1/helper_pb.ts",
+      "import": "./src/gen/lazurio/app/helper/v1/helper_pb.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "effect-tsgo tsc@7.0.2 --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir ."
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

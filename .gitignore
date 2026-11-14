@@ -1,0 +1,14 @@
+node_modules/
+.cache/
+.vite-plus/
+dist/
+dist-electron/
+dist-ui/
+release/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+helpers/device/target/
+helpers/tailnet/bin/
+.DS_Store
