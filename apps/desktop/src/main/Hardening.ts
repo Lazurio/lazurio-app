@@ -29,6 +29,12 @@ export const registerView = (contents: Electron.WebContents, kind: ViewKind): vo
   viewKinds.set(contents, kind);
 };
 
+// The app's own windows that are still open, the only ones that get the bridge's messages.
+export const localViews = (): ReadonlyArray<Electron.WebContents> =>
+  Electron.webContents
+    .getAllWebContents()
+    .filter((contents) => !contents.isDestroyed() && viewKinds.get(contents) === "Local");
+
 export const hardenSession = (session: Electron.Session): Effect.Effect<void> =>
   Effect.sync(() => {
     session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));

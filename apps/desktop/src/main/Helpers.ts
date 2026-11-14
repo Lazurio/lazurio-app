@@ -30,6 +30,8 @@ const REPLY_TIMEOUT = "10 seconds";
 export interface HelperBinary {
   readonly name: string;
   readonly path: string;
+  // Arguments for the program at path; end-to-end tests run a script through Node this way.
+  readonly args?: ReadonlyArray<string>;
 }
 
 class HelperProtocolError extends Schema.TaggedError<HelperProtocolError>()("HelperProtocolError", {
@@ -56,7 +58,7 @@ const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
 const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(
-    ChildProcess.make(binary.path, [], { stdin: "pipe", stderr: "inherit" }),
+    ChildProcess.make(binary.path, [...(binary.args ?? [])], { stdin: "pipe", stderr: "inherit" }),
   );
   const failure = (problem: string) => new HelperProtocolError({ helper: binary.name, problem });
 
