@@ -34,7 +34,9 @@ type node struct {
 }
 
 // NewNodes makes an empty set of nodes that reports each change of state through emit.
+// No node sends its log to Tailscale's log server (disableLogUploads).
 func NewNodes(emit func(*tailnetv1.NodeState), logger *slog.Logger) *Nodes {
+	disableLogUploads()
 	return &Nodes{nodes: map[string]*node{}, emit: emit, logger: logger}
 }
 
