@@ -8,7 +8,7 @@ import * as Path from "effect/Path";
 
 import * as Electron from "electron";
 
-import type { TailnetStatus } from "../shared/bridge.ts";
+import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../shared/bridge.ts";
 
 import * as Hardening from "./Hardening.ts";
 import * as Helpers from "./Helpers.ts";
@@ -92,7 +92,7 @@ const program = Effect.gen(function* () {
 
   const helpers = yield* Helpers.startAll(yield* helperBinaries);
   const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
-  const tailnetStatuses =
+  const tailnets: Tailnet.Tailnets =
     tailnetHelper !== undefined && Option.isSome(tailnetHelper.connection)
       ? yield* Tailnet.run({
           connection: tailnetHelper.connection.value,
@@ -101,17 +101,27 @@ const program = Effect.gen(function* () {
           observer: hooks.observer,
           stateRoot: path.join(Electron.app.getPath("userData"), "tailnets"),
         })
-      : (): ReadonlyArray<TailnetStatus> => [];
-  yield* MainWindow.open({
+      : { current: () => [], subscribe: () => () => {} };
+  const status = (): AppStatus => ({
+    appVersion: Electron.app.getVersion(),
+    generation: "GEN4",
+    helpers: helpers.map((helper) => helper.status),
+    tailnets: tailnets.current(),
+  });
+  const window = yield* MainWindow.open({
     preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
-    status: () => ({
-      appVersion: Electron.app.getVersion(),
-      generation: "GEN4",
-      helpers: helpers.map((helper) => helper.status),
-      tailnets: tailnetStatuses(),
-    }),
+    status,
     remoteUrl: hooks.remoteUrl,
   });
+  // The local window learns every change of status at once.
+  yield* Effect.acquireRelease(
+    Effect.sync(() =>
+      tailnets.subscribe(() => {
+        if (!window.isDestroyed()) window.webContents.send(STATUS_CHANGED_CHANNEL, status());
+      }),
+    ),
+    (stop) => Effect.sync(stop),
+  );
 
   yield* Effect.callback<void>((resume) => {
     Electron.app.once("window-all-closed", () => resume(Effect.void));

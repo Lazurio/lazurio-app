@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -35,6 +36,23 @@ type node struct {
 // NewNodes makes an empty set of nodes that reports each change of state through emit.
 func NewNodes(emit func(*tailnetv1.NodeState), logger *slog.Logger) *Nodes {
 	return &Nodes{nodes: map[string]*node{}, emit: emit, logger: logger}
+}
+
+// addressPattern matches any web address in a log line.
+var addressPattern = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'<>]+`)
+
+// redactAddresses replaces every web address in a line of tsnet's log. tsnet writes a node's
+// sign-in address there again and again, and whoever opens that address can register the node
+// under their own account, so no address of tsnet's reaches the app's log.
+func redactAddresses(line string) string {
+	return addressPattern.ReplaceAllString(line, "<address>")
+}
+
+// tsnetLogf sends tsnet's log lines to the helper's log at one level, without their addresses.
+func tsnetLogf(logger *slog.Logger, level slog.Level) func(format string, args ...any) {
+	return func(format string, args ...any) {
+		logger.Log(context.Background(), level, redactAddresses(fmt.Sprintf(format, args...)))
+	}
 }
 
 // normalizeDomain lowercases a DNS suffix and drops its dots at either end.
@@ -67,15 +85,17 @@ func validateStart(request *tailnetv1.StartNode) error {
 	return nil
 }
 
-// Start starts the node of one tailnet and reports its first state.
-func (n *Nodes) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, error) {
+// Start starts the node of one tailnet and returns its first state. The node reports nothing on
+// its own until begin is called, which serve does right after it has sent that first state, so
+// the app always receives the reply before any later state.
+func (n *Nodes) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, func(), error) {
 	if err := validateStart(request); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if _, exists := n.nodes[request.GetTailnet()]; exists {
-		return nil, fmt.Errorf("the node of %s already runs", request.GetTailnet())
+		return nil, nil, fmt.Errorf("the node of %s already runs", request.GetTailnet())
 	}
 	domains := make([]string, 0, len(request.GetDomains()))
 	for _, domain := range request.GetDomains() {
@@ -85,7 +105,7 @@ func (n *Nodes) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, error
 		for _, taken := range other.domains {
 			for _, domain := range domains {
 				if domain == taken || strings.HasSuffix(domain, "."+taken) || strings.HasSuffix(taken, "."+domain) {
-					return nil, fmt.Errorf("%s overlaps %s of the tailnet %s", domain, taken, other.tailnet)
+					return nil, nil, fmt.Errorf("%s overlaps %s of the tailnet %s", domain, taken, other.tailnet)
 				}
 			}
 		}
@@ -95,13 +115,13 @@ func (n *Nodes) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, error
 		Dir:        request.GetStateDirectory(),
 		Hostname:   request.GetHostname(),
 		ControlURL: request.GetControlUrl(),
-		Logf:       func(format string, args ...any) { logger.Debug(fmt.Sprintf(format, args...)) },
-		UserLogf:   func(format string, args ...any) { logger.Info(fmt.Sprintf(format, args...)) },
+		Logf:       tsnetLogf(logger, slog.LevelDebug),
+		UserLogf:   tsnetLogf(logger, slog.LevelInfo),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := server.Start(); err != nil {
 		cancel()
-		return nil, fmt.Errorf("start the node: %w", err)
+		return nil, nil, fmt.Errorf("start the node: %w", err)
 	}
 	n.nodes[request.GetTailnet()] = &node{
 		tailnet: request.GetTailnet(),
@@ -109,11 +129,11 @@ func (n *Nodes) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, error
 		server:  server,
 		cancel:  cancel,
 	}
-	go n.watch(ctx, request.GetTailnet(), server, logger)
+	begin := func() { go n.watch(ctx, request.GetTailnet(), server, logger) }
 	return &tailnetv1.NodeState{
 		Tailnet: request.GetTailnet(),
 		State:   &tailnetv1.NodeState_Starting{Starting: &tailnetv1.Starting{}},
-	}, nil
+	}, begin, nil
 }
 
 // watch reports the node's login address and its state for as long as the node runs.

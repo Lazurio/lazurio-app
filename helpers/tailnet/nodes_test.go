@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"log/slog"
 	"strings"
 	"testing"
@@ -70,9 +71,30 @@ func TestStartRefusesDomainsAnotherTailnetServes(t *testing.T) {
 		request := validRequest()
 		request.Tailnet = "second"
 		request.Domains = []string{domain}
-		_, err := nodes.Start(request)
+		_, _, err := nodes.Start(request)
 		if err == nil || !strings.Contains(err.Error(), "overlaps") {
 			t.Errorf("%s: err = %v", domain, err)
 		}
+	}
+}
+
+func TestTsnetLogsNeverCarryAnAddress(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo} {
+		tsnetLogf(logger, level)(
+			"To start this tsnet server, restart with TS_AUTHKEY set, or go to: %s",
+			"https://headscale.example-org.lazurio.io/register/hskey-secret-registration-id",
+		)
+		tsnetLogf(logger, level)("control: dialing %s and %s", "http://control.example:80/key?v=1", "derp://relay.example")
+	}
+	logged := output.String()
+	for _, leak := range []string{"hskey-secret-registration-id", "headscale.example-org", "control.example", "relay.example"} {
+		if strings.Contains(logged, leak) {
+			t.Fatalf("the log carries %q:\n%s", leak, logged)
+		}
+	}
+	if strings.Count(logged, "<address>") != 6 {
+		t.Fatalf("expected six redacted addresses:\n%s", logged)
 	}
 }

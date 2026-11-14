@@ -50,7 +50,8 @@ export const pacScript = (
   const suffixes = domains.map(normalizeDomain).filter((domain) => domain !== "");
   return [
     "function FindProxyForURL(url, host) {",
-    "  var name = host.toLowerCase();",
+    // A name may end with the root's dot and is still the same name.
+    "  var name = host.toLowerCase().replace(/\\.+$/, '');",
     `  var domains = ${JSON.stringify(suffixes)};`,
     "  for (var index = 0; index < domains.length; index++) {",
     "    var domain = domains[index];",
@@ -87,6 +88,48 @@ const replaceStatus = (
 ): ReadonlyArray<TailnetStatus> =>
   statuses.map((status) => (status.tailnet === next.tailnet ? next : status));
 
+// What the app knows of its tailnets: each one's status, and which nodes have reported on their
+// own since they started.
+export interface TailnetBoard {
+  readonly statuses: ReadonlyArray<TailnetStatus>;
+  readonly reported: ReadonlySet<string>;
+}
+
+export const startingBoard = (tailnets: ReadonlyArray<string>): TailnetBoard => ({
+  statuses: tailnets.map((tailnet) => ({ tailnet, state: "starting" })),
+  reported: new Set(),
+});
+
+// A node's own report is always the newest word on it.
+export const afterEvent = (board: TailnetBoard, next: TailnetStatus): TailnetBoard => ({
+  statuses: replaceStatus(board.statuses, next),
+  reported: new Set([...board.reported, next.tailnet]),
+});
+
+// The reply to a start never takes the place of a report that came first, whichever order the
+// two reach the board in. A failed start always counts.
+export const afterReply = (board: TailnetBoard, next: TailnetStatus): TailnetBoard =>
+  board.reported.has(next.tailnet) && next.state !== "stopped"
+    ? board
+    : { ...board, statuses: replaceStatus(board.statuses, next) };
+
+// The system's browser opens a node's sign-in only on its own control server, over HTTPS and
+// without credentials, so a control server cannot make the app open anything else.
+export const isSafeLoginUrl = (loginUrl: string, controlUrl: string): boolean => {
+  try {
+    const login = new URL(loginUrl);
+    const control = new URL(controlUrl);
+    return (
+      login.protocol === "https:" &&
+      login.username === "" &&
+      login.password === "" &&
+      login.host === control.host
+    );
+  } catch {
+    return false;
+  }
+};
+
 // Answers the proxy's challenge with its credentials, and no other proxy's, for the scope's life.
 const answerProxyChallenge = (proxy: ProxyEndpoint) =>
   Effect.acquireRelease(
@@ -118,8 +161,14 @@ export interface TailnetOptions {
   readonly stateRoot: string;
 }
 
-// Runs the tailnets for as long as the scope lives. The result reads their current statuses, for
-// the local windows' bridge outside any Effect.
+export interface Tailnets {
+  // The tailnets' current statuses, for the local windows' bridge outside any Effect.
+  readonly current: () => ReadonlyArray<TailnetStatus>;
+  // Calls the listener after every change of a status; the result stops it.
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
+// Runs the tailnets for as long as the scope lives.
 export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) {
   const path = yield* Path.Path;
   const first = yield* options.connection.events.pipe(Stream.runHead);
@@ -140,21 +189,32 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
     }),
   );
 
-  let statuses: ReadonlyArray<TailnetStatus> = options.tailnets.map((tailnet) => ({
-    tailnet: tailnet.tailnet,
-    state: "starting",
-  }));
-  const update = (next: TailnetStatus) =>
+  let board = startingBoard(options.tailnets.map((tailnet) => tailnet.tailnet));
+  const listeners = new Set<() => void>();
+  const change = (next: TailnetBoard) =>
     Effect.sync(() => {
-      statuses = replaceStatus(statuses, next);
+      board = next;
+      for (const listener of listeners) listener();
     });
+  const controlUrlOf = (tailnet: string) =>
+    options.tailnets.find((candidate) => candidate.tailnet === tailnet)?.controlUrl ?? "";
+  const openSignIn = (tailnet: string, loginUrl: string) =>
+    isSafeLoginUrl(loginUrl, controlUrlOf(tailnet))
+      ? Effect.sync(() => options.observer.openExternally(loginUrl))
+      : Effect.logWarning(
+          `tailnet ${tailnet}: refused a sign-in address outside its control server`,
+        );
   yield* options.connection.events.pipe(
     Stream.runForEach((message) => {
       if (message.kind.case !== "nodeState") return Effect.void;
       const state = message.kind.value;
-      if (state.state.case === "needsLogin")
-        options.observer.openExternally(state.state.value.loginUrl);
-      return update(statusOf(state));
+      const signIn =
+        state.state.case === "needsLogin"
+          ? openSignIn(state.tailnet, state.state.value.loginUrl)
+          : Effect.void;
+      return signIn.pipe(
+        Effect.andThen(Effect.suspend(() => change(afterEvent(board, statusOf(state))))),
+      );
     }),
     Effect.forkScoped,
   );
@@ -178,8 +238,15 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
             state: "stopped",
             problem: reply.kind.case === "failure" ? reply.kind.value.message : "no answer",
           };
-    yield* update(next);
+    yield* change(afterReply(board, next));
   }
 
-  return (): ReadonlyArray<TailnetStatus> => statuses;
+  const tailnets: Tailnets = {
+    current: () => board.statuses,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  return tailnets;
 });

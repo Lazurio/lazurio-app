@@ -4,7 +4,16 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 
-import { decodeTailnets, pacDataUrl, pacScript, statusOf } from "./Tailnet.ts";
+import {
+  afterEvent,
+  afterReply,
+  decodeTailnets,
+  isSafeLoginUrl,
+  pacDataUrl,
+  pacScript,
+  startingBoard,
+  statusOf,
+} from "./Tailnet.ts";
 
 // Evaluates a PAC script the way Chromium does, with its one helper this script uses.
 const findProxy = (script: string, host: string): string => {
@@ -34,6 +43,14 @@ describe("pacScript", () => {
       "PROXY 127.0.0.1:41234",
     );
     assert.strictEqual(findProxy(script, "example-org.lazurio.io"), "PROXY 127.0.0.1:41234");
+  });
+
+  it("sends a name with the root's trailing dot to the proxy too", () => {
+    assert.strictEqual(
+      findProxy(script, "launchpad.alice.example-org.lazurio.io."),
+      "PROXY 127.0.0.1:41234",
+    );
+    assert.strictEqual(findProxy(script, "example-org.lazurio.io.."), "PROXY 127.0.0.1:41234");
   });
 
   it("sends every other name directly, look-alikes included", () => {
@@ -101,4 +118,51 @@ describe("decodeTailnets", () => {
       assert.isTrue(Exit.isFailure(result));
     }),
   );
+});
+
+describe("isSafeLoginUrl", () => {
+  const control = "https://headscale.example-org.lazurio.io";
+
+  it("opens a sign-in on the tailnet's own control server over HTTPS", () => {
+    assert.isTrue(isSafeLoginUrl(`${control}/register/abc`, control));
+  });
+
+  it("refuses any other scheme, credentials or host", () => {
+    for (const unsafe of [
+      "http://headscale.example-org.lazurio.io/register/abc",
+      "file:///etc/passwd",
+      "lazurio-app://shell/index.html",
+      "ms-settings:privacy",
+      "javascript:alert(1)",
+      "https://user:secret@headscale.example-org.lazurio.io/register/abc",
+      "https://evil.example/register/abc",
+      "https://headscale.example-org.lazurio.io.evil.example/register/abc",
+      "https://headscale.example-org.lazurio.io:8443/register/abc",
+      "not an address",
+    ]) {
+      assert.isFalse(isSafeLoginUrl(unsafe, control), unsafe);
+    }
+  });
+});
+
+describe("the tailnet board", () => {
+  const starting = { tailnet: "example", state: "starting" } as const;
+  const running = { tailnet: "example", state: "running", addresses: ["100.64.0.9"] } as const;
+  const login = { tailnet: "example", state: "needs-login" } as const;
+  const failed = { tailnet: "example", state: "stopped", problem: "refused" } as const;
+
+  it("keeps a node's report when the reply to its start comes after it", () => {
+    const board = afterReply(afterEvent(startingBoard(["example"]), login), starting);
+    assert.deepStrictEqual(board.statuses, [login]);
+  });
+
+  it("takes a node's report that comes after the reply", () => {
+    const board = afterEvent(afterReply(startingBoard(["example"]), starting), running);
+    assert.deepStrictEqual(board.statuses, [running]);
+  });
+
+  it("always takes a failed start", () => {
+    const board = afterReply(afterEvent(startingBoard(["example"]), login), failed);
+    assert.deepStrictEqual(board.statuses, [failed]);
+  });
 });

@@ -37,9 +37,10 @@ func (o *Outbox) Send(message *helperv1.HelperMessage) error {
 	return err
 }
 
-// TailnetService starts tailnet nodes; Nodes implements it.
+// TailnetService starts tailnet nodes; Nodes implements it. Start returns the node's first state
+// and a function that lets the node report later states, which serve calls after sending the first.
 type TailnetService interface {
-	Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, error)
+	Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, func(), error)
 }
 
 func failure(requestID uint64, code, message string) *helperv1.HelperMessage {
@@ -85,6 +86,7 @@ func serve(
 		}
 
 		var reply *helperv1.HelperMessage
+		afterReply := func() {}
 		switch kind := message.GetKind().(type) {
 		case *helperv1.AppMessage_Ping:
 			reply = &helperv1.HelperMessage{
@@ -94,7 +96,7 @@ func serve(
 		case *helperv1.AppMessage_Shutdown:
 			return nil
 		case *helperv1.AppMessage_StartNode:
-			state, err := tailnets.Start(kind.StartNode)
+			state, begin, err := tailnets.Start(kind.StartNode)
 			if err != nil {
 				reply = failure(message.GetRequestId(), "start_node_failed", err.Error())
 			} else {
@@ -102,6 +104,7 @@ func serve(
 					RequestId: message.GetRequestId(),
 					Kind:      &helperv1.HelperMessage_NodeState{NodeState: state},
 				}
+				afterReply = begin
 			}
 		default:
 			reply = failure(message.GetRequestId(), "unknown_request", "the helper does not serve this kind of request")
@@ -109,5 +112,6 @@ func serve(
 		if err := out.Send(reply); err != nil {
 			return fmt.Errorf("send reply to request %d: %w", message.GetRequestId(), err)
 		}
+		afterReply()
 	}
 }

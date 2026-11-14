@@ -1,10 +1,17 @@
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 
 import type { AppStatus } from "../shared/bridge.ts";
 import { localeOf, messages } from "./messages.ts";
 
 export function App({ status }: { readonly status: Promise<AppStatus> }) {
-  const current = use(status);
+  const [current, setCurrent] = useState(use(status));
+  // Every later change comes from the main process. Reading the status once more after
+  // subscribing covers a change between the first read and the subscription.
+  useEffect(() => {
+    const stop = window.lazurio.onStatus(setCurrent);
+    void window.lazurio.status().then(setCurrent);
+    return stop;
+  }, []);
   const text = messages[localeOf(navigator.language)];
   return (
     <main className="shell">

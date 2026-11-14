@@ -15,22 +15,33 @@ import (
 
 type fakeTailnets struct {
 	started []*tailnetv1.StartNode
+	// out, when set, receives a NeedsLogin event as soon as the node may report.
+	out *Outbox
 }
 
-func (f *fakeTailnets) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, error) {
+func (f *fakeTailnets) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, func(), error) {
 	f.started = append(f.started, request)
 	if request.GetTailnet() == "broken" {
-		return nil, errors.New("no such tailnet")
+		return nil, nil, errors.New("no such tailnet")
+	}
+	begin := func() {
+		if f.out == nil {
+			return
+		}
+		_ = f.out.Send(&helperv1.HelperMessage{Kind: &helperv1.HelperMessage_NodeState{NodeState: &tailnetv1.NodeState{
+			Tailnet: request.GetTailnet(),
+			State:   &tailnetv1.NodeState_NeedsLogin{NeedsLogin: &tailnetv1.NeedsLogin{LoginUrl: "https://headscale.example/register/x"}},
+		}}})
 	}
 	return &tailnetv1.NodeState{
 		Tailnet: request.GetTailnet(),
 		State:   &tailnetv1.NodeState_Starting{Starting: &tailnetv1.Starting{}},
-	}, nil
+	}, begin, nil
 }
 
 var testEndpoint = &tailnetv1.ProxyEndpoint{Host: "127.0.0.1", Port: 4242, Username: "u", Password: "p"}
 
-func runServe(t *testing.T, messages []*helperv1.AppMessage, tailnets TailnetService) []*helperv1.HelperMessage {
+func runServe(t *testing.T, messages []*helperv1.AppMessage, tailnets *fakeTailnets) []*helperv1.HelperMessage {
 	t.Helper()
 	var input bytes.Buffer
 	for _, message := range messages {
@@ -39,7 +50,9 @@ func runServe(t *testing.T, messages []*helperv1.AppMessage, tailnets TailnetSer
 		}
 	}
 	var output bytes.Buffer
-	if err := serve(bufio.NewReader(&input), NewOutbox(&output), "1.2.3", tailnets, testEndpoint); err != nil {
+	out := NewOutbox(&output)
+	tailnets.out = out
+	if err := serve(bufio.NewReader(&input), out, "1.2.3", tailnets, testEndpoint); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 	var replies []*helperv1.HelperMessage
@@ -101,6 +114,11 @@ func TestServeStartsNodesAndReportsWhatFails(t *testing.T) {
 		{RequestId: 1, Kind: &helperv1.HelperMessage_NodeState{NodeState: &tailnetv1.NodeState{
 			Tailnet: "example",
 			State:   &tailnetv1.NodeState_Starting{Starting: &tailnetv1.Starting{}},
+		}}},
+		// The node's own report comes only after the reply to its start.
+		{Kind: &helperv1.HelperMessage_NodeState{NodeState: &tailnetv1.NodeState{
+			Tailnet: "example",
+			State:   &tailnetv1.NodeState_NeedsLogin{NeedsLogin: &tailnetv1.NeedsLogin{LoginUrl: "https://headscale.example/register/x"}},
 		}}},
 		failure(2, "start_node_failed", "no such tailnet"),
 	})

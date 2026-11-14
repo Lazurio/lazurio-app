@@ -22,8 +22,11 @@ export type Frame = "main" | "sub";
 
 const LAZURIO_DOMAIN = "lazurio.io";
 
-const isLazurioHost = (hostname: string): boolean =>
-  hostname === LAZURIO_DOMAIN || hostname.endsWith(`.${LAZURIO_DOMAIN}`);
+// A name may end with the root's dot and is still the same name.
+const isLazurioHost = (hostname: string): boolean => {
+  const name = hostname.replace(/\.+$/u, "");
+  return name === LAZURIO_DOMAIN || name.endsWith(`.${LAZURIO_DOMAIN}`);
+};
 
 export const destinationOf = (address: string): Destination => {
   let url: URL;

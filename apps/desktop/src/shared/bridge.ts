@@ -2,6 +2,8 @@
 // it: only the local windows get the preload that exposes it.
 
 export const STATUS_CHANNEL = "lazurio:status";
+// The main process sends the whole status again on this channel after every change.
+export const STATUS_CHANGED_CHANNEL = "lazurio:status-changed";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -28,4 +30,6 @@ export interface AppStatus {
 
 export interface LazurioBridge {
   readonly status: () => Promise<AppStatus>;
+  // Calls the listener with the whole status after every change; the result stops it.
+  readonly onStatus: (listener: (status: AppStatus) => void) => () => void;
 }
