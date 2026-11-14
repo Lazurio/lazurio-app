@@ -129,6 +129,20 @@ func (n *Nodes) watch(ctx context.Context, tailnet string, server *tsnet.Server,
 		return
 	}
 	defer func() { _ = watcher.Close() }()
+	// tsnet asks for an interactive login while it starts, and the address it gets (BrowseToURL)
+	// may come before this watcher exists. The status keeps it, so a node that needs a login
+	// reports the address from there; each address is reported once.
+	reported := ""
+	reportLogin := func(loginURL string) {
+		if loginURL == "" || loginURL == reported {
+			return
+		}
+		reported = loginURL
+		n.emit(&tailnetv1.NodeState{
+			Tailnet: tailnet,
+			State:   &tailnetv1.NodeState_NeedsLogin{NeedsLogin: &tailnetv1.NeedsLogin{LoginUrl: loginURL}},
+		})
+	}
 	for {
 		notification, err := watcher.Next()
 		if err != nil {
@@ -140,13 +154,13 @@ func (n *Nodes) watch(ctx context.Context, tailnet string, server *tsnet.Server,
 			}
 			return
 		}
-		if notification.BrowseToURL != nil && *notification.BrowseToURL != "" {
-			n.emit(&tailnetv1.NodeState{
-				Tailnet: tailnet,
-				State: &tailnetv1.NodeState_NeedsLogin{
-					NeedsLogin: &tailnetv1.NeedsLogin{LoginUrl: *notification.BrowseToURL},
-				},
-			})
+		if notification.BrowseToURL != nil {
+			reportLogin(*notification.BrowseToURL)
+		}
+		if notification.State != nil && *notification.State == ipn.NeedsLogin {
+			if status, err := client.Status(ctx); err == nil {
+				reportLogin(status.AuthURL)
+			}
 		}
 		if notification.State != nil && *notification.State == ipn.Running {
 			status, err := client.Status(ctx)
