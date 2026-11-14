@@ -2,7 +2,15 @@ import * as Effect from "effect/Effect";
 
 import * as Electron from "electron";
 
-import { destinationOf, mayLoad, type Frame, type ViewKind } from "./Navigation.ts";
+import {
+  afterNavigation,
+  destinationOf,
+  mayLoad,
+  newView,
+  type Frame,
+  type ViewKind,
+  type ViewState,
+} from "./Navigation.ts";
 
 // Pages hold no power (decision 0248). Every permission is refused unless a later decision names
 // it, no page opens a window, every frame of a view stays on what the view is for, and an address
@@ -22,18 +30,19 @@ export const electronObserver: NavigationObserver = {
   refused: () => {},
 };
 
-// What each view the app created is for. A web contents the app did not register loads nothing.
-const viewKinds = new WeakMap<Electron.WebContents, ViewKind>();
+// What each view the app created is for, and where its sign-in stands. A web contents the app did
+// not register loads nothing.
+const views = new WeakMap<Electron.WebContents, ViewState>();
 
 export const registerView = (contents: Electron.WebContents, kind: ViewKind): void => {
-  viewKinds.set(contents, kind);
+  views.set(contents, newView(kind));
 };
 
 // The app's own windows that are still open, the only ones that get the bridge's messages.
 export const localViews = (): ReadonlyArray<Electron.WebContents> =>
   Electron.webContents
     .getAllWebContents()
-    .filter((contents) => !contents.isDestroyed() && viewKinds.get(contents) === "Local");
+    .filter((contents) => !contents.isDestroyed() && views.get(contents)?.kind === "Local");
 
 export const hardenSession = (session: Electron.Session): Effect.Effect<void> =>
   Effect.sync(() => {
@@ -50,7 +59,11 @@ const guard = (observer: NavigationObserver) => (contents: Electron.WebContents)
   });
   const check = (event: Electron.Event, url: string, isMainFrame: boolean) => {
     const frame: Frame = isMainFrame ? "main" : "sub";
-    if (mayLoad(viewKinds.get(contents), url, frame)) return;
+    const view = views.get(contents);
+    if (view !== undefined && mayLoad(view, url, frame)) {
+      views.set(contents, afterNavigation(view, url, frame));
+      return;
+    }
     event.preventDefault();
     observer.refused(url, frame);
     if (frame === "main" && destinationOf(url)._tag === "SystemBrowser") {

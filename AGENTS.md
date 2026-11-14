@@ -1,6 +1,6 @@
 # Lazurio App
 
-Lazurio App GEN4: a native app on Electron for macOS and Windows that shows the web Lazurio of a person's Environments. It carries a built-in tailnet node and the Device's capabilities (decision 0248). Lazurio App GEN5, the native app on T3 Code, will replace it as an update, so every choice here keeps that path open. Read [docs/adr/0001](docs/adr/0001-technological-foundation.md) before changing tools, versions or boundaries.
+Lazurio App GEN4: a native app on Electron for macOS and Windows that shows the web Lazurio of a person's Environments. It carries a built-in tailnet node and the Device's capabilities (decision 0248). Lazurio App GEN5, the native app on T3 Code, will replace it as an update, so every choice here keeps that path open. Read [docs/adr/0001](docs/adr/0001-technological-foundation.md) before changing tools, versions or boundaries, and [docs/adr/0002](docs/adr/0002-sign-in-pages.md) before changing which pages a remote view shows.
 
 ## Layout
 
