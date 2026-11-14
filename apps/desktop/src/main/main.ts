@@ -120,7 +120,7 @@ const program = Effect.gen(function* () {
           observer: hooks.observer,
           stateRoot: path.join(Electron.app.getPath("userData"), "tailnets"),
         })
-      : { current: () => [], subscribe: () => () => {} };
+      : Tailnet.noTailnets;
   const status = (): AppStatus => ({
     appVersion: Electron.app.getVersion(),
     generation: "GEN4",
@@ -139,15 +139,24 @@ const program = Effect.gen(function* () {
     ),
     (stop) => Effect.sync(stop),
   );
-  yield* MainWindow.open({
-    preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
-    status,
-    remoteUrl: hooks.remoteUrl,
+  // The app ends when its windows are closed, also while the main window is still opening (its
+  // remote page may wait for a tailnet's sign-in), and when opening it fails.
+  const allWindowsClosed = Effect.callback<void>((resume) => {
+    const listener = () => resume(Effect.void);
+    Electron.app.once("window-all-closed", listener);
+    return Effect.sync(() => {
+      Electron.app.off("window-all-closed", listener);
+    });
   });
-
-  yield* Effect.callback<void>((resume) => {
-    Electron.app.once("window-all-closed", () => resume(Effect.void));
-  });
+  yield* Effect.raceFirst(
+    MainWindow.open({
+      preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
+      status,
+      remoteUrl: hooks.remoteUrl,
+      whenReachable: tailnets.whenReachable,
+    }).pipe(Effect.andThen(Effect.never)),
+    allWindowsClosed,
+  );
 });
 
 NodeRuntime.runMain(

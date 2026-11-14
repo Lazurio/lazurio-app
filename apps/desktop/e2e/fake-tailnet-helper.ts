@@ -1,11 +1,52 @@
-// End-to-end tests only (main.ts, LAZURIO_APP_E2E_TAILNET_HELPER): the helper protocol of
-// lazurio-tailnet without a tsnet node. A started node needs a sign-in at once, and runs only
-// once a GET of LAZURIO_FAKE_RUNNING_URL answers, so the test decides when that happens.
+// End-to-end tests only (main.ts, LAZURIO_APP_E2E_TAILNET_HELPER): lazurio-tailnet's protocol without
+// tsnet. A node needs a sign-in at once and runs once a GET of LAZURIO_FAKE_RUNNING_URL answers.
+// With LAZURIO_FAKE_UPSTREAM its proxy tunnels every CONNECT there, as the real one does.
+// @effect-diagnostics-next-line nodeBuiltinImport:off - The fake proxy is a plain HTTP server.
+import * as NodeHttp from "node:http";
+import * as NodeNet from "node:net";
+
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { decodeFrames, encodeFrame } from "@lazurio/app-contracts/framing";
 import { AppMessageSchema, HelperMessageSchema } from "@lazurio/app-contracts/helper/v1";
 
 const runningUrl = process.env["LAZURIO_FAKE_RUNNING_URL"];
+const upstream = process.env["LAZURIO_FAKE_UPSTREAM"];
+// LAZURIO_FAKE_FAIL_FIRST_CONNECT: the first tunnel fails as one to a node that cannot reach
+// its peer yet.
+let failNextConnect = process.env["LAZURIO_FAKE_FAIL_FIRST_CONNECT"] === "true";
+const CREDENTIALS = `Basic ${btoa("e2e:e2e")}`;
+
+// The proxy asks for its credentials as the real one does, then tunnels to the upstream.
+const startProxy = async (target: string): Promise<number> => {
+  const [host = "", port = ""] = target.split(":");
+  const proxy = NodeHttp.createServer((_request, response) => {
+    response.writeHead(405);
+    response.end();
+  });
+  proxy.on("connect", (request: NodeHttp.IncomingMessage, client: NodeNet.Socket) => {
+    if (request.headers["proxy-authorization"] !== CREDENTIALS) {
+      client.end(
+        'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Lazurio App"\r\nContent-Length: 0\r\n\r\n',
+      );
+      return;
+    }
+    if (failNextConnect) {
+      failNextConnect = false;
+      client.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+    const tunnel = NodeNet.connect(Number(port), host, () => {
+      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      tunnel.pipe(client);
+      client.pipe(tunnel);
+    });
+    tunnel.on("error", () => client.destroy());
+    client.on("error", () => tunnel.destroy());
+  });
+  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  const address = proxy.address();
+  return address !== null && typeof address === "object" ? address.port : 9;
+};
 
 const send = (message: MessageInitShape<typeof HelperMessageSchema>) => {
   process.stdout.write(encodeFrame(HelperMessageSchema, create(HelperMessageSchema, message)));
@@ -36,7 +77,12 @@ send({
   requestId: 0n,
   kind: {
     case: "proxyEndpoint",
-    value: { host: "127.0.0.1", port: 9, username: "e2e", password: "e2e" },
+    value: {
+      host: "127.0.0.1",
+      port: upstream === undefined ? 9 : await startProxy(upstream),
+      username: "e2e",
+      password: "e2e",
+    },
   },
 });
 
@@ -85,3 +131,6 @@ for await (const message of decodeFrames(AppMessageSchema, process.stdin)) {
       break;
   }
 }
+
+// The app closed its end, as the real helper takes it: the proxy must not keep the process alive.
+process.exit(0);

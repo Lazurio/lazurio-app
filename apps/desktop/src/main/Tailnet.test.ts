@@ -11,6 +11,7 @@ import {
   isSafeLoginUrl,
   pacDataUrl,
   pacScript,
+  servingTailnet,
   startingBoard,
   statusOf,
 } from "./Tailnet.ts";
@@ -164,5 +165,48 @@ describe("the tailnet board", () => {
   it("always takes a failed start", () => {
     const board = afterReply(afterEvent(startingBoard(["example"]), login), failed);
     assert.deepStrictEqual(board.statuses, [failed]);
+  });
+});
+
+describe("servingTailnet", () => {
+  const tailnets = [
+    {
+      tailnet: "example-org",
+      controlUrl: "https://headscale.example-org.lazurio.io",
+      hostname: "app",
+      domains: ["example-org.lazurio.io"],
+    },
+    {
+      tailnet: "personal",
+      controlUrl: "https://headscale.personal.lazurio.io",
+      hostname: "app",
+      domains: [".Alice.Personal.Lazurio.io."],
+    },
+  ];
+
+  it("names the tailnet whose domains serve the address, as the PAC script routes it", () => {
+    assert.strictEqual(
+      servingTailnet(tailnets, "https://launchpad.bob.example-org.lazurio.io/"),
+      "example-org",
+    );
+    assert.strictEqual(servingTailnet(tailnets, "https://example-org.lazurio.io/"), "example-org");
+    assert.strictEqual(
+      servingTailnet(tailnets, "https://notes.alice.personal.lazurio.io./x"),
+      "personal",
+    );
+    assert.strictEqual(
+      servingTailnet(tailnets, "https://LAUNCHPAD.ALICE.PERSONAL.LAZURIO.IO/"),
+      "personal",
+    );
+  });
+
+  it("names none for other names, look-alikes and what is not an address", () => {
+    assert.isUndefined(servingTailnet(tailnets, "https://dashboard.lazurio.ai/"));
+    assert.isUndefined(servingTailnet(tailnets, "https://evil-example-org.lazurio.io/"));
+    assert.isUndefined(
+      servingTailnet(tailnets, "https://example-org.lazurio.io.attacker.example/"),
+    );
+    assert.isUndefined(servingTailnet(tailnets, "not an address"));
+    assert.isUndefined(servingTailnet([], "https://launchpad.bob.example-org.lazurio.io/"));
   });
 });
