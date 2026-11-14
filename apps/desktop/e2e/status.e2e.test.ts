@@ -1,31 +1,44 @@
-// End-to-end: a tailnet's status changes while the app's window is still starting, and the window
-// shows the change (the review of Lazurio/lazurio-app#3). The fake tailnet helper reports "running"
-// 800 ms after its node starts, while the slow remote page keeps the window's start busy for 2.5 s.
-// @effect-diagnostics-next-line nodeBuiltinImport:off - A plain HTTP server is the slow page's host.
+// End-to-end: a tailnet's status changes while the app's main window is still opening, and the
+// window shows the change (the review of Lazurio/lazurio-app#3). The test sets the order with
+// events, not timers:
+//   1. the local window has read its status and follows changes (data-status="live");
+//   2. the app has asked for the remote page, whose answer the test holds, so the main window is
+//      still opening;
+//   3. the test lets the fake tailnet helper report "running" (e2e/fake-tailnet-helper.ts);
+//   4. the window must show it while the remote page is still held.
+// With a subscription made only after the window has opened, step 4 never happens.
+// @effect-diagnostics-next-line nodeBuiltinImport:off - A plain HTTP server holds the page and the helper's cue.
 import * as NodeHttp from "node:http";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the app and its fixture on disk.
 import * as NodePath from "node:path";
 
-import { afterAll, beforeAll, describe, it } from "@effect/vitest";
+import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
-const SLOW_PAGE_MS = 2500;
+const page = Promise.withResolvers<void>();
+const pageRequested = Promise.withResolvers<void>();
+const running = Promise.withResolvers<void>();
 
 let server: NodeHttp.Server;
 let app: ElectronApplication;
 let shell: Page;
 
 beforeAll(async () => {
-  server = NodeHttp.createServer((_request, response) => {
-    // @effect-diagnostics-next-line globalTimers:off - The page answers late on purpose.
-    setTimeout(() => {
+  server = NodeHttp.createServer((request, response) => {
+    if (request.url === "/running") {
+      void running.promise.then(() => response.end());
+      return;
+    }
+    pageRequested.resolve();
+    void page.promise.then(() => {
       response.writeHead(200, { "content-type": "text/html" });
-      response.end("<!doctype html><title>slow</title><p>slow</p>");
-    }, SLOW_PAGE_MS);
+      response.end("<!doctype html><title>held</title><p>held</p>");
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("no server address");
+  const origin = `http://127.0.0.1:${address.port}`;
 
   app = await _electron.launch({
     args: [NodePath.resolve(import.meta.dirname, "..")],
@@ -33,13 +46,13 @@ beforeAll(async () => {
     env: {
       ...process.env,
       LAZURIO_APP_E2E: "true",
-      LAZURIO_APP_E2E_REMOTE_URL: `http://127.0.0.1:${address.port}/`,
+      LAZURIO_APP_E2E_REMOTE_URL: `${origin}/`,
       LAZURIO_APP_E2E_NODE: process.execPath,
       LAZURIO_APP_E2E_TAILNET_HELPER: NodePath.resolve(
         import.meta.dirname,
         "fake-tailnet-helper.ts",
       ),
-      LAZURIO_FAKE_RUNNING_AFTER_MS: "800",
+      LAZURIO_FAKE_RUNNING_URL: `${origin}/running`,
       LAZURIO_APP_DEV_TAILNETS: JSON.stringify([
         {
           tailnet: "e2e",
@@ -54,12 +67,22 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  page.resolve();
+  running.resolve();
   await app?.close();
+  server?.closeAllConnections();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
 
 describe("Lazurio App GEN4 status", () => {
-  it("shows a tailnet change that happens while its window is still starting", async () => {
+  it("shows a tailnet change that happens while its main window is still opening", async () => {
+    const tailnet = shell.locator('[data-tailnet="e2e"]');
+    await shell.locator('main[data-status="live"]').waitFor();
+    await pageRequested.promise;
+    assert.notStrictEqual(await tailnet.getAttribute("data-state"), "running");
+
+    running.resolve();
     await shell.locator('[data-tailnet="e2e"][data-state="running"]').waitFor({ timeout: 10_000 });
+    page.resolve();
   });
 });

@@ -1,16 +1,28 @@
-// @effect-diagnostics globalTimers:off - A test fixture outside Effect: it reports on a timer.
-// A tailnet helper for end-to-end tests only. It speaks the helper protocol as lazurio-tailnet
-// does, but runs no tsnet node: after a StartNode it answers "starting", then reports on its own
-// that the node needs a sign-in and, after LAZURIO_FAKE_RUNNING_AFTER_MS, that it runs. The app
-// starts it only when an end-to-end test names it (main.ts, LAZURIO_APP_E2E_TAILNET_HELPER).
+// End-to-end tests only (main.ts, LAZURIO_APP_E2E_TAILNET_HELPER): the helper protocol of
+// lazurio-tailnet without a tsnet node. A started node needs a sign-in at once, and runs only
+// once a GET of LAZURIO_FAKE_RUNNING_URL answers, so the test decides when that happens.
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { decodeFrames, encodeFrame } from "@lazurio/app-contracts/framing";
 import { AppMessageSchema, HelperMessageSchema } from "@lazurio/app-contracts/helper/v1";
 
-const runningAfter = Number(process.env["LAZURIO_FAKE_RUNNING_AFTER_MS"] ?? "800");
+const runningUrl = process.env["LAZURIO_FAKE_RUNNING_URL"];
 
 const send = (message: MessageInitShape<typeof HelperMessageSchema>) => {
   process.stdout.write(encodeFrame(HelperMessageSchema, create(HelperMessageSchema, message)));
+};
+
+const reportRunningWhenTold = async (tailnet: string) => {
+  if (runningUrl === undefined) return;
+  // @effect-diagnostics-next-line globalFetch:off - A fixture outside Effect, as small as it can be.
+  const answer = await fetch(runningUrl);
+  if (!answer.ok) throw new Error(`the test's control answered ${answer.status}`);
+  send({
+    requestId: 0n,
+    kind: {
+      case: "nodeState",
+      value: { tailnet, state: { case: "running", value: { addresses: ["100.64.0.99"] } } },
+    },
+  });
 };
 
 send({
@@ -55,15 +67,11 @@ for await (const message of decodeFrames(AppMessageSchema, process.stdin)) {
           },
         },
       });
-      setTimeout(() => {
-        send({
-          requestId: 0n,
-          kind: {
-            case: "nodeState",
-            value: { tailnet, state: { case: "running", value: { addresses: ["100.64.0.99"] } } },
-          },
-        });
-      }, runningAfter);
+      // A failure here ends the helper, and the test sees no "running".
+      reportRunningWhenTold(tailnet).catch((error: unknown) => {
+        process.stderr.write(`fake-tailnet-helper: ${String(error)}\n`);
+        process.exit(1);
+      });
       break;
     }
     case undefined:

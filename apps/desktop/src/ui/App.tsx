@@ -5,16 +5,21 @@ import { localeOf, messages } from "./messages.ts";
 
 export function App({ status }: { readonly status: Promise<AppStatus> }) {
   const [current, setCurrent] = useState(use(status));
+  const [live, setLive] = useState(false);
   // Every later change comes from the main process. Reading the status once more after
-  // subscribing covers a change between the first read and the subscription.
+  // subscribing covers a change between the first read and the subscription. From then on the
+  // window follows every change (data-status="live", which end-to-end tests wait for).
   useEffect(() => {
     const stop = window.lazurio.onStatus(setCurrent);
-    void window.lazurio.status().then(setCurrent);
+    void window.lazurio.status().then((latest) => {
+      setCurrent(latest);
+      setLive(true);
+    });
     return stop;
   }, []);
   const text = messages[localeOf(navigator.language)];
   return (
-    <main className="shell">
+    <main className="shell" data-status={live ? "live" : "initial"}>
       <header className="shell__header">
         <h1>Lazurio App</h1>
         <dl className="shell__facts">
