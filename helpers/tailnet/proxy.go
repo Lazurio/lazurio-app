@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strings"
 	"time"
@@ -30,13 +31,37 @@ const (
 	dialTimeout   = 15 * time.Second
 )
 
-// ipPattern matches an IPv4 or IPv6 address, with its port when it has one.
-var ipPattern = regexp.MustCompile(`\[?\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b\]?(?::\d+)?|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b`)
+// ipCandidate matches every run of the characters an IP address may be written with, brackets,
+// a zone and a port included. net/netip decides which runs are addresses, so every valid form of
+// IPv4 and IPv6 counts, also a compressed one that ends in "::".
+var ipCandidate = regexp.MustCompile(`[0-9A-Za-z:.%_\[\]-]+`)
+
+// isIPAddress reports whether a word is an IP address, alone, in brackets or with a port.
+func isIPAddress(word string) bool {
+	if _, err := netip.ParseAddrPort(word); err == nil {
+		return true
+	}
+	_, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(word, "["), "]"))
+	return err == nil
+}
+
+// redactIPAddress replaces a word that is an IP address, also one followed by ".", ",", ";" or ":".
+func redactIPAddress(word string) string {
+	for core, rest := word, ""; core != ""; core, rest = core[:len(core)-1], core[len(core)-1:]+rest {
+		if isIPAddress(core) {
+			return "<ip>" + rest
+		}
+		if !strings.ContainsAny(core[len(core)-1:], ".,;:") {
+			break
+		}
+	}
+	return word
+}
 
 // redactNetworkAddresses keeps a dial error's words without any web or IP address, because the
 // error of a tailnet's dial names its peers' addresses.
 func redactNetworkAddresses(text string) string {
-	return ipPattern.ReplaceAllString(redactAddresses(text), "<ip>")
+	return ipCandidate.ReplaceAllStringFunc(redactAddresses(text), redactIPAddress)
 }
 
 // Proxy is the helper's local HTTP proxy. It listens only on the loopback address, accepts only
