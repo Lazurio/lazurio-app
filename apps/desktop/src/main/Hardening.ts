@@ -13,8 +13,8 @@ import {
 } from "./Navigation.ts";
 
 // Pages hold no power (decision 0248). Every permission is refused unless a later decision names
-// it, no page opens a window, every frame of a view stays on what the view is for, and an address
-// outside Lazurio goes to the system's browser.
+// it, no page opens a window, every frame of a view stays on what the view is for (with GitHub's
+// sign-in of ADR 0002), and an address outside Lazurio goes to the system's browser.
 
 export interface NavigationObserver {
   // Opens an address outside Lazurio in the system's browser.

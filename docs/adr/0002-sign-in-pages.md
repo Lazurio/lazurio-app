@@ -2,7 +2,9 @@
 
 - **Status:** accepted
 - **Decided:** 2026-11-14 by Matěj Suchánek, after the first sign-in through the app's tailnet node ([#4](https://github.com/Lazurio/lazurio-app/issues/4))
-- **Related:** decision 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md), [ADR 0001](0001-technological-foundation.md)
+- **Related:**
+  - decision 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md), which records this exception in its paragraph "Pages hold no power" ([Lazurio/LazurioPlatform#988](https://github.com/Lazurio/LazurioPlatform/pull/988));
+  - [ADR 0001](0001-technological-foundation.md), whose point 4 this amends.
 
 ## Context
 
