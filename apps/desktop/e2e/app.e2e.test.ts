@@ -59,12 +59,30 @@ const outputLine = (line: string): Promise<void> =>
     check();
   });
 
-// Runs a script in the remote page, from the main process, so the page cannot see the test.
+// Runs a script in the remote page, from the main process, so the page cannot see the test. The
+// remote view loads after the local window, so this waits for the page's own load event.
 const inRemotePage = (script: string): Promise<unknown> =>
   app.evaluate(
-    async ({ webContents }, { url, code }) => {
-      const remote = webContents.getAllWebContents().find((contents) => contents.getURL() === url);
-      if (remote === undefined) throw new Error(`no remote page at ${url}`);
+    async ({ app: electronApp, webContents }, { url, code }) => {
+      const loaded = (contents: Electron.WebContents) =>
+        contents.getURL() === url && !contents.isLoading();
+      const remote =
+        webContents.getAllWebContents().find(loaded) ??
+        (await new Promise<Electron.WebContents>((resolve) => {
+          const watch = (contents: Electron.WebContents) =>
+            contents.on("did-finish-load", () => {
+              if (contents.getURL() !== url) return;
+              electronApp.off("web-contents-created", onCreated);
+              resolve(contents);
+            });
+          const onCreated = (_event: Electron.Event, contents: Electron.WebContents) =>
+            watch(contents);
+          electronApp.on("web-contents-created", onCreated);
+          for (const contents of webContents.getAllWebContents()) watch(contents);
+          // The page may have finished between the first look and the listeners.
+          const ready = webContents.getAllWebContents().find(loaded);
+          if (ready !== undefined) resolve(ready);
+        }));
       return remote.executeJavaScript(code, true);
     },
     { url: remoteUrl, code: script },
