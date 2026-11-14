@@ -1,6 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { afterNavigation, destinationOf, mayLoad, newView, type ViewState } from "./Navigation.ts";
+import {
+  afterNavigation,
+  destinationOf,
+  mayLoad,
+  newView,
+  step,
+  track,
+  type NavigationStep,
+  type Tracked,
+  type ViewState,
+} from "./Navigation.ts";
 
 const tagOf = (address: string) => destinationOf(address)._tag;
 
@@ -193,5 +203,153 @@ describe("a sign-in through Lazurio Auth", () => {
       const view = afterNavigation(newView("Lazurio"), start, "main");
       assert.isFalse(mayLoad(view, "https://github.com/login", "main"), start);
     }
+  });
+});
+
+describe("the guard's steps, in Electron's order", () => {
+  const LAUNCHPAD = "https://launchpad.lazurio-bob.example-org.lazurio.io/";
+  const START = "https://lazurio-bob.example-org.lazurio.io/oauth2/start";
+  const AUTH = "https://auth.lazurio.ai/realms/workspace/protocol/openid-connect/auth";
+  const BROKER = "https://auth.lazurio.ai/realms/workspace/broker/github/login";
+  const AUTHORIZE = "https://github.com/login/oauth/authorize";
+  const LOGIN = "https://github.com/login";
+  const SESSION = "https://github.com/session";
+  const ENDPOINT = "https://auth.lazurio.ai/realms/workspace/broker/github/endpoint";
+  const CALLBACK = "https://lazurio-bob.example-org.lazurio.io/oauth2/callback";
+
+  const start = (address: string): NavigationStep => ({ _tag: "Start", address, frame: "main" });
+  const navigate = (address: string): NavigationStep => ({
+    _tag: "Navigate",
+    address,
+    frame: "main",
+  });
+  const redirect = (address: string): NavigationStep => ({
+    _tag: "Redirect",
+    address,
+    frame: "main",
+  });
+  const show = (address: string): NavigationStep => ({ _tag: "Show", address });
+
+  interface Run {
+    readonly tracked: Tracked;
+    readonly refused: ReadonlyArray<string>;
+    readonly ended: number;
+  }
+  const run = (events: ReadonlyArray<NavigationStep>, from: Tracked = track("Lazurio")): Run =>
+    events.reduce<Run>(
+      (state, event) => {
+        const outcome = step(state.tracked, event);
+        return {
+          tracked: outcome.tracked,
+          refused: outcome.allowed
+            ? state.refused
+            : [...state.refused, `${event._tag} ${event.address}`],
+          ended: state.ended + (outcome.signInEnded ? 1 : 0),
+        };
+      },
+      { tracked: from, refused: [], ended: 0 },
+    );
+
+  // The app loads the Environment, which sends the person over Lazurio Auth to GitHub's sign-in.
+  const toGitHub = [
+    start(LAUNCHPAD),
+    redirect(START),
+    redirect(AUTH),
+    redirect(BROKER),
+    redirect(AUTHORIZE),
+    redirect(LOGIN),
+    show(LOGIN),
+  ];
+  // The person signs in on GitHub, which sends them back over Lazurio Auth to the Environment.
+  const back = [
+    start(SESSION),
+    navigate(SESSION),
+    redirect(AUTHORIZE),
+    redirect(ENDPOINT),
+    redirect(CALLBACK),
+    redirect(LAUNCHPAD),
+    show(LAUNCHPAD),
+  ];
+  const signedIn = run([...toGitHub, ...back]).tracked;
+
+  it("follows a whole sign-in and ends it on the Environment's page", () => {
+    const signIn = run([...toGitHub, ...back]);
+    assert.deepStrictEqual(signIn.refused, []);
+    assert.isTrue(run(toGitHub).tracked.shown.signingIn);
+    assert.isFalse(signIn.tracked.shown.signingIn);
+    assert.strictEqual(signIn.ended, 1);
+  });
+
+  it("refuses GitHub once the sign-in ended, in a navigation and in a redirect", () => {
+    assert.deepStrictEqual(run([start(LOGIN), navigate(LOGIN)], signedIn).refused, [
+      `Navigate ${LOGIN}`,
+    ]);
+    assert.deepStrictEqual(run([start(LAUNCHPAD), redirect(LOGIN)], signedIn).refused, [
+      `Redirect ${LOGIN}`,
+    ]);
+  });
+
+  it("starts no sign-in with a navigation to Lazurio Auth that shows no page", () => {
+    // A 204, a refused or a cancelled navigation: Electron reports nothing after its start.
+    const failed = run([start(AUTH), navigate(AUTH), start(LOGIN), navigate(LOGIN)], signedIn);
+    assert.deepStrictEqual(failed.refused, [`Navigate ${LOGIN}`]);
+    assert.isUndefined(failed.tracked.underWay);
+  });
+
+  it("starts no sign-in with a navigation to Lazurio Auth that another one replaced", () => {
+    const replaced = run(
+      [start(AUTH), navigate(AUTH), start(LAUNCHPAD), redirect(LOGIN)],
+      signedIn,
+    );
+    assert.deepStrictEqual(replaced.refused, [`Redirect ${LOGIN}`]);
+  });
+
+  it("ends a sign-in on an error page", () => {
+    const failed = run([
+      ...toGitHub,
+      start(SESSION),
+      navigate(SESSION),
+      { _tag: "ShowError", address: SESSION },
+    ]);
+    assert.isFalse(failed.tracked.shown.signingIn);
+    assert.strictEqual(failed.ended, 1);
+    assert.deepStrictEqual(run([start(LOGIN), navigate(LOGIN)], failed.tracked).refused, [
+      `Navigate ${LOGIN}`,
+    ]);
+  });
+
+  it("takes a page for a sign-in's only when the navigation under way ended at it", () => {
+    const elsewhere = "https://github.com/login?return_to=elsewhere";
+    assert.isFalse(run([...toGitHub.slice(0, 6), show(elsewhere)]).tracked.shown.signingIn);
+    // A history entry of GitHub, shown again by a page's history.back(): no Navigate comes first.
+    const history = run([start(LOGIN), show(LOGIN), start(SESSION), navigate(SESSION)], signedIn);
+    assert.deepStrictEqual(history.refused, [`Navigate ${SESSION}`]);
+  });
+
+  it("carries no sign-in into a redirect without a navigation under way", () => {
+    const onGitHub = run(toGitHub).tracked;
+    assert.deepStrictEqual(run([redirect(AUTHORIZE)], onGitHub).refused, [`Redirect ${AUTHORIZE}`]);
+  });
+
+  it("forgets a refused navigation at once, and keeps subframes out of a sign-in", () => {
+    const foreign = "https://example.com/";
+    assert.isUndefined(run([start(foreign), navigate(foreign)], signedIn).tracked.underWay);
+    const onGitHub = run(toGitHub).tracked;
+    const framed = run(
+      [
+        { _tag: "Start", address: AUTH, frame: "sub" },
+        { _tag: "Navigate", address: LOGIN, frame: "sub" },
+        { _tag: "Redirect", address: LOGIN, frame: "sub" },
+      ],
+      onGitHub,
+    );
+    assert.deepStrictEqual(framed.refused, [`Navigate ${LOGIN}`, `Redirect ${LOGIN}`]);
+    assert.isUndefined(framed.tracked.underWay);
+  });
+
+  it("never lets a local window sign in", () => {
+    const local = run([start(AUTH), show(AUTH), start(LOGIN), navigate(LOGIN)], track("Local"));
+    assert.isFalse(local.tracked.shown.signingIn);
+    assert.deepStrictEqual(local.refused, [`Navigate ${LOGIN}`]);
   });
 });

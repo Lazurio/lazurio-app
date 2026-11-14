@@ -3,13 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Electron from "electron";
 
 import {
-  afterNavigation,
   destinationOf,
-  mayLoad,
-  newView,
+  step,
+  track,
   type Frame,
+  type NavigationStep,
+  type Tracked,
   type ViewKind,
-  type ViewState,
 } from "./Navigation.ts";
 
 // Pages hold no power (decision 0248). Every permission is refused unless a later decision names
@@ -30,19 +30,19 @@ export const electronObserver: NavigationObserver = {
   refused: () => {},
 };
 
-// What each view the app created is for, and where its sign-in stands. A web contents the app did
-// not register loads nothing.
-const views = new WeakMap<Electron.WebContents, ViewState>();
+// What each view the app created is for, the page it shows and its navigation under way
+// (Navigation.step). A web contents the app did not register loads nothing.
+const views = new WeakMap<Electron.WebContents, Tracked>();
 
 export const registerView = (contents: Electron.WebContents, kind: ViewKind): void => {
-  views.set(contents, newView(kind));
+  views.set(contents, track(kind));
 };
 
 // The app's own windows that are still open, the only ones that get the bridge's messages.
 export const localViews = (): ReadonlyArray<Electron.WebContents> =>
   Electron.webContents
     .getAllWebContents()
-    .filter((contents) => !contents.isDestroyed() && views.get(contents)?.kind === "Local");
+    .filter((contents) => !contents.isDestroyed() && views.get(contents)?.shown.kind === "Local");
 
 export const hardenSession = (session: Electron.Session): Effect.Effect<void> =>
   Effect.sync(() => {
@@ -57,23 +57,47 @@ const guard = (observer: NavigationObserver) => (contents: Electron.WebContents)
     if (destinationOf(url)._tag === "SystemBrowser") observer.openExternally(url);
     return { action: "deny" };
   });
-  const check = (event: Electron.Event, url: string, isMainFrame: boolean) => {
-    const frame: Frame = isMainFrame ? "main" : "sub";
-    const view = views.get(contents);
-    if (view !== undefined && mayLoad(view, url, frame)) {
-      views.set(contents, afterNavigation(view, url, frame));
-      return;
-    }
+  const frameOf = (isMainFrame: boolean): Frame => (isMainFrame ? "main" : "sub");
+  // Moves the view's state on by one of Electron's reports and says whether it may proceed.
+  const advance = (event: NavigationStep): boolean => {
+    const tracked = views.get(contents);
+    if (tracked === undefined) return false;
+    const outcome = step(tracked, event);
+    views.set(contents, outcome.tracked);
+    // No page of a finished sign-in stays in the view's history, for a page's history.back().
+    if (outcome.signInEnded) contents.navigationHistory.clear();
+    return outcome.allowed;
+  };
+  const check = (
+    event: Electron.Event,
+    request: Extract<NavigationStep, { readonly _tag: "Navigate" | "Redirect" }>,
+  ) => {
+    if (advance(request)) return;
     event.preventDefault();
-    observer.refused(url, frame);
-    if (frame === "main" && destinationOf(url)._tag === "SystemBrowser") {
-      observer.openExternally(url);
+    observer.refused(request.address, request.frame);
+    if (request.frame === "main" && destinationOf(request.address)._tag === "SystemBrowser") {
+      observer.openExternally(request.address);
     }
   };
-  // will-frame-navigate covers the main frame and every subframe, including a frame's first load;
-  // will-redirect covers server redirects in any frame.
-  contents.on("will-frame-navigate", (event) => check(event, event.url, event.isMainFrame));
-  contents.on("will-redirect", (event) => check(event, event.url, event.isMainFrame));
+  // Electron reports a navigation's start before a page's request for it (will-frame-navigate),
+  // which covers the main frame and every subframe; will-redirect covers server redirects in any
+  // frame. A navigation that ends without a page is never reported (Navigation.Tracked).
+  contents.on("did-start-navigation", (event) => {
+    if (event.isSameDocument) return;
+    advance({ _tag: "Start", address: event.url, frame: frameOf(event.isMainFrame) });
+  });
+  contents.on("will-frame-navigate", (event) =>
+    check(event, { _tag: "Navigate", address: event.url, frame: frameOf(event.isMainFrame) }),
+  );
+  contents.on("will-redirect", (event) =>
+    check(event, { _tag: "Redirect", address: event.url, frame: frameOf(event.isMainFrame) }),
+  );
+  contents.on("did-navigate", (_event, url) => {
+    advance({ _tag: "Show", address: url });
+  });
+  contents.on("did-fail-provisional-load", (_event, _code, _description, url, isMainFrame) => {
+    if (isMainFrame) advance({ _tag: "ShowError", address: url });
+  });
   contents.on("will-attach-webview", (event) => event.preventDefault());
 };
 

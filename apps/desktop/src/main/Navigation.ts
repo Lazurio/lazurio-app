@@ -21,8 +21,8 @@ export type ViewKind = "Local" | "Lazurio";
 
 export type Frame = "main" | "sub";
 
-// A view as the guard sees it: what it is for, and whether its main frame is inside a sign-in
-// that Lazurio Auth started.
+// A view as the guard sees it: what it is for, and whether a page or a navigation of its main
+// frame is inside a sign-in that Lazurio Auth started.
 export interface ViewState {
   readonly kind: ViewKind;
   readonly signingIn: boolean;
@@ -116,7 +116,102 @@ export const mayLoad = (view: ViewState | undefined, address: string, frame: Fra
 // The view after its main frame was allowed to go to the address. A sign-in starts on Lazurio
 // Auth, continues on GitHub's sign-in pages and ends on any other page.
 export const afterNavigation = (view: ViewState, address: string, frame: Frame): ViewState => {
-  if (frame === "sub") return view;
+  if (frame === "sub" || view.kind !== "Lazurio") return view;
   const signingIn = isLazurioAuth(address) || (view.signingIn && isGitHubSignIn(address));
   return signingIn === view.signingIn ? view : { ...view, signingIn };
+};
+
+const notSigningIn = (view: ViewState): ViewState =>
+  view.signingIn ? { ...view, signingIn: false } : view;
+
+// The page a view's main frame shows, and its navigation under way from start through redirects.
+// A sign-in exists only where Lazurio Auth answered (ADR 0002). Electron reports nothing for a
+// navigation that ends without a page, so its state lives only until the next Start; Chromium
+// runs one cross-document navigation per frame at a time.
+export interface Tracked {
+  readonly shown: ViewState;
+  readonly underWay: { readonly address: string; readonly view: ViewState } | undefined;
+}
+
+export const track = (kind: ViewKind): Tracked => ({ shown: newView(kind), underWay: undefined });
+
+// What Electron reports of a view's navigations, in its own order: a navigation's Start comes
+// before a page's request to navigate (Navigate), then every Redirect, then its page.
+export type NavigationStep =
+  // A frame's cross-document navigation starts, whoever started it (did-start-navigation).
+  | { readonly _tag: "Start"; readonly address: string; readonly frame: Frame }
+  // A page asks to navigate a frame (will-frame-navigate). The guard may refuse it.
+  | { readonly _tag: "Navigate"; readonly address: string; readonly frame: Frame }
+  // A server redirects a frame's navigation (will-redirect). The guard may refuse it.
+  | { readonly _tag: "Redirect"; readonly address: string; readonly frame: Frame }
+  // The main frame shows the page at the address (did-navigate).
+  | { readonly _tag: "Show"; readonly address: string }
+  // The main frame shows an error page for the address (did-fail-provisional-load).
+  | { readonly _tag: "ShowError"; readonly address: string };
+
+export interface StepOutcome {
+  readonly allowed: boolean;
+  readonly tracked: Tracked;
+  // The main frame left a sign-in for another page; the view forgets the sign-in's pages.
+  readonly signInEnded: boolean;
+}
+
+export const step = (tracked: Tracked, event: NavigationStep): StepOutcome => {
+  const outcome = (allowed: boolean, next: Tracked, signInEnded = false): StepOutcome => ({
+    allowed,
+    tracked: next,
+    signInEnded,
+  });
+  switch (event._tag) {
+    case "Start":
+      if (event.frame === "sub") return outcome(true, tracked);
+      return outcome(true, {
+        ...tracked,
+        underWay: {
+          address: event.address,
+          view: afterNavigation(tracked.shown, event.address, "main"),
+        },
+      });
+    case "Navigate": {
+      // A page navigates from the page its view shows, never from a navigation under way.
+      if (mayLoad(tracked.shown, event.address, event.frame)) return outcome(true, tracked);
+      // Its Start came just before; a refused navigation never runs.
+      const refusedStart = event.frame === "main" && tracked.underWay?.address === event.address;
+      return outcome(false, refusedStart ? { ...tracked, underWay: undefined } : tracked);
+    }
+    case "Redirect": {
+      if (event.frame === "sub")
+        return outcome(mayLoad(tracked.shown, event.address, "sub"), tracked);
+      // A redirect continues the navigation under way. Without one, no sign-in carries over.
+      const from = tracked.underWay?.view ?? notSigningIn(tracked.shown);
+      if (!mayLoad(from, event.address, "main")) {
+        return outcome(false, { ...tracked, underWay: undefined });
+      }
+      return outcome(true, {
+        ...tracked,
+        underWay: { address: event.address, view: afterNavigation(from, event.address, "main") },
+      });
+    }
+    case "Show": {
+      // The page is the navigation's only if the navigation under way ended at its address.
+      const view =
+        tracked.underWay?.address === event.address
+          ? tracked.underWay.view
+          : afterNavigation(notSigningIn(tracked.shown), event.address, "main");
+      return outcome(
+        true,
+        { shown: view, underWay: undefined },
+        tracked.shown.signingIn && !view.signingIn,
+      );
+    }
+    case "ShowError":
+      return outcome(
+        true,
+        {
+          shown: notSigningIn(tracked.shown),
+          underWay: tracked.underWay?.address === event.address ? undefined : tracked.underWay,
+        },
+        tracked.shown.signingIn,
+      );
+  }
 };
