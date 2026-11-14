@@ -1,0 +1,23 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  // protoc-gen-es runs from buf.gen.yaml, which knip does not read.
+  "ignoreDependencies": ["@bufbuild/protoc-gen-es"],
+  "workspaces": {
+    "apps/desktop": {
+      "entry": [
+        "src/main/main.ts",
+        "src/preload/preload.ts",
+        "src/ui/main.tsx",
+        "scripts/*.ts",
+        "e2e/*.test.ts",
+        "vite.ui.config.ts",
+      ],
+    },
+    "scripts": {
+      "entry": ["*.ts"],
+    },
+    "tools/oxlint-plugin-t3code": {
+      "entry": ["index.ts", "rules/*.test.ts"],
+    },
+  },
+}

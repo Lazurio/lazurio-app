@@ -1,0 +1,29 @@
+[package]
+name = "lazurio-device"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Elastic-2.0"
+publish = false
+description = "The Device helper of Lazurio App: lets the agents of an Environment use this computer while its owner allows it."
+
+[dependencies]
+prost = "=0.14.4"
+
+[build-dependencies]
+prost-build = "=0.14.4"
+protox = "=0.10.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+expect_used = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

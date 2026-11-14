@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+// The conversation every helper process of Lazurio App has with the app's main process.
+//
+// A helper reads AppMessage from its standard input and writes HelperMessage to its standard
+// output, each framed by its length as a varint (protobuf's size-delimited encoding). The helper
+// listens on nothing for this conversation. Its first message is Hello, unsolicited, with
+// request_id 0. A helper's own work (tailnet, Device) lives in its own package and joins this
+// envelope in a later version; nothing here is removed or renumbered (buf breaking, FILE).
+package lazurio.app.helper.v1;
+
+option go_package = "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/helper/v1;helperv1";
+
+// A message from the app's main process to a helper.
+message AppMessage {
+  // Chosen by the main process, unique while the request is open, never 0. The helper's reply
+  // carries the same id.
+  uint64 request_id = 1;
+
+  oneof kind {
+    Ping ping = 2;
+    Shutdown shutdown = 3;
+  }
+}
+
+// A message from a helper to the app's main process.
+message HelperMessage {
+  // The id of the AppMessage this answers, or 0 for a message the helper sends on its own.
+  uint64 request_id = 1;
+
+  oneof kind {
+    Hello hello = 2;
+    Pong pong = 3;
+    Failure failure = 4;
+  }
+}
+
+// The helper's first message. The main process stops a helper whose protocol it does not speak.
+message Hello {
+  // The version of this protocol the helper speaks. This package is version 1.
+  uint32 protocol_version = 1;
+
+  // Which helper this is, for example "lazurio-tailnet" or "lazurio-device".
+  string helper_name = 2;
+
+  // The helper's own version, for diagnostics.
+  string helper_version = 3;
+}
+
+// Asks the helper to answer, to tell that it still serves.
+message Ping {
+  bytes nonce = 1;
+}
+
+// The answer to Ping, with the same nonce.
+message Pong {
+  bytes nonce = 1;
+}
+
+// Asks the helper to finish its work and exit. It answers nothing and closes its output.
+message Shutdown {}
+
+// A request the helper could not serve.
+message Failure {
+  // A stable code the main process can branch on, for example "unknown_request".
+  string code = 1;
+
+  // A human-readable explanation for the log, never shown to a person as is.
+  string message = 2;
+}

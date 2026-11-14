@@ -1,0 +1,32 @@
+{
+  "name": "@lazurio/app-monorepo",
+  "private": true,
+  "license": "Elastic-2.0",
+  "type": "module",
+  "scripts": {
+    "fmt": "vp fmt",
+    "fmt:check": "vp fmt --check",
+    "lint": "vp lint --report-unused-disable-directives",
+    "typecheck": "vp run -r typecheck",
+    "test": "vp run -r test",
+    "knip": "knip",
+    "proto:generate": "node scripts/proto-generate.ts",
+    "proto:lint": "buf lint",
+    "proto:breaking": "buf breaking --against '.git#branch=origin/main'",
+    "build": "vp run -r build",
+    "check": "pnpm check:javascript && pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm knip && pnpm proto:lint && pnpm test",
+    "check:javascript": "node scripts/check-no-javascript.ts",
+    "build:helpers": "node scripts/build-helpers.ts"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "catalog:",
+    "@bufbuild/protoc-gen-es": "catalog:",
+    "@types/node": "catalog:",
+    "knip": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": "26.12.1"
+  },
+  "packageManager": "pnpm@12.14.0"
+}

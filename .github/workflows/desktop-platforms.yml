@@ -1,0 +1,58 @@
+# macOS and Windows: build, end-to-end and the Electron Fuses of the built app. Runs when a pull
+# request changes the app, the helpers, the protocol or their tools, on demand, and from a release
+# workflow before every release (docs/adr/0001).
+name: Desktop on macOS and Windows
+
+on:
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - helpers/**
+      - packages/**
+      - proto/**
+      - scripts/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/desktop-platforms.yml
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Unsigned until the signing identities exist; electron-builder must not pick a random one.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      LAZURIO_APP_E2E_OS_SANDBOX: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers
+      - run: pnpm --filter @lazurio/app-desktop build
+      - run: pnpm --filter @lazurio/app-desktop test:e2e
+      - run: pnpm build:helpers --release
+      - run: pnpm --filter @lazurio/app-desktop package:dir
+      - run: pnpm --filter @lazurio/app-desktop check:fuses
