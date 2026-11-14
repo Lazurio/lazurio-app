@@ -19,21 +19,23 @@ import * as MainWindow from "./MainWindow.ts";
 LocalScheme.registerPrivilegesSync();
 Electron.app.enableSandbox();
 
-// End-to-end tests only, and never in a packaged app: a remote page to load, and a system
-// browser that records instead of opening.
+// End-to-end tests only, and never in a packaged app: a remote page to load, and an observer
+// that records instead of opening the system's browser.
 const testHooks = Effect.gen(function* () {
   const enabled =
     !Electron.app.isPackaged &&
     (yield* Config.Boolean("LAZURIO_APP_E2E").pipe(Config.withDefault(false)));
-  if (!enabled)
-    return { systemBrowser: Hardening.electronSystemBrowser, remoteUrl: Option.none<string>() };
+  if (!enabled) return { observer: Hardening.electronObserver, remoteUrl: Option.none<string>() };
   const remoteUrl = yield* Config.option(Config.String("LAZURIO_APP_E2E_REMOTE_URL"));
-  const systemBrowser: Hardening.SystemBrowser = {
-    open: (url) => {
+  const observer: Hardening.NavigationObserver = {
+    openExternally: (url) => {
       process.stdout.write(`lazurio-app-e2e system-browser ${url}\n`);
     },
+    refused: (url, frame) => {
+      process.stdout.write(`lazurio-app-e2e refused ${frame} ${url}\n`);
+    },
   };
-  return { systemBrowser, remoteUrl };
+  return { observer, remoteUrl };
 });
 
 const helperBinaries = Effect.gen(function* () {
@@ -73,7 +75,7 @@ const program = Effect.gen(function* () {
   const path = yield* Path.Path;
   const appPath = Electron.app.getAppPath();
 
-  yield* Hardening.guardAllWebContents(hooks.systemBrowser);
+  yield* Hardening.guardAllWebContents(hooks.observer);
   yield* Hardening.hardenSession(Electron.session.defaultSession);
   yield* LocalScheme.serve(path.join(appPath, "dist-ui"));
 

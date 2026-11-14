@@ -12,8 +12,13 @@ export type Destination =
   | { readonly _tag: "Lazurio" }
   // Anything else on the web, which the system's browser opens.
   | { readonly _tag: "SystemBrowser" }
-  // An address the app never opens anywhere (file:, javascript:, data:, unknown schemes).
+  // An address the app never opens anywhere (credentials, file:, javascript:, data:, unknown).
   | { readonly _tag: "Blocked" };
+
+// What a view of the app shows, fixed when the app creates the view.
+export type ViewKind = "Local" | "Lazurio";
+
+export type Frame = "main" | "sub";
 
 const LAZURIO_DOMAIN = "lazurio.io";
 
@@ -30,15 +35,21 @@ export const destinationOf = (address: string): Destination => {
   if (url.protocol === `${LOCAL_SCHEME}:`) {
     return url.host === LOCAL_HOST ? { _tag: "Local" } : { _tag: "Blocked" };
   }
-  if (url.protocol === "https:") {
-    if (url.username !== "" || url.password !== "") return { _tag: "Blocked" };
-    return isLazurioHost(url.hostname) ? { _tag: "Lazurio" } : { _tag: "SystemBrowser" };
-  }
-  if (url.protocol === "http:") return { _tag: "SystemBrowser" };
-  return { _tag: "Blocked" };
+  if (url.protocol !== "https:" && url.protocol !== "http:") return { _tag: "Blocked" };
+  if (url.username !== "" || url.password !== "") return { _tag: "Blocked" };
+  if (url.protocol === "https:" && isLazurioHost(url.hostname)) return { _tag: "Lazurio" };
+  return { _tag: "SystemBrowser" };
 };
 
-// A view may stay on its own kind of content: a local window only on the app's files, a remote
-// view only on Lazurio's pages. Leaving either one is never a navigation inside the app.
-export const mayNavigate = (from: Destination, to: Destination): boolean =>
-  from._tag === to._tag && (to._tag === "Local" || to._tag === "Lazurio");
+// An empty frame a page creates for itself; it shares the page's origin and loads nothing.
+const isEmptyFrame = (address: string): boolean =>
+  address === "about:blank" || address === "about:srcdoc";
+
+// Whether a frame of a view may load the address: only what the view is for, in every frame. A
+// subframe may also be an empty frame of its page. Everything else is refused, in the main frame
+// and in every subframe alike.
+export const mayLoad = (view: ViewKind | undefined, address: string, frame: Frame): boolean => {
+  if (view === undefined) return false;
+  if (frame === "sub" && isEmptyFrame(address)) return true;
+  return destinationOf(address)._tag === view;
+};

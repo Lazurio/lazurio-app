@@ -31,7 +31,9 @@ Lazurio App GEN4 is a native app on Electron that shows the web Lazurio and carr
 4. **Pages hold no power.** The tests enforce this:
    - Local windows load from `lazurio-app://shell` with a strict content security policy, and they alone get the preload bridge.
    - Remote pages get no preload and their own session.
-   - Every permission is refused, no page opens a window, and a view never leaves its kind of content.
+   - Every permission is refused and no page opens a window.
+   - Each view's kind (the app's own files, or Lazurio's pages) is fixed when the app creates it. Every frame of the view, the main frame and each subframe alike, loads only addresses of that kind; a subframe may also be an empty frame of its page (`about:blank`, `about:srcdoc`). The guard runs on `will-frame-navigate` and `will-redirect`, which cover all frames.
+   - An address with credentials is never opened, over HTTPS or HTTP.
    - Addresses outside Lazurio go to the system's browser.
    - The Electron Fuses are set by electron-builder and read back from the built app (`pnpm --filter @lazurio/app-desktop check:fuses`).
 5. **Supply chain.**
@@ -77,11 +79,12 @@ F69 pins Bun, Biome, TypeScript and Zod for Modules, which Lazurio runs with its
   - `buf lint`;
   - tests: 1 framing, 6 navigation and 196 for the vendored lint rules.
 - **Go:** `go vet` and `go test -race` passed. **Rust:** `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test` (3 tests) passed.
-- **End-to-end (5 tests):**
+- **End-to-end (6 tests):**
   - both helpers pass their handshake;
   - the local window has the bridge and no Node;
-  - a remote page has no bridge, no Node and no Electron, opens no window, gets no permission, cannot navigate away and hands the web to the system's browser.
+  - a remote page has no bridge, no Node and no Electron, opens no window, gets no permission, cannot navigate away, cannot load a foreign page into a frame even directly, and hands the web to the system's browser.
   - On the developer's Linux machine these ran with Electron's isolation but without Chromium's operating system sandbox (Playwright adds `--no-sandbox` on Linux). CI turns that sandbox on.
 - **Packaging:** `electron-builder --dir` for Linux put both helpers in `resources/helpers`, and `check:fuses` read all seven fuses in their safe state. The packaged app started both helpers.
+- **Review found two gaps,** both closed with tests: subframes were not guarded, because `will-navigate` covers only the main frame (the new end-to-end case fails without the fix), and HTTP addresses with credentials went to the system's browser.
 - **The tests found a real defect** before it shipped: the main process compared URL origins, which Node gives as `"null"` for a custom scheme, and so refused the app's own window.
 - **Not yet verified:** macOS and Windows, which the first CI run covers; signing; updates.

@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Electron from "electron";
 
 import { STATUS_CHANNEL, type AppStatus } from "../shared/bridge.ts";
-import { hardenSession } from "./Hardening.ts";
+import { hardenSession, registerView } from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
 import { destinationOf } from "./Navigation.ts";
 
@@ -52,6 +52,7 @@ const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
       spellcheck: false,
     },
   });
+  registerView(view.webContents, "Lazurio");
   yield* hardenSession(view.webContents.session);
   window.contentView.addChildView(view);
   const layout = () => {
@@ -88,6 +89,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
         if (!window.isDestroyed()) window.destroy();
       }),
   );
+  registerView(window.webContents, "Local");
   window.once("ready-to-show", () => window.show());
   yield* Effect.promise(() => window.loadURL(LOCAL_ENTRY));
   if (Option.isSome(options.remoteUrl)) yield* attachRemoteView(window, options.remoteUrl.value);

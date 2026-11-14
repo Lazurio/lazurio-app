@@ -2,20 +2,31 @@ import * as Effect from "effect/Effect";
 
 import * as Electron from "electron";
 
-import { destinationOf, mayNavigate } from "./Navigation.ts";
+import { destinationOf, mayLoad, type Frame, type ViewKind } from "./Navigation.ts";
 
 // Pages hold no power (decision 0248). Every permission is refused unless a later decision names
-// it, no page opens a window, a view never leaves its kind of content, and an address outside
-// Lazurio goes to the system's browser.
+// it, no page opens a window, every frame of a view stays on what the view is for, and an address
+// outside Lazurio goes to the system's browser.
 
-export interface SystemBrowser {
-  readonly open: (url: string) => void;
+export interface NavigationObserver {
+  // Opens an address outside Lazurio in the system's browser.
+  readonly openExternally: (url: string) => void;
+  // Learns that a frame was refused an address; only end-to-end tests listen.
+  readonly refused: (url: string, frame: Frame) => void;
 }
 
-export const electronSystemBrowser: SystemBrowser = {
-  open: (url) => {
+export const electronObserver: NavigationObserver = {
+  openExternally: (url) => {
     void Electron.shell.openExternal(url);
   },
+  refused: () => {},
+};
+
+// What each view the app created is for. A web contents the app did not register loads nothing.
+const viewKinds = new WeakMap<Electron.WebContents, ViewKind>();
+
+export const registerView = (contents: Electron.WebContents, kind: ViewKind): void => {
+  viewKinds.set(contents, kind);
 };
 
 export const hardenSession = (session: Electron.Session): Effect.Effect<void> =>
@@ -26,28 +37,33 @@ export const hardenSession = (session: Electron.Session): Effect.Effect<void> =>
     session.setDisplayMediaRequestHandler((_request, callback) => callback({}));
   });
 
-const guard = (systemBrowser: SystemBrowser) => (contents: Electron.WebContents) => {
+const guard = (observer: NavigationObserver) => (contents: Electron.WebContents) => {
   contents.setWindowOpenHandler(({ url }) => {
-    if (destinationOf(url)._tag === "SystemBrowser") systemBrowser.open(url);
+    if (destinationOf(url)._tag === "SystemBrowser") observer.openExternally(url);
     return { action: "deny" };
   });
-  const onNavigation = (event: Electron.Event, url: string) => {
-    const to = destinationOf(url);
-    if (mayNavigate(destinationOf(contents.getURL()), to)) return;
+  const check = (event: Electron.Event, url: string, isMainFrame: boolean) => {
+    const frame: Frame = isMainFrame ? "main" : "sub";
+    if (mayLoad(viewKinds.get(contents), url, frame)) return;
     event.preventDefault();
-    if (to._tag === "SystemBrowser") systemBrowser.open(url);
+    observer.refused(url, frame);
+    if (frame === "main" && destinationOf(url)._tag === "SystemBrowser") {
+      observer.openExternally(url);
+    }
   };
-  contents.on("will-navigate", (event) => onNavigation(event, event.url));
-  contents.on("will-redirect", (event) => onNavigation(event, event.url));
+  // will-frame-navigate covers the main frame and every subframe, including a frame's first load;
+  // will-redirect covers server redirects in any frame.
+  contents.on("will-frame-navigate", (event) => check(event, event.url, event.isMainFrame));
+  contents.on("will-redirect", (event) => check(event, event.url, event.isMainFrame));
   contents.on("will-attach-webview", (event) => event.preventDefault());
 };
 
 // Guards every web contents the app creates, for as long as the scope lives.
-export const guardAllWebContents = (systemBrowser: SystemBrowser) =>
+export const guardAllWebContents = (observer: NavigationObserver) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const listener = (_event: Electron.Event, contents: Electron.WebContents) =>
-        guard(systemBrowser)(contents);
+        guard(observer)(contents);
       Electron.app.on("web-contents-created", listener);
       return listener;
     }),

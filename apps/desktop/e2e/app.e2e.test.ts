@@ -118,6 +118,24 @@ describe("Lazurio App GEN4", () => {
     assert.strictEqual(permission, "denied");
   });
 
+  it("keeps foreign pages out of a remote page's frames, also loaded directly", async () => {
+    const refused = outputLine("lazurio-app-e2e refused sub https://example.com/framed");
+    await inRemotePage(
+      `(() => { const frame = document.createElement("iframe"); frame.src = "https://example.com/framed"; document.body.append(frame); return true; })()`,
+    );
+    await refused;
+    const frames = await app.evaluate(
+      ({ webContents }, url) =>
+        webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL() === url)
+          ?.mainFrame.framesInSubtree.map((frame) => frame.url) ?? [],
+      remoteUrl,
+    );
+    assert.isFalse(frames.some((frame) => frame.startsWith("https://example.com")));
+    assert.isFalse(output.join("").includes("system-browser https://example.com/framed"));
+  });
+
   it("keeps a remote page where it is and hands the web to the system's browser", async () => {
     const handedOver = outputLine("lazurio-app-e2e system-browser https://example.com/elsewhere");
     await inRemotePage(`location.href = "https://example.com/elsewhere"; true`);
