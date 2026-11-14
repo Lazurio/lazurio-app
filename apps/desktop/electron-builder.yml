@@ -2,7 +2,6 @@
 # keeps the person's Accessibility and Screen Recording permissions with it and its signing team.
 appId: io.lazurio.app
 productName: Lazurio App
-executableName: lazurio-app
 copyright: Copyright © 2026 Lazurio
 directories:
   output: release
@@ -41,7 +40,10 @@ mac:
 win:
   target:
     - nsis
+# macOS and Windows show the product's name (Lazurio App.app, Lazurio App.exe); Linux uses a
+# command-line name.
 linux:
+  executableName: lazurio-app
   target:
     - dir
 publish:

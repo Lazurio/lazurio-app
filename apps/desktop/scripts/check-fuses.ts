@@ -34,12 +34,14 @@ class FuseMismatch extends Schema.TaggedError<FuseMismatch>()("FuseMismatch", {
 const program = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
+  const architecture = yield* HostProcess.Architecture;
   const release = path.resolve(import.meta.dirname, "..", "release");
+  // The folders and names electron-builder gives the unpacked app (electron-builder.yml).
   const executable =
     platform === "darwin"
-      ? path.join(release, "mac-arm64", "Lazurio App.app", "Contents", "MacOS", "Lazurio App")
+      ? path.join(release, architecture === "arm64" ? "mac-arm64" : "mac", "Lazurio App.app")
       : platform === "win32"
-        ? path.join(release, "win-unpacked", "lazurio-app.exe")
+        ? path.join(release, "win-unpacked", "Lazurio App.exe")
         : path.join(release, "linux-unpacked", "lazurio-app");
   const wire = yield* Effect.promise(() => getCurrentFuseWire(executable));
   const wrong = EXPECTED.filter(([fuse, state]) => wire[fuse] !== state).map(
