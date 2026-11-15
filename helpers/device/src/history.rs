@@ -5,10 +5,15 @@
 //! of the helper protocol, size-delimited, in `history.pb` in the data directory the main process
 //! gave. When the file passes [`MAX_BYTES`] it becomes `history.1.pb`, replacing the older one, so
 //! the history keeps between one and two files' worth of entries.
+//!
+//! Every entry carries a sequence, one more than the entry before it. Pages are cut by sequence,
+//! so entries recorded between two pages never shift them. Before the first write, a cut-off last
+//! entry (a crash in the middle of a write) is cut from the file, so later entries stay readable.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use prost::Message;
 
@@ -34,6 +39,9 @@ pub struct History {
     current: PathBuf,
     previous: PathBuf,
     max_bytes: u64,
+    /// The sequence of the next entry, once the files were checked; `None` before the first
+    /// write and after a failed one, so the next write checks the files again.
+    next_sequence: Mutex<Option<u64>>,
 }
 
 impl History {
@@ -48,6 +56,7 @@ impl History {
             current: directory.join("history.pb"),
             previous: directory.join("history.1.pb"),
             max_bytes,
+            next_sequence: Mutex::new(None),
         }
     }
 
@@ -55,7 +64,7 @@ impl History {
     ///
     /// # Errors
     ///
-    /// Fails when the file cannot be written.
+    /// Fails when the file cannot be checked or written.
     pub fn record(
         &self,
         at_unix_ms: u64,
@@ -63,15 +72,23 @@ impl History {
         kind: &'static str,
         tool: Option<&str>,
     ) -> io::Result<()> {
+        let mut next = self
+            .next_sequence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let sequence = match *next {
+            Some(sequence) => sequence,
+            None => self.prepare()?,
+        };
         let entry = HistoryEntry {
             at_unix_ms,
             environment_id: environment_id.to_owned(),
             kind: kind.to_owned(),
             tool: tool.unwrap_or_default().to_owned(),
+            sequence,
         };
-        if let Some(directory) = self.current.parent() {
-            std::fs::create_dir_all(directory)?;
-        }
+        // Until this write succeeds, the next one checks the files again.
+        *next = None;
         if std::fs::metadata(&self.current).is_ok_and(|metadata| metadata.len() >= self.max_bytes) {
             std::fs::rename(&self.current, &self.previous)?;
         }
@@ -79,49 +96,84 @@ impl History {
             .create(true)
             .append(true)
             .open(&self.current)?;
-        file.write_all(&entry.encode_length_delimited_to_vec())
+        file.write_all(&entry.encode_length_delimited_to_vec())?;
+        *next = Some(sequence + 1);
+        Ok(())
     }
 
-    /// A page of the history, the newest first. `page_token` is the token of the previous page,
-    /// empty for the first. A broken or cut-off tail of a file is skipped, never fatal.
+    /// Cuts a broken tail from the current file and returns the sequence of the next entry.
+    fn prepare(&self) -> io::Result<u64> {
+        if let Some(directory) = self.current.parent() {
+            std::fs::create_dir_all(directory)?;
+        }
+        let (current, valid_bytes, file_bytes) = read_file(&self.current);
+        if valid_bytes < file_bytes {
+            OpenOptions::new()
+                .write(true)
+                .open(&self.current)?
+                .set_len(valid_bytes)?;
+        }
+        let (previous, _, _) = read_file(&self.previous);
+        Ok(previous
+            .iter()
+            .chain(&current)
+            .map(|entry| entry.sequence)
+            .max()
+            .map_or(1, |last| last + 1))
+    }
+
+    /// A page of the history, the newest first: the entries older than `page_token` (a sequence),
+    /// or the newest ones for an empty token.
     #[must_use]
     pub fn page(&self, page_token: &str, limit: u32) -> HistoryPage {
-        let offset = page_token.parse::<usize>().unwrap_or(0);
+        let before = page_token.parse::<u64>().ok();
         let limit = usize::try_from(limit)
             .unwrap_or(MAX_PAGE)
             .clamp(1, MAX_PAGE);
-        let mut entries = read_entries(&self.previous);
-        entries.extend(read_entries(&self.current));
-        entries.reverse();
-        let next = offset.saturating_add(limit);
+        let (mut entries, _, _) = read_file(&self.previous);
+        entries.extend(read_file(&self.current).0);
+        entries.retain(|entry| before.is_none_or(|before| entry.sequence < before));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.sequence));
+        let more = entries.len() > limit;
+        entries.truncate(limit);
         HistoryPage {
-            next_page_token: if next < entries.len() {
-                next.to_string()
+            next_page_token: if more {
+                entries
+                    .last()
+                    .map(|entry| entry.sequence.to_string())
+                    .unwrap_or_default()
             } else {
                 String::new()
             },
-            entries: entries.into_iter().skip(offset).take(limit).collect(),
+            entries,
         }
     }
 }
 
-fn read_entries(path: &Path) -> Vec<HistoryEntry> {
+/// The whole entries of a file, how many bytes they take, and the file's size. A broken or
+/// cut-off tail ends the reading.
+fn read_file(path: &Path) -> (Vec<HistoryEntry>, u64, u64) {
     let mut bytes = Vec::new();
     if File::open(path)
         .and_then(|mut file| file.read_to_end(&mut bytes))
         .is_err()
     {
-        return Vec::new();
+        return (Vec::new(), 0, 0);
     }
     let mut remaining = bytes.as_slice();
     let mut entries = Vec::new();
+    let mut valid = 0;
     while !remaining.is_empty() {
         match HistoryEntry::decode_length_delimited(&mut remaining) {
-            Ok(entry) => entries.push(entry),
+            Ok(entry) => {
+                entries.push(entry);
+                valid = bytes.len() - remaining.len();
+            }
             Err(_) => break,
         }
     }
-    entries
+    let size = |length: usize| u64::try_from(length).unwrap_or(u64::MAX);
+    (entries, size(valid), size(bytes.len()))
 }
 
 #[cfg(test)]
@@ -129,12 +181,17 @@ fn read_entries(path: &Path) -> Vec<HistoryEntry> {
 mod tests {
     use super::*;
 
+    /// A fresh directory for one test; tests run in parallel, so each gets its own.
     fn scratch(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir()
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir()
             .join("lazurio-device-tests")
-            .join(format!("history-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        directory
+            .join(format!("history-{name}-{}-{index}", std::process::id()))
+    }
+
+    fn sequences(page: &HistoryPage) -> Vec<u64> {
+        page.entries.iter().map(|entry| entry.sequence).collect()
     }
 
     #[test]
@@ -146,18 +203,35 @@ mod tests {
                 .expect("recorded");
         }
         let first = history.page("", 2);
-        assert_eq!(
-            first
-                .entries
-                .iter()
-                .map(|e| e.at_unix_ms)
-                .collect::<Vec<_>>(),
-            [4, 3]
-        );
-        assert_eq!(first.next_page_token, "2");
-        let last = history.page("4", 2);
-        assert_eq!(last.entries.len(), 1);
+        assert_eq!(sequences(&first), [5, 4]);
+        assert_eq!(first.next_page_token, "4");
+        let second = history.page(&first.next_page_token, 2);
+        assert_eq!(sequences(&second), [3, 2]);
+        let last = history.page(&second.next_page_token, 2);
+        assert_eq!(sequences(&last), [1]);
         assert_eq!(last.next_page_token, "");
+    }
+
+    #[test]
+    fn an_event_recorded_between_pages_never_shifts_them() {
+        let history = History::new(&scratch("stable"));
+        for index in 0..4 {
+            history
+                .record(index, "env-a", kind::CONNECTED, None)
+                .expect("recorded");
+        }
+        let first = history.page("", 2);
+        assert_eq!(sequences(&first), [4, 3]);
+        history
+            .record(9, "env-a", kind::TOOL, Some("desktop_type"))
+            .expect("recorded");
+        let second = history.page(&first.next_page_token, 2);
+        assert_eq!(sequences(&second), [2, 1], "no repeat and no gap");
+        assert_eq!(
+            sequences(&history.page("", 1)),
+            [5],
+            "the new entry is newest"
+        );
     }
 
     #[test]
@@ -177,13 +251,14 @@ mod tests {
                 environment_id: "env-a".to_owned(),
                 kind: "tool".to_owned(),
                 tool: "desktop_type".to_owned(),
+                sequence: 1,
             }
         );
         assert_eq!(page.entries[0].tool, "");
     }
 
     #[test]
-    fn rotates_and_keeps_the_previous_file() {
+    fn rotates_and_keeps_counting() {
         let directory = scratch("rotate");
         let history = History::with_max_bytes(&directory, 64);
         for index in 0..20 {
@@ -193,24 +268,42 @@ mod tests {
         }
         assert!(directory.join("history.1.pb").exists());
         let page = history.page("", 200);
-        assert_eq!(page.entries[0].at_unix_ms, 19, "the newest is first");
+        assert_eq!(page.entries[0].sequence, 20, "the newest is first");
         assert!(page.entries.len() < 20, "older files are dropped");
+        // A new History on the same files continues the sequence.
+        let again = History::with_max_bytes(&directory, 64);
+        again
+            .record(99, "env-a", kind::CONNECTED, None)
+            .expect("recorded");
+        assert_eq!(again.page("", 1).entries[0].sequence, 21);
     }
 
     #[test]
-    fn a_cut_off_tail_is_skipped() {
+    fn a_cut_off_tail_is_cut_before_the_next_entry() {
         let directory = scratch("tail");
-        let history = History::new(&directory);
-        history
+        History::new(&directory)
             .record(1, "env-a", kind::CONNECTED, None)
             .expect("recorded");
+        // A crash in the middle of a write: a length that promises more than follows.
         let mut file = OpenOptions::new()
             .append(true)
             .open(directory.join("history.pb"))
             .expect("open");
-        file.write_all(&[0x40, 0x01]).expect("a broken tail");
+        file.write_all(&[0x40, 0x01, 0x02]).expect("a broken tail");
+        drop(file);
+        let history = History::new(&directory);
+        history
+            .record(2, "env-a", kind::TOOL, Some("desktop_click"))
+            .expect("recorded");
+        history
+            .record(3, "env-a", kind::STOPPED, None)
+            .expect("recorded");
         let page = history.page("", 10);
-        assert_eq!(page.entries.len(), 1);
+        assert_eq!(
+            sequences(&page),
+            [3, 2, 1],
+            "the entries after the crash are readable"
+        );
     }
 
     #[test]

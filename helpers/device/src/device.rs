@@ -15,7 +15,7 @@ use crate::lazurio::app::device::v1::{
     StopChannel, channel_state,
 };
 use crate::lazurio::app::helper::v1::{Failure, app_message, helper_message};
-use crate::lock::{self, DeviceLock};
+use crate::lock::{self, DeviceLock, SharedLock};
 use crate::secret_start::StartRequest;
 
 /// The newest version of contract v1 of the attach session this helper speaks.
@@ -27,7 +27,7 @@ const KEY_SEED_BYTES: usize = 32;
 /// What the helper holds after `ConfigureDevice`.
 struct Runtime {
     history: History,
-    lock: DeviceLock,
+    lock: SharedLock,
 }
 
 /// The Device's state in the helper.
@@ -87,7 +87,9 @@ impl Device {
             .ok_or_else(|| invalid("the system gives no place for the device lock"))?;
         self.runtime = Some(Runtime {
             history: History::new(Path::new(&request.data_directory)),
-            lock: DeviceLock::new(lock_path),
+            // The hold ends on its own at its deadline; telling the main process about it
+            // comes with the channel, which owns the helper's output.
+            lock: SharedLock::new(DeviceLock::new(lock_path), |_| {}),
         });
         Ok(helper_message::Kind::DeviceReady(DeviceReady {
             contract_version: CONTRACT_VERSION,
@@ -135,8 +137,12 @@ impl Device {
     fn stop_agent(&mut self) -> Result<helper_message::Kind, Failure> {
         let runtime = self.runtime_mut()?;
         let now = Instant::now();
-        if let Some(holder) = runtime.lock.holder(now) {
-            runtime.lock.release_any();
+        let stopped = runtime.lock.with(|lock| {
+            let holder = lock.holder(now);
+            lock.release_any();
+            holder
+        });
+        if let Some(holder) = stopped {
             // The history is a record for the person; a failed write never blocks Stop.
             let _ = runtime.history.record(
                 unix_ms(),
@@ -151,7 +157,9 @@ impl Device {
     fn hold_for_update(&mut self, request: HoldForUpdate) -> Result<helper_message::Kind, Failure> {
         let runtime = self.runtime_mut()?;
         let now = Instant::now();
-        runtime.lock.hold_for_update(request.hold, now);
+        runtime
+            .lock
+            .with(|lock| lock.hold_for_update(request.hold, now));
         Ok(lock_state(runtime, now))
     }
 
@@ -172,7 +180,9 @@ impl Device {
 }
 
 fn lock_state(runtime: &mut Runtime, now: Instant) -> helper_message::Kind {
-    let holder = runtime.lock.holder(now);
+    let (holder, update_hold) = runtime
+        .lock
+        .with(|lock| (lock.holder(now), lock.update_hold()));
     helper_message::Kind::LockState(LockState {
         idle: holder.is_none(),
         holder_environment_id: holder
@@ -184,7 +194,7 @@ fn lock_state(runtime: &mut Runtime, now: Instant) -> helper_message::Kind {
             .map(|holder| holder.environment_label.clone())
             .unwrap_or_default(),
         since_unix_ms: holder.map_or(0, |holder| holder.since_unix_ms),
-        update_hold: runtime.lock.update_hold(),
+        update_hold,
     })
 }
 

@@ -7,11 +7,15 @@
 //! both take before they serve any tool call. The operating system releases it when its holder
 //! ends, crashes included, so no process can serve a tool while another holds it.
 //!
-//! Time is passed in, never read here, so the hold's rules are tested without waiting.
+//! The hold's rules take the time as an argument, so they are tested without waiting.
+//! [`SharedLock`] ends a passed hold on its own, with a thread that wakes at the hold's deadline,
+//! so a quiet app never keeps the device lock from another process.
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// How long the computer stays with an Environment after its last tool call (contract v1).
@@ -182,6 +186,10 @@ impl DeviceLock {
         self.update_hold
     }
 
+    fn holder_unexpired(&self) -> Option<Holder> {
+        self.hold.as_ref().map(|hold| hold.holder.clone())
+    }
+
     /// Who holds the computer, after expiring a passed hold.
     pub fn holder(&mut self, now: Instant) -> Option<Holder> {
         self.expire(now);
@@ -192,6 +200,102 @@ impl DeviceLock {
     #[must_use]
     pub fn update_hold(&self) -> bool {
         self.update_hold
+    }
+
+    /// When the current hold ends if no call comes: `None` while a call runs or nobody holds.
+    #[must_use]
+    pub fn deadline(&self) -> Option<Instant> {
+        self.hold
+            .as_ref()
+            .filter(|hold| hold.active == 0)
+            .map(|hold| hold.last + self.linger)
+    }
+}
+
+struct Shared {
+    lock: Mutex<DeviceLock>,
+    changed: Condvar,
+    closed: Mutex<bool>,
+}
+
+/// A [`DeviceLock`] whose passed hold ends on its own: a thread waits for the hold's deadline and
+/// then releases the device lock, whether or not another request comes. Dropping the
+/// `SharedLock` stops the thread.
+pub struct SharedLock {
+    shared: Arc<Shared>,
+}
+
+impl SharedLock {
+    /// Wraps `lock` and starts its expiry thread. `on_expire` runs, outside the lock, with the
+    /// holder whose hold ended on its own.
+    #[must_use]
+    pub fn new(lock: DeviceLock, on_expire: impl Fn(Holder) + Send + 'static) -> Self {
+        let shared = Arc::new(Shared {
+            lock: Mutex::new(lock),
+            changed: Condvar::new(),
+            closed: Mutex::new(false),
+        });
+        let worker = Arc::clone(&shared);
+        thread::spawn(move || expire_on_deadline(&worker, &on_expire));
+        Self { shared }
+    }
+
+    /// Runs `work` on the lock, then wakes the expiry thread, since the deadline may have moved.
+    pub fn with<T>(&self, work: impl FnOnce(&mut DeviceLock) -> T) -> T {
+        let result = work(&mut guard(&self.shared.lock));
+        self.shared.changed.notify_all();
+        result
+    }
+}
+
+impl Drop for SharedLock {
+    fn drop(&mut self) {
+        *guard(&self.shared.closed) = true;
+        // Take the lock's mutex so the thread is either waiting (and gets the wake-up) or will
+        // see `closed` before it waits again.
+        drop(guard(&self.shared.lock));
+        self.shared.changed.notify_all();
+    }
+}
+
+fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    // A panic elsewhere never leaves the lock unusable: its state is valid at every step.
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn expire_on_deadline(shared: &Shared, on_expire: &impl Fn(Holder)) {
+    let mut lock = guard(&shared.lock);
+    loop {
+        if *guard(&shared.closed) {
+            return;
+        }
+        let now = Instant::now();
+        let expired = match lock.deadline() {
+            Some(deadline) if deadline <= now => {
+                let holder = lock.holder_unexpired();
+                lock.expire(now).then_some(holder).flatten()
+            }
+            Some(deadline) => {
+                lock = shared
+                    .changed
+                    .wait_timeout(lock, deadline - now)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0;
+                None
+            }
+            None => {
+                lock = shared
+                    .changed
+                    .wait(lock)
+                    .unwrap_or_else(PoisonError::into_inner);
+                None
+            }
+        };
+        if let Some(holder) = expired {
+            drop(lock);
+            on_expire(holder);
+            lock = guard(&shared.lock);
+        }
     }
 }
 
@@ -443,6 +547,69 @@ mod tests {
         assert!(
             !output.status.success(),
             "the child must fail to take the lock"
+        );
+    }
+
+    #[test]
+    fn a_quiet_app_releases_the_device_lock_at_the_deadline_for_another_process() {
+        let directory = scratch("deadline");
+        let path = directory.join("agent.lock");
+        let (expired, released) = std::sync::mpsc::channel();
+        let shared = SharedLock::new(
+            DeviceLock::with_linger(path.clone(), Duration::from_millis(50)),
+            move |holder| {
+                let _ = expired.send(holder.environment_id);
+            },
+        );
+        shared
+            .with(|lock| lock.try_begin("a", "A", Instant::now(), 1))
+            .expect("this process takes it");
+        shared.with(|lock| lock.end_call("a", Instant::now()));
+        // Nothing calls this lock again: only its own thread can end the hold.
+        assert_eq!(
+            released
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the hold ends on its own"),
+            "a"
+        );
+        let output = Command::new(std::env::current_exe().expect("the test binary"))
+            .args([
+                "--exact",
+                "lock::tests::device_lock_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("LAZURIO_DEVICE_LOCK_CHILD", &path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .output()
+            .expect("the child runs");
+        assert!(output.status.success(), "another process takes the lock");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("LOCKED"));
+        drop(shared);
+    }
+
+    #[test]
+    fn a_running_call_is_never_expired_by_the_thread() {
+        let directory = scratch("no-expiry");
+        let (expired, released) = std::sync::mpsc::channel::<String>();
+        let shared = SharedLock::new(
+            DeviceLock::with_linger(directory.join("agent.lock"), Duration::from_millis(1)),
+            move |holder| {
+                let _ = expired.send(holder.environment_id);
+            },
+        );
+        shared
+            .with(|lock| lock.try_begin("a", "A", Instant::now(), 1))
+            .expect("A starts");
+        // With a call running there is no deadline, so the thread has nothing to end.
+        assert_eq!(shared.with(|lock| lock.deadline()), None);
+        shared.with(|lock| lock.end_call("a", Instant::now()));
+        assert_eq!(
+            released
+                .recv_timeout(Duration::from_secs(30))
+                .expect("ends after the call"),
+            "a"
         );
     }
 
