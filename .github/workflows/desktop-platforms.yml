@@ -48,6 +48,9 @@ jobs:
           cache-dependency-path: helpers/tailnet/go.sum
       - run: rustup toolchain install
         working-directory: helpers/device
+      # The Device helper's tests on each system, for its paths and its standard input.
+      - run: cargo test --locked
+        working-directory: helpers/device
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
       - run: pnpm build:helpers

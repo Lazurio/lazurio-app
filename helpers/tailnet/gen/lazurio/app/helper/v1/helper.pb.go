@@ -16,6 +16,7 @@
 package helperv1
 
 import (
+	v11 "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/device/v1"
 	v1 "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/tailnet/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -42,6 +43,12 @@ type AppMessage struct {
 	//	*AppMessage_Ping
 	//	*AppMessage_Shutdown
 	//	*AppMessage_StartNode
+	//	*AppMessage_ConfigureDevice
+	//	*AppMessage_StartChannel
+	//	*AppMessage_StopChannel
+	//	*AppMessage_StopAgent
+	//	*AppMessage_HoldForUpdate
+	//	*AppMessage_ListHistory
 	Kind          isAppMessage_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -118,6 +125,60 @@ func (x *AppMessage) GetStartNode() *v1.StartNode {
 	return nil
 }
 
+func (x *AppMessage) GetConfigureDevice() *v11.ConfigureDevice {
+	if x != nil {
+		if x, ok := x.Kind.(*AppMessage_ConfigureDevice); ok {
+			return x.ConfigureDevice
+		}
+	}
+	return nil
+}
+
+func (x *AppMessage) GetStartChannel() *v11.StartChannel {
+	if x != nil {
+		if x, ok := x.Kind.(*AppMessage_StartChannel); ok {
+			return x.StartChannel
+		}
+	}
+	return nil
+}
+
+func (x *AppMessage) GetStopChannel() *v11.StopChannel {
+	if x != nil {
+		if x, ok := x.Kind.(*AppMessage_StopChannel); ok {
+			return x.StopChannel
+		}
+	}
+	return nil
+}
+
+func (x *AppMessage) GetStopAgent() *v11.StopAgent {
+	if x != nil {
+		if x, ok := x.Kind.(*AppMessage_StopAgent); ok {
+			return x.StopAgent
+		}
+	}
+	return nil
+}
+
+func (x *AppMessage) GetHoldForUpdate() *v11.HoldForUpdate {
+	if x != nil {
+		if x, ok := x.Kind.(*AppMessage_HoldForUpdate); ok {
+			return x.HoldForUpdate
+		}
+	}
+	return nil
+}
+
+func (x *AppMessage) GetListHistory() *v11.ListHistory {
+	if x != nil {
+		if x, ok := x.Kind.(*AppMessage_ListHistory); ok {
+			return x.ListHistory
+		}
+	}
+	return nil
+}
+
 type isAppMessage_Kind interface {
 	isAppMessage_Kind()
 }
@@ -135,11 +196,48 @@ type AppMessage_StartNode struct {
 	StartNode *v1.StartNode `protobuf:"bytes,10,opt,name=start_node,json=startNode,proto3,oneof"`
 }
 
+type AppMessage_ConfigureDevice struct {
+	// The Device helper (lazurio.app.device.v1).
+	ConfigureDevice *v11.ConfigureDevice `protobuf:"bytes,20,opt,name=configure_device,json=configureDevice,proto3,oneof"`
+}
+
+type AppMessage_StartChannel struct {
+	StartChannel *v11.StartChannel `protobuf:"bytes,21,opt,name=start_channel,json=startChannel,proto3,oneof"`
+}
+
+type AppMessage_StopChannel struct {
+	StopChannel *v11.StopChannel `protobuf:"bytes,22,opt,name=stop_channel,json=stopChannel,proto3,oneof"`
+}
+
+type AppMessage_StopAgent struct {
+	StopAgent *v11.StopAgent `protobuf:"bytes,23,opt,name=stop_agent,json=stopAgent,proto3,oneof"`
+}
+
+type AppMessage_HoldForUpdate struct {
+	HoldForUpdate *v11.HoldForUpdate `protobuf:"bytes,24,opt,name=hold_for_update,json=holdForUpdate,proto3,oneof"`
+}
+
+type AppMessage_ListHistory struct {
+	ListHistory *v11.ListHistory `protobuf:"bytes,25,opt,name=list_history,json=listHistory,proto3,oneof"`
+}
+
 func (*AppMessage_Ping) isAppMessage_Kind() {}
 
 func (*AppMessage_Shutdown) isAppMessage_Kind() {}
 
 func (*AppMessage_StartNode) isAppMessage_Kind() {}
+
+func (*AppMessage_ConfigureDevice) isAppMessage_Kind() {}
+
+func (*AppMessage_StartChannel) isAppMessage_Kind() {}
+
+func (*AppMessage_StopChannel) isAppMessage_Kind() {}
+
+func (*AppMessage_StopAgent) isAppMessage_Kind() {}
+
+func (*AppMessage_HoldForUpdate) isAppMessage_Kind() {}
+
+func (*AppMessage_ListHistory) isAppMessage_Kind() {}
 
 // A message from a helper to the app's main process.
 type HelperMessage struct {
@@ -153,6 +251,10 @@ type HelperMessage struct {
 	//	*HelperMessage_Failure
 	//	*HelperMessage_NodeState
 	//	*HelperMessage_ProxyEndpoint
+	//	*HelperMessage_DeviceReady
+	//	*HelperMessage_ChannelState
+	//	*HelperMessage_LockState
+	//	*HelperMessage_HistoryPage
 	Kind          isHelperMessage_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -247,6 +349,42 @@ func (x *HelperMessage) GetProxyEndpoint() *v1.ProxyEndpoint {
 	return nil
 }
 
+func (x *HelperMessage) GetDeviceReady() *v11.DeviceReady {
+	if x != nil {
+		if x, ok := x.Kind.(*HelperMessage_DeviceReady); ok {
+			return x.DeviceReady
+		}
+	}
+	return nil
+}
+
+func (x *HelperMessage) GetChannelState() *v11.ChannelState {
+	if x != nil {
+		if x, ok := x.Kind.(*HelperMessage_ChannelState); ok {
+			return x.ChannelState
+		}
+	}
+	return nil
+}
+
+func (x *HelperMessage) GetLockState() *v11.LockState {
+	if x != nil {
+		if x, ok := x.Kind.(*HelperMessage_LockState); ok {
+			return x.LockState
+		}
+	}
+	return nil
+}
+
+func (x *HelperMessage) GetHistoryPage() *v11.HistoryPage {
+	if x != nil {
+		if x, ok := x.Kind.(*HelperMessage_HistoryPage); ok {
+			return x.HistoryPage
+		}
+	}
+	return nil
+}
+
 type isHelperMessage_Kind interface {
 	isHelperMessage_Kind()
 }
@@ -272,6 +410,23 @@ type HelperMessage_ProxyEndpoint struct {
 	ProxyEndpoint *v1.ProxyEndpoint `protobuf:"bytes,11,opt,name=proxy_endpoint,json=proxyEndpoint,proto3,oneof"`
 }
 
+type HelperMessage_DeviceReady struct {
+	// The Device helper (lazurio.app.device.v1).
+	DeviceReady *v11.DeviceReady `protobuf:"bytes,20,opt,name=device_ready,json=deviceReady,proto3,oneof"`
+}
+
+type HelperMessage_ChannelState struct {
+	ChannelState *v11.ChannelState `protobuf:"bytes,21,opt,name=channel_state,json=channelState,proto3,oneof"`
+}
+
+type HelperMessage_LockState struct {
+	LockState *v11.LockState `protobuf:"bytes,22,opt,name=lock_state,json=lockState,proto3,oneof"`
+}
+
+type HelperMessage_HistoryPage struct {
+	HistoryPage *v11.HistoryPage `protobuf:"bytes,23,opt,name=history_page,json=historyPage,proto3,oneof"`
+}
+
 func (*HelperMessage_Hello) isHelperMessage_Kind() {}
 
 func (*HelperMessage_Pong) isHelperMessage_Kind() {}
@@ -281,6 +436,14 @@ func (*HelperMessage_Failure) isHelperMessage_Kind() {}
 func (*HelperMessage_NodeState) isHelperMessage_Kind() {}
 
 func (*HelperMessage_ProxyEndpoint) isHelperMessage_Kind() {}
+
+func (*HelperMessage_DeviceReady) isHelperMessage_Kind() {}
+
+func (*HelperMessage_ChannelState) isHelperMessage_Kind() {}
+
+func (*HelperMessage_LockState) isHelperMessage_Kind() {}
+
+func (*HelperMessage_HistoryPage) isHelperMessage_Kind() {}
 
 // The helper's first message. The main process stops a helper whose protocol it does not speak.
 type Hello struct {
@@ -532,7 +695,7 @@ var File_lazurio_app_helper_v1_helper_proto protoreflect.FileDescriptor
 
 const file_lazurio_app_helper_v1_helper_proto_rawDesc = "" +
 	"\n" +
-	"\"lazurio/app/helper/v1/helper.proto\x12\x15lazurio.app.helper.v1\x1a$lazurio/app/tailnet/v1/tailnet.proto\"\xe9\x01\n" +
+	"\"lazurio/app/helper/v1/helper.proto\x12\x15lazurio.app.helper.v1\x1a\"lazurio/app/device/v1/device.proto\x1a$lazurio/app/tailnet/v1/tailnet.proto\"\xaf\x05\n" +
 	"\n" +
 	"AppMessage\x12\x1d\n" +
 	"\n" +
@@ -541,8 +704,15 @@ const file_lazurio_app_helper_v1_helper_proto_rawDesc = "" +
 	"\bshutdown\x18\x03 \x01(\v2\x1f.lazurio.app.helper.v1.ShutdownH\x00R\bshutdown\x12B\n" +
 	"\n" +
 	"start_node\x18\n" +
-	" \x01(\v2!.lazurio.app.tailnet.v1.StartNodeH\x00R\tstartNodeB\x06\n" +
-	"\x04kind\"\xef\x02\n" +
+	" \x01(\v2!.lazurio.app.tailnet.v1.StartNodeH\x00R\tstartNode\x12S\n" +
+	"\x10configure_device\x18\x14 \x01(\v2&.lazurio.app.device.v1.ConfigureDeviceH\x00R\x0fconfigureDevice\x12J\n" +
+	"\rstart_channel\x18\x15 \x01(\v2#.lazurio.app.device.v1.StartChannelH\x00R\fstartChannel\x12G\n" +
+	"\fstop_channel\x18\x16 \x01(\v2\".lazurio.app.device.v1.StopChannelH\x00R\vstopChannel\x12A\n" +
+	"\n" +
+	"stop_agent\x18\x17 \x01(\v2 .lazurio.app.device.v1.StopAgentH\x00R\tstopAgent\x12N\n" +
+	"\x0fhold_for_update\x18\x18 \x01(\v2$.lazurio.app.device.v1.HoldForUpdateH\x00R\rholdForUpdate\x12G\n" +
+	"\flist_history\x18\x19 \x01(\v2\".lazurio.app.device.v1.ListHistoryH\x00R\vlistHistoryB\x06\n" +
+	"\x04kind\"\x90\x05\n" +
 	"\rHelperMessage\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\x124\n" +
@@ -552,7 +722,12 @@ const file_lazurio_app_helper_v1_helper_proto_rawDesc = "" +
 	"\n" +
 	"node_state\x18\n" +
 	" \x01(\v2!.lazurio.app.tailnet.v1.NodeStateH\x00R\tnodeState\x12N\n" +
-	"\x0eproxy_endpoint\x18\v \x01(\v2%.lazurio.app.tailnet.v1.ProxyEndpointH\x00R\rproxyEndpointB\x06\n" +
+	"\x0eproxy_endpoint\x18\v \x01(\v2%.lazurio.app.tailnet.v1.ProxyEndpointH\x00R\rproxyEndpoint\x12G\n" +
+	"\fdevice_ready\x18\x14 \x01(\v2\".lazurio.app.device.v1.DeviceReadyH\x00R\vdeviceReady\x12J\n" +
+	"\rchannel_state\x18\x15 \x01(\v2#.lazurio.app.device.v1.ChannelStateH\x00R\fchannelState\x12A\n" +
+	"\n" +
+	"lock_state\x18\x16 \x01(\v2 .lazurio.app.device.v1.LockStateH\x00R\tlockState\x12G\n" +
+	"\fhistory_page\x18\x17 \x01(\v2\".lazurio.app.device.v1.HistoryPageH\x00R\vhistoryPageB\x06\n" +
 	"\x04kind\"z\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1f\n" +
@@ -583,31 +758,51 @@ func file_lazurio_app_helper_v1_helper_proto_rawDescGZIP() []byte {
 
 var file_lazurio_app_helper_v1_helper_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_lazurio_app_helper_v1_helper_proto_goTypes = []any{
-	(*AppMessage)(nil),       // 0: lazurio.app.helper.v1.AppMessage
-	(*HelperMessage)(nil),    // 1: lazurio.app.helper.v1.HelperMessage
-	(*Hello)(nil),            // 2: lazurio.app.helper.v1.Hello
-	(*Ping)(nil),             // 3: lazurio.app.helper.v1.Ping
-	(*Pong)(nil),             // 4: lazurio.app.helper.v1.Pong
-	(*Shutdown)(nil),         // 5: lazurio.app.helper.v1.Shutdown
-	(*Failure)(nil),          // 6: lazurio.app.helper.v1.Failure
-	(*v1.StartNode)(nil),     // 7: lazurio.app.tailnet.v1.StartNode
-	(*v1.NodeState)(nil),     // 8: lazurio.app.tailnet.v1.NodeState
-	(*v1.ProxyEndpoint)(nil), // 9: lazurio.app.tailnet.v1.ProxyEndpoint
+	(*AppMessage)(nil),          // 0: lazurio.app.helper.v1.AppMessage
+	(*HelperMessage)(nil),       // 1: lazurio.app.helper.v1.HelperMessage
+	(*Hello)(nil),               // 2: lazurio.app.helper.v1.Hello
+	(*Ping)(nil),                // 3: lazurio.app.helper.v1.Ping
+	(*Pong)(nil),                // 4: lazurio.app.helper.v1.Pong
+	(*Shutdown)(nil),            // 5: lazurio.app.helper.v1.Shutdown
+	(*Failure)(nil),             // 6: lazurio.app.helper.v1.Failure
+	(*v1.StartNode)(nil),        // 7: lazurio.app.tailnet.v1.StartNode
+	(*v11.ConfigureDevice)(nil), // 8: lazurio.app.device.v1.ConfigureDevice
+	(*v11.StartChannel)(nil),    // 9: lazurio.app.device.v1.StartChannel
+	(*v11.StopChannel)(nil),     // 10: lazurio.app.device.v1.StopChannel
+	(*v11.StopAgent)(nil),       // 11: lazurio.app.device.v1.StopAgent
+	(*v11.HoldForUpdate)(nil),   // 12: lazurio.app.device.v1.HoldForUpdate
+	(*v11.ListHistory)(nil),     // 13: lazurio.app.device.v1.ListHistory
+	(*v1.NodeState)(nil),        // 14: lazurio.app.tailnet.v1.NodeState
+	(*v1.ProxyEndpoint)(nil),    // 15: lazurio.app.tailnet.v1.ProxyEndpoint
+	(*v11.DeviceReady)(nil),     // 16: lazurio.app.device.v1.DeviceReady
+	(*v11.ChannelState)(nil),    // 17: lazurio.app.device.v1.ChannelState
+	(*v11.LockState)(nil),       // 18: lazurio.app.device.v1.LockState
+	(*v11.HistoryPage)(nil),     // 19: lazurio.app.device.v1.HistoryPage
 }
 var file_lazurio_app_helper_v1_helper_proto_depIdxs = []int32{
-	3, // 0: lazurio.app.helper.v1.AppMessage.ping:type_name -> lazurio.app.helper.v1.Ping
-	5, // 1: lazurio.app.helper.v1.AppMessage.shutdown:type_name -> lazurio.app.helper.v1.Shutdown
-	7, // 2: lazurio.app.helper.v1.AppMessage.start_node:type_name -> lazurio.app.tailnet.v1.StartNode
-	2, // 3: lazurio.app.helper.v1.HelperMessage.hello:type_name -> lazurio.app.helper.v1.Hello
-	4, // 4: lazurio.app.helper.v1.HelperMessage.pong:type_name -> lazurio.app.helper.v1.Pong
-	6, // 5: lazurio.app.helper.v1.HelperMessage.failure:type_name -> lazurio.app.helper.v1.Failure
-	8, // 6: lazurio.app.helper.v1.HelperMessage.node_state:type_name -> lazurio.app.tailnet.v1.NodeState
-	9, // 7: lazurio.app.helper.v1.HelperMessage.proxy_endpoint:type_name -> lazurio.app.tailnet.v1.ProxyEndpoint
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	3,  // 0: lazurio.app.helper.v1.AppMessage.ping:type_name -> lazurio.app.helper.v1.Ping
+	5,  // 1: lazurio.app.helper.v1.AppMessage.shutdown:type_name -> lazurio.app.helper.v1.Shutdown
+	7,  // 2: lazurio.app.helper.v1.AppMessage.start_node:type_name -> lazurio.app.tailnet.v1.StartNode
+	8,  // 3: lazurio.app.helper.v1.AppMessage.configure_device:type_name -> lazurio.app.device.v1.ConfigureDevice
+	9,  // 4: lazurio.app.helper.v1.AppMessage.start_channel:type_name -> lazurio.app.device.v1.StartChannel
+	10, // 5: lazurio.app.helper.v1.AppMessage.stop_channel:type_name -> lazurio.app.device.v1.StopChannel
+	11, // 6: lazurio.app.helper.v1.AppMessage.stop_agent:type_name -> lazurio.app.device.v1.StopAgent
+	12, // 7: lazurio.app.helper.v1.AppMessage.hold_for_update:type_name -> lazurio.app.device.v1.HoldForUpdate
+	13, // 8: lazurio.app.helper.v1.AppMessage.list_history:type_name -> lazurio.app.device.v1.ListHistory
+	2,  // 9: lazurio.app.helper.v1.HelperMessage.hello:type_name -> lazurio.app.helper.v1.Hello
+	4,  // 10: lazurio.app.helper.v1.HelperMessage.pong:type_name -> lazurio.app.helper.v1.Pong
+	6,  // 11: lazurio.app.helper.v1.HelperMessage.failure:type_name -> lazurio.app.helper.v1.Failure
+	14, // 12: lazurio.app.helper.v1.HelperMessage.node_state:type_name -> lazurio.app.tailnet.v1.NodeState
+	15, // 13: lazurio.app.helper.v1.HelperMessage.proxy_endpoint:type_name -> lazurio.app.tailnet.v1.ProxyEndpoint
+	16, // 14: lazurio.app.helper.v1.HelperMessage.device_ready:type_name -> lazurio.app.device.v1.DeviceReady
+	17, // 15: lazurio.app.helper.v1.HelperMessage.channel_state:type_name -> lazurio.app.device.v1.ChannelState
+	18, // 16: lazurio.app.helper.v1.HelperMessage.lock_state:type_name -> lazurio.app.device.v1.LockState
+	19, // 17: lazurio.app.helper.v1.HelperMessage.history_page:type_name -> lazurio.app.device.v1.HistoryPage
+	18, // [18:18] is the sub-list for method output_type
+	18, // [18:18] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_lazurio_app_helper_v1_helper_proto_init() }
@@ -619,6 +814,12 @@ func file_lazurio_app_helper_v1_helper_proto_init() {
 		(*AppMessage_Ping)(nil),
 		(*AppMessage_Shutdown)(nil),
 		(*AppMessage_StartNode)(nil),
+		(*AppMessage_ConfigureDevice)(nil),
+		(*AppMessage_StartChannel)(nil),
+		(*AppMessage_StopChannel)(nil),
+		(*AppMessage_StopAgent)(nil),
+		(*AppMessage_HoldForUpdate)(nil),
+		(*AppMessage_ListHistory)(nil),
 	}
 	file_lazurio_app_helper_v1_helper_proto_msgTypes[1].OneofWrappers = []any{
 		(*HelperMessage_Hello)(nil),
@@ -626,6 +827,10 @@ func file_lazurio_app_helper_v1_helper_proto_init() {
 		(*HelperMessage_Failure)(nil),
 		(*HelperMessage_NodeState)(nil),
 		(*HelperMessage_ProxyEndpoint)(nil),
+		(*HelperMessage_DeviceReady)(nil),
+		(*HelperMessage_ChannelState)(nil),
+		(*HelperMessage_LockState)(nil),
+		(*HelperMessage_HistoryPage)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

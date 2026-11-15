@@ -6,6 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed={proto_root}");
     let descriptors = protox::compile(
         [
+            "lazurio/app/device/v1/device.proto",
             "lazurio/app/helper/v1/helper.proto",
             "lazurio/app/tailnet/v1/tailnet.proto",
         ],

@@ -1,15 +1,22 @@
 //! The Device helper of Lazurio App. The app's main process starts it and speaks the helper
-//! protocol of `proto/lazurio/app/helper/v1` with it over standard input and output. The engine
-//! that operates the computer's applications (`Lazurio/agent-desktop`) joins in a later step.
+//! protocol of `proto/lazurio/app/helper/v1` with it over standard input and output, and the
+//! Device's work of `proto/lazurio/app/device/v1` (ADR 0006). The engine that operates the
+//! computer's applications (`Lazurio/agent-desktop`) joins in a later step.
 
 use std::io::{self, Read, Write};
 
 use prost::Message;
+use zeroize::Zeroizing;
 
 /// The code generated from `proto/`, in modules that follow its packages.
 #[allow(clippy::all, clippy::pedantic)]
 pub mod lazurio {
     pub mod app {
+        pub mod device {
+            pub mod v1 {
+                include!(concat!(env!("OUT_DIR"), "/lazurio.app.device.v1.rs"));
+            }
+        }
         pub mod helper {
             pub mod v1 {
                 include!(concat!(env!("OUT_DIR"), "/lazurio.app.helper.v1.rs"));
@@ -22,6 +29,9 @@ pub mod lazurio {
         }
     }
 }
+
+pub mod device;
+pub mod secret_start;
 
 use lazurio::app::helper::v1::{
     AppMessage, Failure, Hello, HelperMessage, Pong, app_message, helper_message,
@@ -60,29 +70,61 @@ pub fn serve<R: Read, W: Write>(
         },
     )?;
 
+    let mut device = device::Device::default();
     while let Some(frame) = read_frame(input)? {
-        let message = AppMessage::decode(frame.as_slice())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let kind = match message.kind {
-            Some(app_message::Kind::Ping(ping)) => {
-                helper_message::Kind::Pong(Pong { nonce: ping.nonce })
+        // The frame is wiped when it goes out of scope. StartChannel, the one request with
+        // secrets, never goes through prost (`secret_start`).
+        let request_id;
+        let kind = match secret_start::scan(&frame)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.0))?
+        {
+            secret_start::Scanned::Start {
+                request_id: id,
+                request,
+            } => {
+                request_id = id;
+                device.start_channel(&request)
             }
-            Some(app_message::Kind::Shutdown(_)) => return Ok(()),
-            // This helper serves no other helper's work, such as the tailnet's.
-            Some(_) | None => helper_message::Kind::Failure(Failure {
-                code: "unknown_request".to_owned(),
-                message: "the helper does not serve this kind of request".to_owned(),
-            }),
+            secret_start::Scanned::Refused {
+                request_id: id,
+                reason,
+            } => {
+                request_id = id;
+                helper_message::Kind::Failure(Failure {
+                    code: "invalid_request".to_owned(),
+                    message: reason.to_owned(),
+                })
+            }
+            secret_start::Scanned::Other => {
+                let message = AppMessage::decode(frame.as_slice())
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                request_id = message.request_id;
+                match message.kind {
+                    Some(app_message::Kind::Ping(ping)) => {
+                        helper_message::Kind::Pong(Pong { nonce: ping.nonce })
+                    }
+                    Some(app_message::Kind::Shutdown(_)) => return Ok(()),
+                    // This helper serves no other helper's work, such as the tailnet's.
+                    Some(kind) => device.answer(&kind).unwrap_or_else(unknown_request),
+                    None => unknown_request(),
+                }
+            }
         };
         send(
             output,
             &HelperMessage {
-                request_id: message.request_id,
+                request_id,
                 kind: Some(kind),
             },
         )?;
     }
     Ok(())
+}
+fn unknown_request() -> helper_message::Kind {
+    helper_message::Kind::Failure(Failure {
+        code: "unknown_request".to_owned(),
+        message: "the helper does not serve this kind of request".to_owned(),
+    })
 }
 
 fn send<W: Write>(output: &mut W, message: &HelperMessage) -> io::Result<()> {
@@ -91,7 +133,7 @@ fn send<W: Write>(output: &mut W, message: &HelperMessage) -> io::Result<()> {
 }
 
 /// Reads one frame, or `None` when the input ends between frames.
-fn read_frame<R: Read>(input: &mut R) -> io::Result<Option<Vec<u8>>> {
+fn read_frame<R: Read>(input: &mut R) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
     let mut length: u64 = 0;
     let mut shift = 0_u32;
     loop {
@@ -125,7 +167,7 @@ fn read_frame<R: Read>(input: &mut R) -> io::Result<Option<Vec<u8>>> {
                 "a frame is larger than the helper accepts",
             )
         })?;
-    let mut frame = vec![0; length];
+    let mut frame = Zeroizing::new(vec![0; length]);
     input.read_exact(&mut frame)?;
     Ok(Some(frame))
 }
@@ -215,6 +257,70 @@ mod tests {
         assert_eq!(replies[2].request_id, 8);
         assert!(
             matches!(replies[2].kind, Some(helper_message::Kind::Failure(ref failure)) if failure.code == "unknown_request")
+        );
+    }
+
+    #[test]
+    fn serves_the_devices_work_through_the_envelope() {
+        use super::lazurio::app::device::v1::{ConfigureDevice, DeviceReady};
+        let input = frames(&[AppMessage {
+            request_id: 11,
+            kind: Some(app_message::Kind::ConfigureDevice(ConfigureDevice {
+                data_directory: std::env::temp_dir()
+                    .join("lazurio-device")
+                    .to_string_lossy()
+                    .into_owned(),
+                computer_name: "Work laptop".to_owned(),
+            })),
+        }]);
+        let mut output = Vec::new();
+
+        serve(&mut input.as_slice(), &mut output, "1.2.3").expect("serve ends cleanly");
+
+        let replies = replies(&output);
+        assert_eq!(replies[1].request_id, 11);
+        assert_eq!(
+            replies[1].kind,
+            Some(helper_message::Kind::DeviceReady(DeviceReady {
+                contract_version: 1
+            }))
+        );
+    }
+
+    #[test]
+    fn a_refused_start_channel_is_still_answered_and_its_key_never_echoed() {
+        use super::lazurio::app::device::v1::{ConfigureDevice, StartChannel};
+        let input = frames(&[
+            AppMessage {
+                request_id: 1,
+                kind: Some(app_message::Kind::ConfigureDevice(ConfigureDevice {
+                    data_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                    computer_name: "Work laptop".to_owned(),
+                })),
+            },
+            AppMessage {
+                request_id: 2,
+                kind: Some(app_message::Kind::StartChannel(StartChannel {
+                    environment_id: "env-a".to_owned(),
+                    attach_url: "wss://launchpad.example.lazurio.io/.lazurio/computers/attach"
+                        .to_owned(),
+                    device_id: "work-laptop".to_owned(),
+                    key_seed: vec![0xA5; 32],
+                    ..StartChannel::default()
+                })),
+            },
+        ]);
+        let mut output = Vec::new();
+
+        serve(&mut input.as_slice(), &mut output, "1.2.3").expect("serve ends cleanly");
+
+        assert!(
+            !output.windows(32).any(|window| window == [0xA5; 32]),
+            "no reply carries the key"
+        );
+        let replies = replies(&output);
+        assert!(
+            matches!(replies[2].kind, Some(helper_message::Kind::Failure(ref failure)) if failure.code == "not_implemented")
         );
     }
 

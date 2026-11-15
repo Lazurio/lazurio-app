@@ -13,6 +13,8 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { ChannelState, ConfigureDevice, DeviceReady, HistoryPage, HoldForUpdate, ListHistory, LockState, StartChannel, StopAgent, StopChannel } from "../../device/v1/device_pb.ts";
+import { file_lazurio_app_device_v1_device } from "../../device/v1/device_pb.ts";
 import type { NodeState, ProxyEndpoint, StartNode } from "../../tailnet/v1/tailnet_pb.ts";
 import { file_lazurio_app_tailnet_v1_tailnet } from "../../tailnet/v1/tailnet_pb.ts";
 import type { Message } from "@bufbuild/protobuf";
@@ -21,7 +23,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file lazurio/app/helper/v1/helper.proto.
  */
 export const file_lazurio_app_helper_v1_helper: GenFile = /*@__PURE__*/
-  fileDesc("CiJsYXp1cmlvL2FwcC9oZWxwZXIvdjEvaGVscGVyLnByb3RvEhVsYXp1cmlvLmFwcC5oZWxwZXIudjEiwwEKCkFwcE1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBIrCgRwaW5nGAIgASgLMhsubGF6dXJpby5hcHAuaGVscGVyLnYxLlBpbmdIABIzCghzaHV0ZG93bhgDIAEoCzIfLmxhenVyaW8uYXBwLmhlbHBlci52MS5TaHV0ZG93bkgAEjcKCnN0YXJ0X25vZGUYCiABKAsyIS5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLlN0YXJ0Tm9kZUgAQgYKBGtpbmQitAIKDUhlbHBlck1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBItCgVoZWxsbxgCIAEoCzIcLmxhenVyaW8uYXBwLmhlbHBlci52MS5IZWxsb0gAEisKBHBvbmcYAyABKAsyGy5sYXp1cmlvLmFwcC5oZWxwZXIudjEuUG9uZ0gAEjEKB2ZhaWx1cmUYBCABKAsyHi5sYXp1cmlvLmFwcC5oZWxwZXIudjEuRmFpbHVyZUgAEjcKCm5vZGVfc3RhdGUYCiABKAsyIS5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLk5vZGVTdGF0ZUgAEj8KDnByb3h5X2VuZHBvaW50GAsgASgLMiUubGF6dXJpby5hcHAudGFpbG5ldC52MS5Qcm94eUVuZHBvaW50SABCBgoEa2luZCJOCgVIZWxsbxIYChBwcm90b2NvbF92ZXJzaW9uGAEgASgNEhMKC2hlbHBlcl9uYW1lGAIgASgJEhYKDmhlbHBlcl92ZXJzaW9uGAMgASgJIhUKBFBpbmcSDQoFbm9uY2UYASABKAwiFQoEUG9uZxINCgVub25jZRgBIAEoDCIKCghTaHV0ZG93biIoCgdGYWlsdXJlEgwKBGNvZGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCUJTWlFnaXRodWIuY29tL0xhenVyaW8vbGF6dXJpby1hcHAvaGVscGVycy90YWlsbmV0L2dlbi9sYXp1cmlvL2FwcC9oZWxwZXIvdjE7aGVscGVydjFiBnByb3RvMw", [file_lazurio_app_tailnet_v1_tailnet]);
+  fileDesc("CiJsYXp1cmlvL2FwcC9oZWxwZXIvdjEvaGVscGVyLnByb3RvEhVsYXp1cmlvLmFwcC5oZWxwZXIudjEitgQKCkFwcE1lc3NhZ2USEgoKcmVxdWVzdF9pZBgBIAEoBBIrCgRwaW5nGAIgASgLMhsubGF6dXJpby5hcHAuaGVscGVyLnYxLlBpbmdIABIzCghzaHV0ZG93bhgDIAEoCzIfLmxhenVyaW8uYXBwLmhlbHBlci52MS5TaHV0ZG93bkgAEjcKCnN0YXJ0X25vZGUYCiABKAsyIS5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLlN0YXJ0Tm9kZUgAEkIKEGNvbmZpZ3VyZV9kZXZpY2UYFCABKAsyJi5sYXp1cmlvLmFwcC5kZXZpY2UudjEuQ29uZmlndXJlRGV2aWNlSAASPAoNc3RhcnRfY2hhbm5lbBgVIAEoCzIjLmxhenVyaW8uYXBwLmRldmljZS52MS5TdGFydENoYW5uZWxIABI6CgxzdG9wX2NoYW5uZWwYFiABKAsyIi5sYXp1cmlvLmFwcC5kZXZpY2UudjEuU3RvcENoYW5uZWxIABI2CgpzdG9wX2FnZW50GBcgASgLMiAubGF6dXJpby5hcHAuZGV2aWNlLnYxLlN0b3BBZ2VudEgAEj8KD2hvbGRfZm9yX3VwZGF0ZRgYIAEoCzIkLmxhenVyaW8uYXBwLmRldmljZS52MS5Ib2xkRm9yVXBkYXRlSAASOgoMbGlzdF9oaXN0b3J5GBkgASgLMiIubGF6dXJpby5hcHAuZGV2aWNlLnYxLkxpc3RIaXN0b3J5SABCBgoEa2luZCKiBAoNSGVscGVyTWVzc2FnZRISCgpyZXF1ZXN0X2lkGAEgASgEEi0KBWhlbGxvGAIgASgLMhwubGF6dXJpby5hcHAuaGVscGVyLnYxLkhlbGxvSAASKwoEcG9uZxgDIAEoCzIbLmxhenVyaW8uYXBwLmhlbHBlci52MS5Qb25nSAASMQoHZmFpbHVyZRgEIAEoCzIeLmxhenVyaW8uYXBwLmhlbHBlci52MS5GYWlsdXJlSAASNwoKbm9kZV9zdGF0ZRgKIAEoCzIhLmxhenVyaW8uYXBwLnRhaWxuZXQudjEuTm9kZVN0YXRlSAASPwoOcHJveHlfZW5kcG9pbnQYCyABKAsyJS5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLlByb3h5RW5kcG9pbnRIABI6CgxkZXZpY2VfcmVhZHkYFCABKAsyIi5sYXp1cmlvLmFwcC5kZXZpY2UudjEuRGV2aWNlUmVhZHlIABI8Cg1jaGFubmVsX3N0YXRlGBUgASgLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLkNoYW5uZWxTdGF0ZUgAEjYKCmxvY2tfc3RhdGUYFiABKAsyIC5sYXp1cmlvLmFwcC5kZXZpY2UudjEuTG9ja1N0YXRlSAASOgoMaGlzdG9yeV9wYWdlGBcgASgLMiIubGF6dXJpby5hcHAuZGV2aWNlLnYxLkhpc3RvcnlQYWdlSABCBgoEa2luZCJOCgVIZWxsbxIYChBwcm90b2NvbF92ZXJzaW9uGAEgASgNEhMKC2hlbHBlcl9uYW1lGAIgASgJEhYKDmhlbHBlcl92ZXJzaW9uGAMgASgJIhUKBFBpbmcSDQoFbm9uY2UYASABKAwiFQoEUG9uZxINCgVub25jZRgBIAEoDCIKCghTaHV0ZG93biIoCgdGYWlsdXJlEgwKBGNvZGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCUJTWlFnaXRodWIuY29tL0xhenVyaW8vbGF6dXJpby1hcHAvaGVscGVycy90YWlsbmV0L2dlbi9sYXp1cmlvL2FwcC9oZWxwZXIvdjE7aGVscGVydjFiBnByb3RvMw", [file_lazurio_app_device_v1_device, file_lazurio_app_tailnet_v1_tailnet]);
 
 /**
  * A message from the app's main process to a helper.
@@ -60,6 +62,44 @@ export type AppMessage = Message<"lazurio.app.helper.v1.AppMessage"> & {
      */
     value: StartNode;
     case: "startNode";
+  } | {
+    /**
+     * The Device helper (lazurio.app.device.v1).
+     *
+     * @generated from field: lazurio.app.device.v1.ConfigureDevice configure_device = 20;
+     */
+    value: ConfigureDevice;
+    case: "configureDevice";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.StartChannel start_channel = 21;
+     */
+    value: StartChannel;
+    case: "startChannel";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.StopChannel stop_channel = 22;
+     */
+    value: StopChannel;
+    case: "stopChannel";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.StopAgent stop_agent = 23;
+     */
+    value: StopAgent;
+    case: "stopAgent";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.HoldForUpdate hold_for_update = 24;
+     */
+    value: HoldForUpdate;
+    case: "holdForUpdate";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.ListHistory list_history = 25;
+     */
+    value: ListHistory;
+    case: "listHistory";
   } | { case: undefined; value?: undefined };
 };
 
@@ -118,6 +158,32 @@ export type HelperMessage = Message<"lazurio.app.helper.v1.HelperMessage"> & {
      */
     value: ProxyEndpoint;
     case: "proxyEndpoint";
+  } | {
+    /**
+     * The Device helper (lazurio.app.device.v1).
+     *
+     * @generated from field: lazurio.app.device.v1.DeviceReady device_ready = 20;
+     */
+    value: DeviceReady;
+    case: "deviceReady";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.ChannelState channel_state = 21;
+     */
+    value: ChannelState;
+    case: "channelState";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.LockState lock_state = 22;
+     */
+    value: LockState;
+    case: "lockState";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.HistoryPage history_page = 23;
+     */
+    value: HistoryPage;
+    case: "historyPage";
   } | { case: undefined; value?: undefined };
 };
 
