@@ -2,8 +2,9 @@
 
 - **Status:** accepted
 - **Decided:** 2026-11-14 by Matěj Suchánek, after the first sign-in through the app's tailnet node ([#4](https://github.com/Lazurio/lazurio-app/issues/4))
+- **Amended:** 2026-11-15 by Matěj Suchánek: `lazurio.app` with its subdomains, for an Organization's production applications (point 1, decisions 0239 and 0248)
 - **Related:**
-  - decision 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md), which records this exception in its paragraph "Pages hold no power" ([Lazurio/LazurioPlatform#988](https://github.com/Lazurio/LazurioPlatform/pull/988));
+  - decision 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md), which records this exception in its paragraph "Pages hold no power" ([Lazurio/LazurioPlatform#988](https://github.com/Lazurio/LazurioPlatform/pull/988)), and its addendum of 2026-11-15 on `lazurio.app` and the window ([Lazurio/LazurioPlatform#1007](https://github.com/Lazurio/LazurioPlatform/pull/1007));
   - [ADR 0001](0001-technological-foundation.md), whose point 4 this amends.
 
 ## Context
@@ -20,7 +21,8 @@ Launchpad connects Integrations that are not on its list yet through Composio's 
 
 ## Decision
 
-1. **Lazurio's pages:** `lazurio.io` with its subdomains, plus exactly `auth.lazurio.ai` and `dashboard.lazurio.ai`, all over HTTPS without credentials. No other name on `lazurio.ai` is one, and neither are look-alikes.
+1. **Lazurio's pages:** `lazurio.io` with its subdomains, `lazurio.app` with its subdomains, plus exactly `auth.lazurio.ai` and `dashboard.lazurio.ai`, all over HTTPS without credentials. No other name on `lazurio.ai` is one, and neither are look-alikes.
+   - `lazurio.app` carries an Organization's production applications, `<application>.<organization>.lazurio.app` (decision 0239). They open in the app (decision 0248, addendum 2026-11-15), and its window shows them in a tab without a frame, because they are not an Environment. Before this amendment the app sent them to the system's browser.
 2. **GitHub's sign-in pages, only inside a sign-in.**
    - A sign-in exists only where Lazurio Auth (`auth.lazurio.ai`, default port) actually answered. That covers two cases: a main-frame navigation that Auth's server redirected, and a page that such a navigation showed.
    - A navigation to Lazurio Auth that is refused, cancelled, replaced, answered without a page (a 204) or ends on an error page starts nothing.
