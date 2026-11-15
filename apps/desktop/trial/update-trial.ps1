@@ -36,8 +36,13 @@ try {
   $entry = Get-ChildItem -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
     Get-ItemProperty | Where-Object { $_.DisplayName -like 'Lazurio App*' } | Select-Object -First 1
   if ($null -eq $entry) { throw 'The installer of N left no uninstall entry for Lazurio App.' }
-  $exe = Join-Path $entry.InstallLocation 'Lazurio App.exe'
-  Write-Host "Installed into $($entry.InstallLocation)"
+  # electron-builder's entry names the app's executable in DisplayIcon ("<path>,0").
+  $exe = ($entry.DisplayIcon -replace ',\d+$', '').Trim('"')
+  if (-not $exe -or -not (Test-Path -LiteralPath $exe)) {
+    $entry | Format-List | Out-String | Write-Host
+    throw "The uninstall entry names no installed executable ($($entry.DisplayIcon))."
+  }
+  Write-Host "Installed: $exe"
   $before = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
   Write-Host "Installed N: $before"
   if ($before -like "$ExpectedVersion*") { throw "N already has the version of N+1." }
