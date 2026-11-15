@@ -15,7 +15,10 @@ on:
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - .github/workflows/desktop-update-trial.yml
+      - .github/workflows/release*.yml
   workflow_dispatch:
+  # The release workflow runs this test before every release (docs/adr/0005, point 9).
+  workflow_call:
 
 permissions:
   contents: read
@@ -96,11 +99,12 @@ jobs:
           cache-dependency-path: helpers/tailnet/go.sum
       - run: rustup toolchain install
         working-directory: helpers/device
-      # AppImages mount through FUSE 2; Electron's sandbox needs unprivileged user namespaces.
-      - name: FUSE, Xvfb and the operating system sandbox
+      # AppImages mount through FUSE 2; Electron's sandbox needs unprivileged user namespaces; the
+      # keystore check needs a Secret Service (gnome-keyring).
+      - name: FUSE, Xvfb, a Secret Service and the operating system sandbox
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2t64 xvfb
+          sudo apt-get install -y libfuse2t64 xvfb gnome-keyring dbus-x11
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
@@ -116,9 +120,17 @@ jobs:
               -c.directories.output="trial/out/$version" \
               -c.appImage.artifactName=Lazurio-App.AppImage
           done
+      # A session bus with an unlocked keyring; GNOME makes Electron's safeStorage use it, in N and
+      # in the N+1 that the update starts.
       - name: Update from N to N+1
         working-directory: apps/desktop/trial
-        run: ./update-trial.sh out/0.0.1/Lazurio-App.AppImage "$PWD/out/0.0.2"
+        run: |
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            printf trial | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            export XDG_CURRENT_DESKTOP=GNOME
+            ./update-trial.sh out/0.0.1/Lazurio-App.AppImage "$PWD/out/0.0.2"
+          '
 
   # The Mac gets a trial build of N only: without a Developer ID, Squirrel.Mac never installs an
   # update (docs/adr/0005, point 7), so a person installs and starts it by hand.

@@ -161,9 +161,15 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
   const onDownloaded = (info: unknown) =>
     Effect.suspend(() => {
       const version = decodeVersion(info);
-      return Option.isSome(version) && offered(version.value.version)
-        ? setState({ phase: "ready", version: version.value.version })
-        : setState({ phase: "idle" });
+      if (Option.isNone(version) || !offered(version.value.version))
+        return setState({ phase: "idle" });
+      return setState({ phase: "ready", version: version.value.version }).pipe(
+        Effect.andThen(
+          Effect.logInfo("update ready").pipe(
+            Effect.annotateLogs({ version: version.value.version }),
+          ),
+        ),
+      );
     });
 
   // One install at a time: every call while it runs waits for the same attempt, so a second quit or

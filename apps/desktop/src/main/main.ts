@@ -15,6 +15,7 @@ import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../shared/bridge.ts";
 
 import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
+import * as KeystoreCheck from "./KeystoreCheck.ts";
 import * as Helpers from "./Helpers.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
@@ -180,6 +181,12 @@ const program = Effect.gen(function* () {
   );
   const fileSystem = yield* FileSystem.FileSystem;
   const keystore = keystoreOn(yield* HostProcess.Platform, !Electron.app.isPackaged);
+  yield* KeystoreCheck.run({
+    keystore,
+    userData: Electron.app.getPath("userData"),
+    appVersion: Electron.app.getVersion(),
+    allowWithoutKeystore: !Electron.app.isPackaged,
+  });
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
   const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
   const tailnets: Tailnet.Tailnets =
