@@ -2,6 +2,7 @@ import { use, useEffect, useState } from "react";
 
 import type { AppStatus } from "../shared/bridge.ts";
 import { localeOf, messages } from "./messages.ts";
+import { tailnetLabel } from "./tailnetLabel.ts";
 
 export function App({ status }: { readonly status: Promise<AppStatus> }) {
   const [current, setCurrent] = useState(use(status));
@@ -48,16 +49,31 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
           <p className="shell__empty">{text.noTailnets}</p>
         ) : (
           <ul className="shell__helpers">
-            {current.tailnets.map((tailnet) => (
-              <li key={tailnet.tailnet} data-tailnet={tailnet.tailnet} data-state={tailnet.state}>
-                <span>{tailnet.tailnet}</span>
-                <span>
-                  {tailnet.state === "running"
-                    ? `${text.running} · ${tailnet.addresses.join(", ")}`
-                    : text[tailnet.state]}
-                </span>
-              </li>
-            ))}
+            {current.tailnets.map((tailnet) => {
+              const label = tailnetLabel(tailnet, text);
+              return (
+                <li
+                  key={tailnet.tailnet}
+                  data-tailnet={tailnet.tailnet}
+                  data-state={tailnet.state}
+                  data-reason={tailnet.state === "stopped" ? tailnet.reason : undefined}
+                >
+                  <span>{tailnet.tailnet}</span>
+                  <span className="shell__state">{label.state}</span>
+                  {label.detail === undefined ? null : (
+                    <div className="shell__reason">
+                      <p>{label.detail.text}</p>
+                      {label.detail.files?.map((file) => (
+                        <code key={file} className="shell__file">
+                          {file}
+                        </code>
+                      ))}
+                      {label.detail.after === undefined ? null : <p>{label.detail.after}</p>}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

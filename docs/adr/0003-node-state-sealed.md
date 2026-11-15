@@ -28,6 +28,8 @@ The whole state does not fit everywhere a keystore takes secrets. A Windows cred
 4. **The state in the clear is taken over once.**
    - A node that still has a `tailscaled.state` has it sealed at its next start, and the clear file is removed.
    - A node keeps its identity and needs no new sign-in.
+   - A take-over can stop after sealing and before the removal. The next start then finds both files: it removes the clear one, and a node whose clear file cannot go does not start.
+   - The sealed state wins. A build that kept the state in the clear may have written that file in between, and its state is discarded.
 
 ## Why the app's keystore and not the helper's own
 
@@ -47,5 +49,12 @@ What the helper keeps on disk is useless without the app's keystore.
 - **What the state directory still holds in the clear:**
   - tsnet's network map cache (`profile-data/<id>/netmap-cache`), which names the tailnet's peers and their addresses but no private key;
   - `tailscaled.log.conf`, which nothing uses since log uploads are off (#9).
-- **A lost or unreadable sealed key** leaves the node's sealed state unopenable, and the node does not start, so it never changes its identity unnoticed. The local window shows the reason. Removing the node's state directory lets it sign in again, after which it needs approval again.
+- **A key or a sealed state that does not open stops the node.** That happens when the keystore no longer opens `<tailnet>.key`, or when the key does not open `state.sealed`. The node never changes its identity unnoticed, and the local window shows the reason with this way out:
+  1. quit Lazurio App;
+  2. delete both `<userData>/tailnets/<tailnet>.key` and the folder `<userData>/tailnets/<tailnet>/`, since the key alone or the folder alone fails again;
+  3. start the app again.
+
+  The node then signs in again as a new Device and needs approval again: a reviewed revision of the Organization's approved Devices. The old Device should be removed from the tailnet.
+
+- **Without a keystore** (`no-keystore`), the window asks the person to unlock it, the Keychain on a Mac, and to start the app again. No file is deleted.
 - **The removal of `tailscaled.state` is no secure erase.** On an SSD the old bytes may stay on the medium until it overwrites them. A node whose old state may have been copied should be removed from the tailnet and signed in again.

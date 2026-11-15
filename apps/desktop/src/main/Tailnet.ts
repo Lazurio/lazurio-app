@@ -161,8 +161,9 @@ export interface TailnetOptions {
   readonly session: Electron.Session;
   readonly observer: NavigationObserver;
   readonly stateRoot: string;
-  // The node's state key, kept only sealed by the system's keystore (NodeKeys, ADR 0003).
-  readonly stateKeyOf: (tailnet: string) => Effect.Effect<Uint8Array, NodeKeyError>;
+  // The node's state key from its sealed file, kept only sealed by the system's keystore
+  // (NodeKeys, ADR 0003).
+  readonly stateKeyOf: (keyFile: string) => Effect.Effect<Uint8Array, NodeKeyError>;
 }
 
 export interface Tailnets {
@@ -171,6 +172,46 @@ export interface Tailnets {
   // Calls the listener after every change of a status; the result stops it.
   readonly subscribe: (listener: () => void) => () => void;
 }
+
+interface Recovery {
+  readonly keyFile: string;
+  readonly stateDirectory: string;
+}
+
+// A tailnet whose node key the keystore did not give: no keystore, or a key it does not open.
+export const stoppedForKey = (
+  tailnet: string,
+  error: NodeKeyError,
+  recovery: Recovery,
+): TailnetStatus => {
+  switch (error.reason) {
+    case "no-keystore":
+      return { tailnet, state: "stopped", problem: error.problem, reason: "no-keystore" };
+    case "key-unreadable":
+      return {
+        tailnet,
+        state: "stopped",
+        problem: error.problem,
+        reason: "key-unreadable",
+        recovery,
+      };
+    case "key-not-saved":
+      return { tailnet, state: "stopped", problem: error.problem };
+  }
+};
+
+// The helper's code for a node whose sealed state does not open with its key (statestore.go).
+const FAILURE_STATE_UNREADABLE = "state_unreadable";
+
+// A tailnet whose node the helper did not start.
+export const stoppedForFailure = (
+  tailnet: string,
+  failure: { readonly code: string; readonly message: string },
+  recovery: Recovery,
+): TailnetStatus =>
+  failure.code === FAILURE_STATE_UNREADABLE
+    ? { tailnet, state: "stopped", problem: failure.message, reason: "state-unreadable", recovery }
+    : { tailnet, state: "stopped", problem: failure.message };
 
 // Runs the tailnets for as long as the scope lives.
 export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) {
@@ -232,15 +273,19 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
       ),
     );
   for (const tailnet of options.tailnets) {
+    const stateDirectory = path.join(options.stateRoot, tailnet.tailnet);
+    // Deleting both starts the node afresh: it signs in again and needs approval again.
+    const recovery = {
+      keyFile: path.join(options.stateRoot, `${tailnet.tailnet}.key`),
+      stateDirectory,
+    };
     // A node whose key the keystore does not give starts nowhere, and says why.
-    const key = yield* options.stateKeyOf(tailnet.tailnet).pipe(
+    const key = yield* options.stateKeyOf(recovery.keyFile).pipe(
       Effect.map((value) => ({ _tag: "Key" as const, value })),
-      Effect.catch((error) => Effect.succeed({ _tag: "NoKey" as const, problem: error.problem })),
+      Effect.catch((error) => Effect.succeed({ _tag: "NoKey" as const, error })),
     );
     if (key._tag === "NoKey") {
-      yield* change(
-        afterReply(board, { tailnet: tailnet.tailnet, state: "stopped", problem: key.problem }),
-      );
+      yield* change(afterReply(board, stoppedForKey(tailnet.tailnet, key.error, recovery)));
       continue;
     }
     const reply = yield* options.connection.request({
@@ -249,7 +294,7 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
         tailnet: tailnet.tailnet,
         controlUrl: tailnet.controlUrl,
         hostname: tailnet.hostname,
-        stateDirectory: path.join(options.stateRoot, tailnet.tailnet),
+        stateDirectory,
         domains: [...tailnet.domains],
         stateKey: key.value,
       }),
@@ -257,11 +302,9 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
     const next: TailnetStatus =
       reply.kind.case === "nodeState"
         ? statusOf(reply.kind.value)
-        : {
-            tailnet: tailnet.tailnet,
-            state: "stopped",
-            problem: reply.kind.case === "failure" ? reply.kind.value.message : "no answer",
-          };
+        : reply.kind.case === "failure"
+          ? stoppedForFailure(tailnet.tailnet, reply.kind.value, recovery)
+          : { tailnet: tailnet.tailnet, state: "stopped", problem: "no answer" };
     yield* change(afterReply(board, next));
   }
 

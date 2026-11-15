@@ -37,6 +37,9 @@ const testHooks = Effect.gen(function* () {
       tailnetHelper: Option.none<Helpers.HelperBinary>(),
     };
   }
+  // A launch may keep its data apart from the development profile, before the app is ready.
+  const userData = yield* Config.option(Config.String("LAZURIO_APP_E2E_USER_DATA"));
+  if (Option.isSome(userData)) Electron.app.setPath("userData", userData.value);
   const remoteUrl = yield* Config.option(Config.String("LAZURIO_APP_E2E_REMOTE_URL"));
   // A tailnet helper of the tests (e2e/fake-tailnet-helper.ts), run by the given Node.
   const fakeHelper = yield* Config.option(Config.String("LAZURIO_APP_E2E_TAILNET_HELPER"));
@@ -138,10 +141,10 @@ const program = Effect.gen(function* () {
           session: Electron.session.fromPartition(MainWindow.REMOTE_PARTITION),
           observer: hooks.observer,
           stateRoot,
-          stateKeyOf: (tailnet) =>
+          stateKeyOf: (keyFile) =>
             NodeKeys.stateKey({
               keystore,
-              path: path.join(stateRoot, `${tailnet}.key`),
+              path: keyFile,
               allowWithoutKeystore: !Electron.app.isPackaged,
             }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
         })

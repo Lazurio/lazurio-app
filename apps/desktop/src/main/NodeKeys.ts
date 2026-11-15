@@ -22,6 +22,9 @@ export interface Keystore {
 const NO_KEYSTORE: ReadonlySet<string> = new Set(["basic_text", "unknown"]);
 
 export class NodeKeyError extends Schema.TaggedError<NodeKeyError>()("NodeKeyError", {
+  // no-keystore: no keystore to seal with; key-unreadable: the sealed key does not open or cannot
+  // be read; key-not-saved: a new key could not be sealed or written.
+  reason: Schema.Literals(["no-keystore", "key-unreadable", "key-not-saved"]),
   problem: Schema.String,
 }) {
   override get message(): string {
@@ -43,14 +46,19 @@ const toBase64 = (bytes: Uint8Array): string => btoa(String.fromCharCode(...byte
 
 // The node's state key: the one sealed at the path, or a new one, sealed and written there.
 export const stateKey = Effect.fn("NodeKeys.stateKey")(function* (options: StateKeyOptions) {
-  const failure = (problem: string) => new NodeKeyError({ problem });
+  const failure = (reason: NodeKeyError["reason"], problem: string) =>
+    new NodeKeyError({ reason, problem });
   if (!options.keystore.available()) {
-    return yield* failure("the system's keystore is not available, so no tailnet node starts");
+    return yield* failure(
+      "no-keystore",
+      "the system's keystore is not available, so no tailnet node starts",
+    );
   }
   const backend = options.keystore.backend();
   if (backend !== undefined && NO_KEYSTORE.has(backend)) {
     if (!options.allowWithoutKeystore) {
       return yield* failure(
+        "no-keystore",
         `Linux offers no keystore here (${backend}), so no tailnet node starts`,
       );
     }
@@ -62,26 +70,28 @@ export const stateKey = Effect.fn("NodeKeys.stateKey")(function* (options: State
   const fileSystem = yield* FileSystem.FileSystem;
   const exists = yield* fileSystem
     .exists(options.path)
-    .pipe(Effect.mapError(() => failure("its sealed key cannot be read")));
+    .pipe(Effect.mapError(() => failure("key-unreadable", "its sealed key cannot be read")));
   if (exists) {
     const sealed = yield* fileSystem
       .readFile(options.path)
-      .pipe(Effect.mapError(() => failure("its sealed key cannot be read")));
+      .pipe(Effect.mapError(() => failure("key-unreadable", "its sealed key cannot be read")));
     const key = yield* Effect.try({
       try: () => fromBase64(options.keystore.open(sealed)),
-      catch: () => failure("the keystore does not open its sealed key"),
+      catch: () => failure("key-unreadable", "the keystore does not open its sealed key"),
     });
-    if (key.length !== STATE_KEY_SIZE) return yield* failure("its sealed key has the wrong size");
+    if (key.length !== STATE_KEY_SIZE) {
+      return yield* failure("key-unreadable", "its sealed key has the wrong size");
+    }
     return key;
   }
 
   const key = crypto.getRandomValues(new Uint8Array(STATE_KEY_SIZE));
   const sealed = yield* Effect.try({
     try: () => options.keystore.seal(toBase64(key)),
-    catch: () => failure("the keystore does not seal a new key"),
+    catch: () => failure("key-not-saved", "the keystore does not seal a new key"),
   });
   yield* fileSystem
     .writeFile(options.path, sealed, { flag: "wx", mode: 0o600 })
-    .pipe(Effect.mapError(() => failure("its sealed key cannot be written")));
+    .pipe(Effect.mapError(() => failure("key-not-saved", "its sealed key cannot be written")));
   return key;
 });

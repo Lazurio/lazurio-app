@@ -152,3 +152,69 @@ func TestSealedStoreRefusesAKeyOfTheWrongSize(t *testing.T) {
 		}
 	}
 }
+
+func TestSealedStoreRemovesTheClearStateThatAnInterruptedTakeOverLeft(t *testing.T) {
+	directory := t.TempDir()
+	plainPath := filepath.Join(directory, plainStateFile)
+	plain, err := json.Marshal(map[ipn.StateKey][]byte{"_machinekey": secretMarker})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if err := os.WriteFile(plainPath, plain, 0o600); err != nil {
+		t.Fatalf("write the earlier state: %v", err)
+	}
+	if _, err := openSealedStore(directory, stateKeyForTest(6)); err != nil {
+		t.Fatalf("take over: %v", err)
+	}
+	// The take-over stopped after sealing: the clear file is back.
+	if err := os.WriteFile(plainPath, plain, 0o600); err != nil { //nolint:gosec // The test's own temporary directory.
+		t.Fatalf("write the clear file again: %v", err)
+	}
+
+	store, err := openSealedStore(directory, stateKeyForTest(6))
+	if err != nil {
+		t.Fatalf("open after the interruption: %v", err)
+	}
+	if _, err := os.Stat(plainPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the clear state is still there: %v", err)
+	}
+	if value, err := store.ReadState("_machinekey"); err != nil || !bytes.Equal(value, secretMarker) {
+		t.Fatalf("read = %q, %v", value, err)
+	}
+}
+
+func TestSealedStoreDoesNotStartWhenTheClearStateCannotGo(t *testing.T) {
+	directory := t.TempDir()
+	if _, err := openSealedStore(directory, stateKeyForTest(7)); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	store, err := openSealedStore(directory, stateKeyForTest(7))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if err := store.WriteState("_machinekey", secretMarker); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// A clear "file" that cannot be removed: a directory with something in it.
+	plainPath := filepath.Join(directory, plainStateFile)
+	if err := os.MkdirAll(filepath.Join(plainPath, "inside"), 0o700); err != nil {
+		t.Fatalf("make the stuck clear state: %v", err)
+	}
+	if _, err := openSealedStore(directory, stateKeyForTest(7)); err == nil {
+		t.Fatal("a node started while its clear state could not go")
+	}
+}
+
+func TestSealedStoreNamesAStateThatItsKeyDoesNotOpen(t *testing.T) {
+	directory := t.TempDir()
+	store, err := openSealedStore(directory, stateKeyForTest(8))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := store.WriteState("_machinekey", secretMarker); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := openSealedStore(directory, stateKeyForTest(9)); !errors.Is(err, errStateUnreadable) {
+		t.Fatalf("another key gives %v, want errStateUnreadable", err)
+	}
+}

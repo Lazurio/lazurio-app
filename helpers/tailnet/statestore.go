@@ -27,6 +27,10 @@ const (
 	sealedStateFormat = "lazurio-tailnet-state-v1"
 )
 
+// errStateUnreadable is a sealed state that does not open with the node's key: the key changed,
+// or the file is damaged. The app shows the person how to start the node afresh.
+var errStateUnreadable = errors.New("the sealed state does not open with this state key")
+
 // sealedStore is a node's ipn.StateStore. It keeps the whole state, the node's machine and node
 // keys among it, in one file sealed with AES-256-GCM under the node's state key (ADR 0003). The
 // key comes from the app, which keeps it only sealed by the system's keystore, so the state
@@ -63,6 +67,12 @@ func openSealedStore(directory string, key []byte) (*sealedStore, error) {
 		if err := store.unseal(sealed); err != nil {
 			return nil, err
 		}
+		// A take-over that stopped after sealing left the clear file behind. It goes now, and a node
+		// whose clear file cannot go does not start. The sealed state wins: a build that kept the
+		// state in the clear may have written that file since, and its state is discarded.
+		if err := removePlainState(directory); err != nil {
+			return nil, err
+		}
 	case errors.Is(err, os.ErrNotExist):
 		if err := store.takeOverPlainState(directory); err != nil {
 			return nil, err
@@ -76,14 +86,14 @@ func openSealedStore(directory string, key []byte) (*sealedStore, error) {
 func (s *sealedStore) unseal(sealed []byte) error {
 	size := s.aead.NonceSize()
 	if len(sealed) < size {
-		return errors.New("the sealed state is cut short")
+		return fmt.Errorf("%w: it is cut short", errStateUnreadable)
 	}
 	plain, err := s.aead.Open(nil, sealed[:size], sealed[size:], []byte(sealedStateFormat))
 	if err != nil {
-		return errors.New("the sealed state does not open with this state key")
+		return errStateUnreadable
 	}
 	if err := json.Unmarshal(plain, &s.state); err != nil {
-		return fmt.Errorf("the sealed state holds no state: %w", err)
+		return fmt.Errorf("%w: it holds no state", errStateUnreadable)
 	}
 	return nil
 }
@@ -105,7 +115,13 @@ func (s *sealedStore) takeOverPlainState(directory string) error {
 	if err := s.persist(); err != nil {
 		return err
 	}
-	if err := os.Remove(plainPath); err != nil {
+	return removePlainState(directory)
+}
+
+// removePlainState removes the state that tsnet's own store kept in the clear, if it is there.
+func removePlainState(directory string) error {
+	err := os.Remove(filepath.Join(directory, plainStateFile))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove the earlier state in the clear: %w", err)
 	}
 	return nil

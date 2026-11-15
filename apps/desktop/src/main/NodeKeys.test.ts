@@ -134,4 +134,50 @@ describe("stateKey", () => {
       }),
     ),
   );
+
+  it.effect("names why a key failed: no keystore, or a key that does not open", () =>
+    inTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const none = yield* Effect.flip(
+          stateKey({
+            keystore: fakeKeystore({ available: () => false }),
+            path: path.join(directory, "none.key"),
+            allowWithoutKeystore: true,
+          }),
+        );
+        assert.strictEqual(none.reason, "no-keystore");
+        const basicText = yield* Effect.flip(
+          stateKey({
+            keystore: fakeKeystore({ backend: () => "basic_text" }),
+            path: path.join(directory, "basic.key"),
+            allowWithoutKeystore: false,
+          }),
+        );
+        assert.strictEqual(basicText.reason, "no-keystore");
+        const foreign = path.join(directory, "foreign.key");
+        yield* fileSystem.writeFile(
+          foreign,
+          new TextEncoder().encode("not sealed by this keystore"),
+        );
+        const unopened = yield* Effect.flip(
+          stateKey({ keystore: fakeKeystore(), path: foreign, allowWithoutKeystore: false }),
+        );
+        assert.strictEqual(unopened.reason, "key-unreadable");
+        const unsealed = yield* Effect.flip(
+          stateKey({
+            keystore: fakeKeystore({
+              seal: () => {
+                throw new Error("the keystore refuses");
+              },
+            }),
+            path: path.join(directory, "unsealed.key"),
+            allowWithoutKeystore: false,
+          }),
+        );
+        assert.strictEqual(unsealed.reason, "key-not-saved");
+      }),
+    ),
+  );
 });
