@@ -6,6 +6,7 @@
 use std::io::{self, Read, Write};
 
 use prost::Message;
+use zeroize::{Zeroize, Zeroizing};
 
 /// The code generated from `proto/`, in modules that follow its packages.
 #[allow(clippy::all, clippy::pedantic)]
@@ -70,12 +71,17 @@ pub fn serve<R: Read, W: Write>(
 
     let mut device = device::Device::default();
     while let Some(frame) = read_frame(input)? {
-        let message = AppMessage::decode(frame.as_slice())
+        // The frame and the decoded message are wiped when they go out of scope, on every path:
+        // a request carries the Device's key and the tailnet proxy's credentials (ADR 0006).
+        let mut message = Wiped(AppMessage::default());
+        message
+            .0
+            .merge(frame.as_slice())
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let kind = match message.kind {
-            Some(app_message::Kind::Ping(ping)) => {
-                helper_message::Kind::Pong(Pong { nonce: ping.nonce })
-            }
+        let kind = match &message.0.kind {
+            Some(app_message::Kind::Ping(ping)) => helper_message::Kind::Pong(Pong {
+                nonce: ping.nonce.clone(),
+            }),
             Some(app_message::Kind::Shutdown(_)) => return Ok(()),
             // This helper serves no other helper's work, such as the tailnet's.
             Some(kind) => device.answer(kind).unwrap_or_else(unknown_request),
@@ -84,12 +90,33 @@ pub fn serve<R: Read, W: Write>(
         send(
             output,
             &HelperMessage {
-                request_id: message.request_id,
+                request_id: message.0.request_id,
                 kind: Some(kind),
             },
         )?;
     }
     Ok(())
+}
+
+/// A decoded request whose secrets are wiped when it is dropped.
+struct Wiped(AppMessage);
+
+impl Drop for Wiped {
+    fn drop(&mut self) {
+        wipe_secrets(&mut self.0);
+    }
+}
+
+/// Overwrites the secrets a request carries: the Device's key and the tailnet proxy's
+/// credentials of `StartChannel`.
+fn wipe_secrets(message: &mut AppMessage) {
+    if let Some(app_message::Kind::StartChannel(start)) = &mut message.kind {
+        start.key_seed.zeroize();
+        if let Some(proxy) = &mut start.proxy {
+            proxy.username.zeroize();
+            proxy.password.zeroize();
+        }
+    }
 }
 
 fn unknown_request() -> helper_message::Kind {
@@ -105,7 +132,7 @@ fn send<W: Write>(output: &mut W, message: &HelperMessage) -> io::Result<()> {
 }
 
 /// Reads one frame, or `None` when the input ends between frames.
-fn read_frame<R: Read>(input: &mut R) -> io::Result<Option<Vec<u8>>> {
+fn read_frame<R: Read>(input: &mut R) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
     let mut length: u64 = 0;
     let mut shift = 0_u32;
     loop {
@@ -139,7 +166,7 @@ fn read_frame<R: Read>(input: &mut R) -> io::Result<Option<Vec<u8>>> {
                 "a frame is larger than the helper accepts",
             )
         })?;
-    let mut frame = vec![0; length];
+    let mut frame = Zeroizing::new(vec![0; length]);
     input.read_exact(&mut frame)?;
     Ok(Some(frame))
 }
@@ -238,7 +265,10 @@ mod tests {
         let input = frames(&[AppMessage {
             request_id: 11,
             kind: Some(app_message::Kind::ConfigureDevice(ConfigureDevice {
-                data_directory: "/tmp/lazurio-device".to_owned(),
+                data_directory: std::env::temp_dir()
+                    .join("lazurio-device")
+                    .to_string_lossy()
+                    .into_owned(),
                 computer_name: "Work laptop".to_owned(),
             })),
         }]);
@@ -253,6 +283,72 @@ mod tests {
             Some(helper_message::Kind::DeviceReady(DeviceReady {
                 contract_version: 1
             }))
+        );
+    }
+
+    #[test]
+    fn wipes_the_key_and_the_proxy_credentials_of_a_start_channel() {
+        use super::lazurio::app::device::v1::{StartChannel, TailnetProxy};
+        let mut message = AppMessage {
+            request_id: 5,
+            kind: Some(app_message::Kind::StartChannel(StartChannel {
+                environment_id: "env-a".to_owned(),
+                key_seed: vec![7; 32],
+                proxy: Some(TailnetProxy {
+                    host: "127.0.0.1".to_owned(),
+                    port: 41_000,
+                    username: "user".to_owned(),
+                    password: "secret".to_owned(),
+                }),
+                ..StartChannel::default()
+            })),
+        };
+
+        wipe_secrets(&mut message);
+
+        let Some(app_message::Kind::StartChannel(start)) = message.kind else {
+            panic!("still a StartChannel");
+        };
+        assert!(start.key_seed.is_empty(), "the key is wiped");
+        let proxy = start.proxy.expect("the proxy stays");
+        assert!(proxy.username.is_empty() && proxy.password.is_empty());
+        assert_eq!(start.environment_id, "env-a", "nothing else is touched");
+    }
+
+    #[test]
+    fn a_refused_start_channel_is_still_answered_and_its_key_never_echoed() {
+        use super::lazurio::app::device::v1::{ConfigureDevice, StartChannel};
+        let input = frames(&[
+            AppMessage {
+                request_id: 1,
+                kind: Some(app_message::Kind::ConfigureDevice(ConfigureDevice {
+                    data_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                    computer_name: "Work laptop".to_owned(),
+                })),
+            },
+            AppMessage {
+                request_id: 2,
+                kind: Some(app_message::Kind::StartChannel(StartChannel {
+                    environment_id: "env-a".to_owned(),
+                    attach_url: "wss://launchpad.example.lazurio.io/.lazurio/computers/attach"
+                        .to_owned(),
+                    device_id: "work-laptop".to_owned(),
+                    key_seed: vec![0xA5; 32],
+                    ..StartChannel::default()
+                })),
+            },
+        ]);
+        let mut output = Vec::new();
+
+        serve(&mut input.as_slice(), &mut output, "1.2.3").expect("serve ends cleanly");
+
+        assert!(
+            !output.windows(32).any(|window| window == [0xA5; 32]),
+            "no reply carries the key"
+        );
+        let replies = replies(&output);
+        assert!(
+            matches!(replies[2].kind, Some(helper_message::Kind::Failure(ref failure)) if failure.code == "not_implemented")
         );
     }
 

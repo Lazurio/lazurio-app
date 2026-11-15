@@ -34,14 +34,14 @@ pub struct Device {
 impl Device {
     /// Answers one request of `lazurio.app.device.v1`, or returns `None` for a kind of another
     /// package, which the caller answers itself.
-    pub fn answer(&mut self, kind: app_message::Kind) -> Option<helper_message::Kind> {
+    pub fn answer(&mut self, kind: &app_message::Kind) -> Option<helper_message::Kind> {
         let answer = match kind {
             app_message::Kind::ConfigureDevice(request) => self.configure(request),
-            app_message::Kind::StartChannel(request) => self.start_channel(&request),
+            app_message::Kind::StartChannel(request) => self.start_channel(request),
             app_message::Kind::StopChannel(request) => self.stop_channel(request),
             app_message::Kind::StopAgent(_) => self.configured().map(|()| self.lock_state()),
-            app_message::Kind::HoldForUpdate(request) => self.hold_for_update(request),
-            app_message::Kind::ListHistory(request) => self.list_history(&request),
+            app_message::Kind::HoldForUpdate(request) => self.hold_for_update(*request),
+            app_message::Kind::ListHistory(request) => self.list_history(request),
             app_message::Kind::Ping(_)
             | app_message::Kind::Shutdown(_)
             | app_message::Kind::StartNode(_) => return None,
@@ -49,7 +49,7 @@ impl Device {
         Some(answer.unwrap_or_else(helper_message::Kind::Failure))
     }
 
-    fn configure(&mut self, request: ConfigureDevice) -> Result<helper_message::Kind, Failure> {
+    fn configure(&mut self, request: &ConfigureDevice) -> Result<helper_message::Kind, Failure> {
         if !std::path::Path::new(&request.data_directory).is_absolute() {
             return Err(invalid("data_directory must be an absolute path"));
         }
@@ -57,8 +57,8 @@ impl Device {
             return Err(invalid("computer_name is empty"));
         }
         self.configuration = Some(Configuration {
-            data_directory: request.data_directory,
-            computer_name: request.computer_name,
+            data_directory: request.data_directory.clone(),
+            computer_name: request.computer_name.clone(),
         });
         Ok(helper_message::Kind::DeviceReady(DeviceReady {
             contract_version: CONTRACT_VERSION,
@@ -88,11 +88,11 @@ impl Device {
         })
     }
 
-    fn stop_channel(&self, request: StopChannel) -> Result<helper_message::Kind, Failure> {
+    fn stop_channel(&self, request: &StopChannel) -> Result<helper_message::Kind, Failure> {
         self.configured()?;
         check_environment_id(&request.environment_id)?;
         Ok(helper_message::Kind::ChannelState(ChannelState {
-            environment_id: request.environment_id,
+            environment_id: request.environment_id.clone(),
             state: Some(channel_state::State::Off(Off {})),
         }))
     }
@@ -168,8 +168,12 @@ mod tests {
 
     fn configured() -> Device {
         let mut device = Device::default();
-        let answer = device.answer(app_message::Kind::ConfigureDevice(ConfigureDevice {
-            data_directory: "/home/person/.config/Lazurio App/device".to_owned(),
+        let answer = device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
+            data_directory: std::env::temp_dir()
+                .join("Lazurio App")
+                .join("device")
+                .to_string_lossy()
+                .into_owned(),
             computer_name: "Work laptop".to_owned(),
         }));
         assert_eq!(
@@ -213,20 +217,20 @@ mod tests {
             app_message::Kind::HoldForUpdate(HoldForUpdate { hold: true }),
             app_message::Kind::ListHistory(ListHistory::default()),
         ] {
-            assert_eq!(failure_code(device.answer(kind)), "not_configured");
+            assert_eq!(failure_code(device.answer(&kind)), "not_configured");
         }
     }
 
     #[test]
     fn configure_device_needs_an_absolute_directory_and_a_name() {
         let mut device = Device::default();
-        let relative = device.answer(app_message::Kind::ConfigureDevice(ConfigureDevice {
+        let relative = device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
             data_directory: "device".to_owned(),
             computer_name: "Work laptop".to_owned(),
         }));
         assert_eq!(failure_code(relative), "invalid_request");
-        let unnamed = device.answer(app_message::Kind::ConfigureDevice(ConfigureDevice {
-            data_directory: "/tmp/device".to_owned(),
+        let unnamed = device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
+            data_directory: std::env::temp_dir().to_string_lossy().into_owned(),
             computer_name: " ".to_owned(),
         }));
         assert_eq!(failure_code(unnamed), "invalid_request");
@@ -245,7 +249,7 @@ mod tests {
             "wss://launchpad.example.lazurio.io/other",
             "wss:///.lazurio/computers/attach",
         ] {
-            let answer = device.answer(app_message::Kind::StartChannel(start(
+            let answer = device.answer(&app_message::Kind::StartChannel(start(
                 url,
                 vec![7; 32],
                 None,
@@ -257,7 +261,7 @@ mod tests {
     #[test]
     fn start_channel_needs_a_32_byte_seed_and_only_the_loopback_proxy() {
         let mut device = configured();
-        let short = device.answer(app_message::Kind::StartChannel(start(
+        let short = device.answer(&app_message::Kind::StartChannel(start(
             ATTACH,
             vec![7; 31],
             None,
@@ -269,7 +273,7 @@ mod tests {
             username: "u".to_owned(),
             password: "p".to_owned(),
         };
-        let foreign = device.answer(app_message::Kind::StartChannel(start(
+        let foreign = device.answer(&app_message::Kind::StartChannel(start(
             ATTACH,
             vec![7; 32],
             Some(foreign_proxy),
@@ -281,7 +285,7 @@ mod tests {
             username: "u".to_owned(),
             password: String::new(),
         };
-        let unprotected = device.answer(app_message::Kind::StartChannel(start(
+        let unprotected = device.answer(&app_message::Kind::StartChannel(start(
             ATTACH,
             vec![7; 32],
             Some(no_password),
@@ -298,7 +302,7 @@ mod tests {
             username: "u".to_owned(),
             password: "p".to_owned(),
         };
-        let answer = device.answer(app_message::Kind::StartChannel(start(
+        let answer = device.answer(&app_message::Kind::StartChannel(start(
             ATTACH,
             vec![7; 32],
             Some(proxy),
@@ -309,7 +313,7 @@ mod tests {
     #[test]
     fn stop_channel_answers_off() {
         let mut device = configured();
-        let answer = device.answer(app_message::Kind::StopChannel(StopChannel {
+        let answer = device.answer(&app_message::Kind::StopChannel(StopChannel {
             environment_id: "env-a".to_owned(),
         }));
         assert_eq!(
@@ -324,7 +328,7 @@ mod tests {
     #[test]
     fn the_updaters_hold_is_granted_and_released() {
         let mut device = configured();
-        let held = device.answer(app_message::Kind::HoldForUpdate(HoldForUpdate {
+        let held = device.answer(&app_message::Kind::HoldForUpdate(HoldForUpdate {
             hold: true,
         }));
         assert_eq!(
@@ -335,7 +339,7 @@ mod tests {
                 ..LockState::default()
             }))
         );
-        let released = device.answer(app_message::Kind::HoldForUpdate(HoldForUpdate {
+        let released = device.answer(&app_message::Kind::HoldForUpdate(HoldForUpdate {
             hold: false,
         }));
         assert_eq!(
@@ -351,11 +355,11 @@ mod tests {
     fn the_history_is_empty_and_another_packages_kind_is_not_answered_here() {
         let mut device = configured();
         assert_eq!(
-            device.answer(app_message::Kind::ListHistory(ListHistory::default())),
+            device.answer(&app_message::Kind::ListHistory(ListHistory::default())),
             Some(helper_message::Kind::HistoryPage(HistoryPage::default()))
         );
         assert_eq!(
-            device.answer(app_message::Kind::StartNode(
+            device.answer(&app_message::Kind::StartNode(
                 crate::lazurio::app::tailnet::v1::StartNode::default()
             )),
             None

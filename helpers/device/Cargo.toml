@@ -9,6 +9,7 @@ description = "The Device helper of Lazurio App: lets the agents of an Environme
 
 [dependencies]
 prost = "=0.14.4"
+zeroize = "=1.8.2"
 
 [build-dependencies]
 prost-build = "=0.14.4"
