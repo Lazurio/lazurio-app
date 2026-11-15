@@ -3,14 +3,17 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@lazurio/app-shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
 import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../shared/bridge.ts";
 
+import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
 import * as Helpers from "./Helpers.ts";
 import * as LocalScheme from "./LocalScheme.ts";
@@ -18,6 +21,7 @@ import * as MainWindow from "./MainWindow.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
 import * as Tailnet from "./Tailnet.ts";
+import * as Updates from "./Updates.ts";
 
 // Lazurio App GEN4 (decision 0248): the main process. It serves the app's own windows, guards
 // every web contents, starts the helper processes and opens the main window.
@@ -133,17 +137,47 @@ const keystoreOn = (platform: string, development: boolean): NodeKeys.Keystore =
   };
 };
 
+// Why this system cannot update the app by itself (docs/adr/0005, point 7). Squirrel.Mac installs
+// only an app signed with a Developer ID, which Lazurio App does not have yet. On Linux, which GEN4
+// does not ship, only an AppImage updates itself; its runtime sets APPIMAGE, and electron-updater
+// reads it the same way.
+const selfUpdateUnsupported = Effect.gen(function* () {
+  const platform = yield* HostProcess.Platform;
+  if (platform === "darwin") {
+    return Option.some(
+      "On macOS, Lazurio App updates itself once it is signed with a Developer ID.",
+    );
+  }
+  if (platform === "linux") {
+    const appImage = yield* Config.option(Config.String("APPIMAGE"));
+    return Option.isSome(appImage)
+      ? Option.none()
+      : Option.some("On Linux, only an AppImage updates itself.");
+  }
+  return Option.none<string>();
+});
+
+// The data folder keeps its name whatever the product's name or the generation: an update, and
+// GEN5 after it, opens the same sign-in, tailnet nodes and settings (docs/adr/0005, point 1).
+const DATA_FOLDER = "Lazurio App";
+
 const program = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  Electron.app.setPath("userData", path.join(Electron.app.getPath("appData"), DATA_FOLDER));
   const hooks = yield* testHooks;
   yield* Effect.promise(() => Electron.app.whenReady());
-  const path = yield* Path.Path;
   const appPath = Electron.app.getAppPath();
 
   yield* Hardening.guardAllWebContents(hooks.observer);
   yield* Hardening.hardenSession(Electron.session.defaultSession);
   yield* LocalScheme.serve(path.join(appPath, "dist-ui"));
 
-  const helpers = yield* Helpers.startAll(yield* helperBinaries(hooks.tailnetHelper));
+  // The helpers live in a scope of their own, which the updater closes before it installs: on
+  // Windows a running helper keeps its .exe locked (docs/adr/0005, point 5).
+  const helpersScope = yield* Scope.fork(yield* Effect.scope);
+  const helpers = yield* Helpers.startAll(yield* helperBinaries(hooks.tailnetHelper)).pipe(
+    Scope.provide(helpersScope),
+  );
   const fileSystem = yield* FileSystem.FileSystem;
   const keystore = keystoreOn(yield* HostProcess.Platform, !Electron.app.isPackaged);
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
@@ -164,6 +198,19 @@ const program = Effect.gen(function* () {
             }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
         })
       : Tailnet.noTailnets;
+  const updates = yield* Updates.make({
+    appVersion: Electron.app.getVersion(),
+    packaged: Electron.app.isPackaged,
+    unsupported: yield* selfUpdateUnsupported,
+    settingsPath: path.join(Electron.app.getPath("userData"), "updates.json"),
+    stopHelpers: Scope.close(helpersScope, Exit.void),
+    // The tailnet nodes hang on their helper's connection, so a failed install brings everything
+    // back by starting the app again.
+    restartHelpers: Effect.sync(() => {
+      Electron.app.relaunch();
+      Electron.app.exit(0);
+    }),
+  }).pipe(Effect.provide(ElectronUpdater.layer));
   const status = (): AppStatus => ({
     appVersion: Electron.app.getVersion(),
     generation: "GEN4",
@@ -200,6 +247,8 @@ const program = Effect.gen(function* () {
     }).pipe(Effect.andThen(Effect.never)),
     allWindowsClosed,
   );
+  // A downloaded update installs when the app ends.
+  yield* updates.install;
 });
 
 NodeRuntime.runMain(
