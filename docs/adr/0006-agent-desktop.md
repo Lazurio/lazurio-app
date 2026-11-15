@@ -49,7 +49,10 @@ Decision 0248 puts the Device's capabilities into Lazurio App GEN4 as a Rust hel
    - The native window checks both (`systemPreferences.isTrustedAccessibilityClient`, `getMediaAccessStatus("screen")`), opens the right pane of System Settings and says that Screen Recording needs the app to restart. It asks only when the person first turns a switch on, not at the app's first start.
    - Windows needs no such permission. UI Automation works only in the signed-in person's session, so a locked computer cannot be used.
 
-7. **Updates wait for the agent.** The updater of ADR 0005 installs an update only when no agent holds the computer. The main process exposes that state from `LockState` as one service the updater reads; the helper refuses new tool calls with a plain error while the app quits for an update.
+7. **Updates wait for the agent.** The updater of ADR 0005 ([#16](https://github.com/Lazurio/lazurio-app/pull/16), its point 5) installs an update only when no agent holds the computer.
+   - The main process offers one service, `DeviceActivity`, built from `LockState`: `isIdle: Effect<boolean>`, `idleChanges: Stream<boolean>`, and `holdForUpdate: Effect<boolean, never, Scope>`. The last one is the updater's gate: it succeeds with `true` only when no agent holds the computer, and from then until its scope closes the helper refuses every new tool call with a plain error ("Lazurio App is updating"), so no agent can start between the check and the installation. With `false` the updater waits for the next `true` from `idleChanges`.
+   - Until the helper serves this, the service answers idle, and `holdForUpdate` always succeeds.
+8. **The helper stops within two seconds.** Before an update replaces `resources/helpers`, and on Windows a running `.exe` keeps its file locked, the main process sends `Shutdown`, closes the helper's standard input and waits; only after that does it end the helper by the PID it started. On `Shutdown`, on the end of its input and on SIGTERM the helper closes its channels and ends the engine with everything it started (a job object on Windows, a process group on macOS), then exits, within two seconds. A test holds it to that.
 
 ## What an unsigned app means
 
