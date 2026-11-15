@@ -10,7 +10,13 @@ import * as Stream from "effect/Stream";
 
 import { DeviceActivity, type DeviceActivityShape } from "./DeviceActivity.ts";
 import { ElectronUpdater, ElectronUpdaterError, type UpdaterEvent } from "./ElectronUpdater.ts";
-import { make, type Updates, type UpdatesOptions, type UpdateState } from "./Updates.ts";
+import {
+  make,
+  quitDecision,
+  type Updates,
+  type UpdatesOptions,
+  type UpdateState,
+} from "./Updates.ts";
 
 // A fake electron-updater that records every call in order and lets a test emit its events.
 const fakeUpdater = (options: { readonly failInstall?: boolean } = {}) => {
@@ -29,14 +35,15 @@ const fakeUpdater = (options: { readonly failInstall?: boolean } = {}) => {
     setAutoInstallOnAppQuit: (value) => record(`autoInstallOnAppQuit ${value}`),
     checkForUpdates: record("check"),
     downloadUpdate: record("download"),
-    quitAndInstall: ({ isSilent, isForceRunAfter }) =>
-      record(`quitAndInstall silent=${isSilent} runAfter=${isForceRunAfter}`).pipe(
+    install: ({ isSilent, isForceRunAfter }) =>
+      record(`install silent=${isSilent} runAfter=${isForceRunAfter}`).pipe(
         Effect.andThen(
           options.failInstall === true
             ? Effect.fail(new ElectronUpdaterError({ operation: "install", cause: "broken" }))
             : Effect.void,
         ),
       ),
+    quitForUpdate: record("quitForUpdate"),
     on: (event, listener) =>
       Effect.acquireRelease(
         Effect.sync(() => {
@@ -227,7 +234,7 @@ describe("Updates", () => {
     return withUpdates({ updater }, (updates) =>
       Effect.gen(function* () {
         assert.isFalse(yield* updates.install);
-        assert.isFalse(updater.calls.some((call) => call.startsWith("quitAndInstall")));
+        assert.isFalse(updater.calls.some((call) => call.startsWith("install ")));
       }),
     );
   });
@@ -241,9 +248,9 @@ describe("Updates", () => {
         const heldDuringInstall: Array<boolean> = [];
         const service = ElectronUpdater.of({
           ...updater.service,
-          quitAndInstall: (options) =>
+          install: (options) =>
             Effect.sync(() => heldDuringInstall.push(state.held)).pipe(
-              Effect.andThen(updater.service.quitAndInstall(options)),
+              Effect.andThen(updater.service.install(options)),
             ),
         });
         return yield* withUpdates(
@@ -267,11 +274,13 @@ describe("Updates", () => {
               assert.notInclude(updater.calls, "stop helpers");
               yield* setIdle(true);
               assert.isTrue(yield* Fiber.join(installing));
-              const tail = updater.calls.slice(-2);
+              const tail = updater.calls.slice(-3);
               assert.deepStrictEqual(tail, [
                 "stop helpers",
-                "quitAndInstall silent=true runAfter=true",
+                "install silent=true runAfter=true",
+                "quitForUpdate",
               ]);
+              assert.strictEqual(updates.current().state.phase, "restarting");
               assert.deepStrictEqual(heldDuringInstall, [true]);
               assert.isFalse(state.held);
             }),
@@ -298,7 +307,67 @@ describe("Updates", () => {
           assert.isFalse(yield* updates.install);
           assert.deepStrictEqual(steps, ["stop", "restart"]);
           assert.strictEqual(updates.current().state.phase, "failed");
+          assert.notInclude(updater.calls, "quitForUpdate");
         }),
     );
+  });
+
+  it.effect(
+    "joins an install that waits for the computer instead of starting or ending another",
+    () =>
+      Effect.gen(function* () {
+        const updater = fakeUpdater();
+        const { activity, setIdle } = yield* fakeActivity;
+        const stops: Array<string> = [];
+        return yield* withUpdates(
+          {
+            updater,
+            activity,
+            options: { stopHelpers: Effect.sync(() => stops.push("stop")) },
+          },
+          (updates) =>
+            Effect.gen(function* () {
+              yield* updater.emit("update-available", { version: "0.1.1" });
+              yield* updater.emit("update-downloaded", { version: "0.1.1" });
+              yield* waitFor(updates, "ready");
+              yield* setIdle(false);
+              // The first quit starts the install, which waits while an agent works.
+              const first = yield* Effect.forkChild(updates.install);
+              yield* waitFor(updates, "installing");
+              // A second quit, or the last window closing, joins it instead of returning at once.
+              const second = yield* Effect.forkChild(updates.install);
+              yield* Effect.yieldNow;
+              assert.deepStrictEqual(stops, []);
+              assert.isUndefined(second.pollUnsafe());
+              yield* setIdle(true);
+              assert.isTrue(yield* Fiber.join(first));
+              assert.isTrue(yield* Fiber.join(second));
+              assert.deepStrictEqual(stops, ["stop"]);
+              assert.deepStrictEqual(
+                updater.calls.filter(
+                  (call) => call.startsWith("install ") || call === "quitForUpdate",
+                ),
+                ["install silent=true runAfter=true", "quitForUpdate"],
+              );
+            }),
+        );
+      }),
+  );
+});
+
+describe("quitDecision", () => {
+  it("installs a ready update first, joins a waiting install, and quits otherwise", () => {
+    assert.strictEqual(quitDecision("ready"), "install");
+    assert.strictEqual(quitDecision("installing"), "wait");
+    for (const phase of [
+      "restarting",
+      "idle",
+      "checking",
+      "downloading",
+      "failed",
+      "off",
+    ] as const) {
+      assert.strictEqual(quitDecision(phase), "quit");
+    }
   });
 });

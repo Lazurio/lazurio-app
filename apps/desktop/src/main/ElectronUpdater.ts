@@ -7,7 +7,7 @@ import type * as Scope from "effect/Scope";
 import * as Electron from "electron";
 import { autoUpdater, BaseUpdater } from "electron-updater";
 
-import { installThenQuit } from "./UpdateInstall.ts";
+import { startInstaller } from "./UpdateInstall.ts";
 
 // electron-updater's autoUpdater as an Effect service, so that the updater (Updates.ts) runs against
 // a fake in its tests. The shape follows the fork's ElectronUpdater (Lazurio/t3code,
@@ -43,10 +43,13 @@ export class ElectronUpdater extends Context.Service<
     readonly setAutoInstallOnAppQuit: (value: boolean) => Effect.Effect<void>;
     readonly checkForUpdates: Effect.Effect<void, ElectronUpdaterError>;
     readonly downloadUpdate: Effect.Effect<void, ElectronUpdaterError>;
-    readonly quitAndInstall: (options: {
+    // Starts the downloaded update's installer, and fails when it did not start.
+    readonly install: (options: {
       readonly isSilent: boolean;
       readonly isForceRunAfter: boolean;
     }) => Effect.Effect<void, ElectronUpdaterError>;
+    // Quits the app for the installer that install started.
+    readonly quitForUpdate: Effect.Effect<void, ElectronUpdaterError>;
     // Listens for as long as the scope lives.
     readonly on: (
       event: UpdaterEvent,
@@ -96,27 +99,28 @@ const make = ElectronUpdater.of({
     try: () => autoUpdater.downloadUpdate(),
     catch: (cause) => new ElectronUpdaterError({ operation: "download", cause }),
   }).pipe(Effect.asVoid),
-  quitAndInstall: Effect.fn("ElectronUpdater.quitAndInstall")(function* (options: {
+  // NSIS and AppImage (BaseUpdater): install says whether the installer started, and the app
+  // quits as electron-updater's quitAndInstall does, only after a start (UpdateInstall.ts).
+  // Squirrel.Mac, once the app is signed, installs and quits in its quitAndInstall.
+  install: Effect.fn("ElectronUpdater.install")(function* (options: {
     readonly isSilent: boolean;
     readonly isForceRunAfter: boolean;
   }) {
-    // NSIS and AppImage: install says whether the installer started (UpdateInstall.ts). The app
-    // quits as electron-updater's quitAndInstall does, only after a start.
-    if (autoUpdater instanceof BaseUpdater) {
-      const updater = autoUpdater;
-      yield* installThenQuit(updater, options, () => {
+    if (!(autoUpdater instanceof BaseUpdater)) return;
+    yield* startInstaller(autoUpdater, options).pipe(
+      Effect.mapError((cause) => new ElectronUpdaterError({ operation: "install", cause })),
+    );
+  }),
+  quitForUpdate: Effect.try({
+    try: () => {
+      if (autoUpdater instanceof BaseUpdater) {
         Electron.autoUpdater.emit("before-quit-for-update");
         Electron.app.quit();
-      }).pipe(
-        Effect.mapError((cause) => new ElectronUpdaterError({ operation: "install", cause })),
-      );
-      return;
-    }
-    // Squirrel.Mac, once the app is signed: its failures arrive as `error`.
-    yield* Effect.try({
-      try: () => autoUpdater.quitAndInstall(options.isSilent, options.isForceRunAfter),
-      catch: (cause) => new ElectronUpdaterError({ operation: "install", cause }),
-    });
+      } else {
+        autoUpdater.quitAndInstall(true, true);
+      }
+    },
+    catch: (cause) => new ElectronUpdaterError({ operation: "install", cause }),
   }),
   on: Effect.fn("ElectronUpdater.on")(function* (
     event: UpdaterEvent,

@@ -198,6 +198,9 @@ const program = Effect.gen(function* () {
             }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
         })
       : Tailnet.noTailnets;
+  // Set once the person quits or closes the last window: a failed install then lets the app end
+  // instead of starting it again.
+  let quitting = false;
   const updates = yield* Updates.make({
     appVersion: Electron.app.getVersion(),
     packaged: Electron.app.isPackaged,
@@ -205,9 +208,9 @@ const program = Effect.gen(function* () {
     settingsPath: path.join(Electron.app.getPath("userData"), "updates.json"),
     stopHelpers: Scope.close(helpersScope, Exit.void),
     // The tailnet nodes hang on their helper's connection, so a failed install brings everything
-    // back by starting the app again.
+    // back by starting the app again, unless the person is quitting it.
     restartHelpers: Effect.sync(() => {
-      Electron.app.relaunch();
+      if (!quitting) Electron.app.relaunch();
       Electron.app.exit(0);
     }),
   }).pipe(Effect.provide(ElectronUpdater.layer));
@@ -239,22 +242,25 @@ const program = Effect.gen(function* () {
     });
   });
   // Quitting the app another way than closing its windows (Cmd+Q on a Mac, SIGTERM from a session
-  // that logs out, or the update test on Linux) installs a downloaded update first. Electron emits
-  // before-quit again when the install quits, and the updater is then no longer ready.
+  // that logs out, or the update test on Linux) installs a downloaded update first, and a quit while
+  // that install waits for the computer joins it (Updates.quitDecision). The install quits the app
+  // once its installer started.
   const services = yield* Effect.context<never>();
   yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const installFirst = (event: Electron.Event) => {
-        if (updates.current().state.phase !== "ready") return;
+      const beforeQuit = (event: Electron.Event) => {
+        quitting = true;
+        const decision = Updates.quitDecision(updates.current().state.phase);
+        if (decision === "quit") return;
         event.preventDefault();
-        Effect.runForkWith(services)(updates.install);
+        if (decision === "install") Effect.runForkWith(services)(updates.install);
       };
-      Electron.app.on("before-quit", installFirst);
-      return installFirst;
+      Electron.app.on("before-quit", beforeQuit);
+      return beforeQuit;
     }),
-    (installFirst) =>
+    (beforeQuit) =>
       Effect.sync(() => {
-        Electron.app.off("before-quit", installFirst);
+        Electron.app.off("before-quit", beforeQuit);
       }),
   );
   yield* Effect.raceFirst(
@@ -266,7 +272,8 @@ const program = Effect.gen(function* () {
     }).pipe(Effect.andThen(Effect.never)),
     allWindowsClosed,
   );
-  // A downloaded update installs when the app ends.
+  // A downloaded update installs when the app ends, or the install a quit started finishes first.
+  quitting = true;
   yield* updates.install;
 });
 

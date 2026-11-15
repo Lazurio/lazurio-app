@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -28,6 +29,8 @@ export type UpdateState =
   | { readonly phase: "downloading"; readonly version: string }
   | { readonly phase: "ready"; readonly version: string }
   | { readonly phase: "installing"; readonly version: string }
+  // The installer started and the app quits for it.
+  | { readonly phase: "restarting"; readonly version: string }
   | { readonly phase: "failed"; readonly problem: string };
 
 export interface UpdatesStatus {
@@ -67,6 +70,11 @@ export interface Updates {
   // none or the install failed.
   readonly install: Effect.Effect<boolean>;
 }
+
+// What quitting the app does to an update (main.ts, before-quit): a ready update installs first,
+// a quit while an install waits joins that install, and anything else quits.
+export const quitDecision = (phase: UpdateState["phase"]): "install" | "wait" | "quit" =>
+  phase === "ready" ? "install" : phase === "installing" ? "wait" : "quit";
 
 // electron-updater's UpdateInfo, of which the updater reads only the version.
 const decodeVersion = Schema.decodeUnknownOption(Schema.Struct({ version: Schema.String }));
@@ -158,18 +166,22 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
         : setState({ phase: "idle" });
     });
 
-  const install = Effect.suspend(() => {
-    const state = latest.state;
-    if (state.phase !== "ready") return Effect.succeed(false);
-    const installing = Effect.scoped(
-      Effect.gen(function* () {
-        yield* holdComputer(activity);
-        yield* options.stopHelpers;
-        yield* updater.quitAndInstall({ isSilent: true, isForceRunAfter: true });
-      }),
-    );
-    return setState({ phase: "installing", version: state.version }).pipe(
-      Effect.andThen(installing),
+  // One install at a time: every call while it runs waits for the same attempt, so a second quit or
+  // a closed window never ends the app before the install is safe or has failed.
+  let attempt: Option.Option<Deferred.Deferred<boolean>> = Option.none();
+  const attemptInstall = (version: string) =>
+    setState({ phase: "installing", version }).pipe(
+      Effect.andThen(
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* holdComputer(activity);
+            yield* options.stopHelpers;
+            yield* updater.install({ isSilent: true, isForceRunAfter: true });
+            yield* setState({ phase: "restarting", version });
+            yield* updater.quitForUpdate;
+          }),
+        ),
+      ),
       Effect.as(true),
       // After a failed install, the helpers come back.
       Effect.catch((error) =>
@@ -177,6 +189,20 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
           Effect.andThen(options.restartHelpers),
           Effect.as(false),
         ),
+      ),
+    );
+  const install = Effect.suspend(() => {
+    if (Option.isSome(attempt)) return Deferred.await(attempt.value);
+    const state = latest.state;
+    if (state.phase !== "ready") return Effect.succeed(false);
+    const done = Deferred.makeUnsafe<boolean>();
+    attempt = Option.some(done);
+    return attemptInstall(state.version).pipe(
+      Effect.tap((installed) =>
+        Effect.suspend(() => {
+          if (!installed) attempt = Option.none();
+          return Deferred.succeed(done, installed);
+        }),
       ),
     );
   }).pipe(Effect.withSpan("Updates.install"));
