@@ -106,14 +106,16 @@ impl History {
         if let Some(directory) = self.current.parent() {
             std::fs::create_dir_all(directory)?;
         }
-        let (current, valid_bytes, file_bytes) = read_file(&self.current);
+        // Any read error but a missing file refuses the write: appending without knowing the
+        // file would reuse a sequence or land behind a broken tail.
+        let (current, valid_bytes, file_bytes) = read_file(&self.current)?;
         if valid_bytes < file_bytes {
             OpenOptions::new()
                 .write(true)
                 .open(&self.current)?
                 .set_len(valid_bytes)?;
         }
-        let (previous, _, _) = read_file(&self.previous);
+        let (previous, _, _) = read_file(&self.previous)?;
         Ok(previous
             .iter()
             .chain(&current)
@@ -123,15 +125,21 @@ impl History {
     }
 
     /// A page of the history, the newest first: the entries older than `page_token` (a sequence),
-    /// or the newest ones for an empty token.
+    /// or the newest ones for an empty token. A file that cannot be read now adds nothing to the
+    /// page; reading changes nothing, so the next page shows it again once it is readable.
     #[must_use]
     pub fn page(&self, page_token: &str, limit: u32) -> HistoryPage {
         let before = page_token.parse::<u64>().ok();
         let limit = usize::try_from(limit)
             .unwrap_or(MAX_PAGE)
             .clamp(1, MAX_PAGE);
-        let (mut entries, _, _) = read_file(&self.previous);
-        entries.extend(read_file(&self.current).0);
+        let read = |path: &Path| {
+            read_file(path)
+                .map(|(entries, _, _)| entries)
+                .unwrap_or_default()
+        };
+        let mut entries = read(&self.previous);
+        entries.extend(read(&self.current));
         entries.retain(|entry| before.is_none_or(|before| entry.sequence < before));
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.sequence));
         let more = entries.len() > limit;
@@ -151,14 +159,17 @@ impl History {
 }
 
 /// The whole entries of a file, how many bytes they take, and the file's size. A broken or
-/// cut-off tail ends the reading.
-fn read_file(path: &Path) -> (Vec<HistoryEntry>, u64, u64) {
+/// cut-off tail ends the reading. A missing file is empty.
+///
+/// # Errors
+///
+/// Fails on any other error of opening or reading the file.
+fn read_file(path: &Path) -> io::Result<(Vec<HistoryEntry>, u64, u64)> {
     let mut bytes = Vec::new();
-    if File::open(path)
-        .and_then(|mut file| file.read_to_end(&mut bytes))
-        .is_err()
-    {
-        return (Vec::new(), 0, 0);
+    match File::open(path).and_then(|mut file| file.read_to_end(&mut bytes)) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0, 0)),
+        Err(error) => return Err(error),
     }
     let mut remaining = bytes.as_slice();
     let mut entries = Vec::new();
@@ -173,7 +184,7 @@ fn read_file(path: &Path) -> (Vec<HistoryEntry>, u64, u64) {
         }
     }
     let size = |length: usize| u64::try_from(length).unwrap_or(u64::MAX);
-    (entries, size(valid), size(bytes.len()))
+    Ok((entries, size(valid), size(bytes.len())))
 }
 
 #[cfg(test)]
@@ -303,6 +314,42 @@ mod tests {
             sequences(&page),
             [3, 2, 1],
             "the entries after the crash are readable"
+        );
+    }
+
+    /// A history file that can be written but not read: the write must be refused, so no
+    /// sequence is reused and no entry lands behind an unchecked tail.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_refuses_the_write_until_it_can_be_checked() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = scratch("unreadable");
+        History::new(&directory)
+            .record(1, "env-a", kind::CONNECTED, None)
+            .expect("recorded");
+        let path = directory.join("history.pb");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).expect("chmod");
+        if File::open(&path).is_ok() {
+            // Running as a user that reads anything (root): the case cannot be built here.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("chmod back");
+            return;
+        }
+        let history = History::new(&directory);
+        let refused = history.record(2, "env-a", kind::TOOL, Some("desktop_click"));
+        assert_eq!(
+            refused.expect_err("the write is refused").kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("chmod back");
+        history
+            .record(3, "env-a", kind::STOPPED, None)
+            .expect("recorded once readable");
+        assert_eq!(
+            sequences(&history.page("", 10)),
+            [2, 1],
+            "the next entry continues the sequence, nothing is hidden"
         );
     }
 
