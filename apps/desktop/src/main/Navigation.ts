@@ -31,6 +31,9 @@ export interface ViewState {
 export const newView = (kind: ViewKind): ViewState => ({ kind, signingIn: false });
 
 const LAZURIO_DOMAIN = "lazurio.io";
+// An Organization's production applications (`<application>.<organization>.lazurio.app`,
+// decision 0239), which a tab shows without a frame (decision 0248, addendum 2026-11-15).
+const LAZURIO_APPS_DOMAIN = "lazurio.app";
 // Lazurio Auth, which signs a person in to Environments, and the Dashboard. Nothing else on
 // lazurio.ai is Lazurio's page for the app.
 const LAZURIO_AUTH_HOST = "auth.lazurio.ai";
@@ -48,9 +51,15 @@ const isGitHubSignInPath = (path: string): boolean =>
 // A name may end with the root's dot and is still the same name.
 const nameOf = (hostname: string): string => hostname.replace(/\.+$/u, "");
 
+// The domain itself or a name below it, never a look-alike such as `evil-lazurio.io`.
+const isUnder = (name: string, domain: string): boolean =>
+  name === domain || name.endsWith(`.${domain}`);
+
 const isLazurioHost = (hostname: string): boolean => {
   const name = nameOf(hostname);
-  return name === LAZURIO_DOMAIN || name.endsWith(`.${LAZURIO_DOMAIN}`) || LAZURIO_HOSTS.has(name);
+  return (
+    isUnder(name, LAZURIO_DOMAIN) || isUnder(name, LAZURIO_APPS_DOMAIN) || LAZURIO_HOSTS.has(name)
+  );
 };
 
 const httpsUrl = (address: string): URL | undefined => {

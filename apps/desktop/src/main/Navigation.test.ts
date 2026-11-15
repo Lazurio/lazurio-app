@@ -42,6 +42,17 @@ describe("destinationOf", () => {
     assert.strictEqual(tagOf("https://user@auth.lazurio.ai/"), "Blocked");
   });
 
+  it("opens an Organization's production applications on lazurio.app over HTTPS in the app", () => {
+    assert.strictEqual(tagOf("https://deals.example-org.lazurio.app/"), "Lazurio");
+    assert.strictEqual(tagOf("https://deals.example-org.lazurio.app./pipeline"), "Lazurio");
+    assert.strictEqual(tagOf("https://lazurio.app/"), "Lazurio");
+    assert.strictEqual(tagOf("http://deals.example-org.lazurio.app/"), "SystemBrowser");
+    assert.strictEqual(tagOf("https://evil-lazurio.app/"), "SystemBrowser");
+    assert.strictEqual(tagOf("https://lazurio.app.attacker.example/"), "SystemBrowser");
+    assert.strictEqual(tagOf("https://deals.example-org.lazurio.apps/"), "SystemBrowser");
+    assert.strictEqual(tagOf("https://user@deals.example-org.lazurio.app/"), "Blocked");
+  });
+
   it("hands GitHub and Composio's connection of an Integration to the system's browser", () => {
     assert.strictEqual(tagOf("https://github.com/login"), "SystemBrowser");
     assert.strictEqual(

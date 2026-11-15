@@ -36,7 +36,7 @@ Lazurio App GEN4 is a native app on Electron that shows the web Lazurio and carr
    - A remote view's main frame may also show GitHub's sign-in pages, but only during a sign-in that Lazurio Auth answered ([ADR 0002](0002-sign-in-pages.md), amending this point on 2026-11-14).
    - The guard runs on `will-frame-navigate` and `will-redirect`, which cover all frames. It follows `did-start-navigation`, `did-navigate` and `did-fail-provisional-load` to know what the main frame shows (ADR 0002).
    - An address with credentials is never opened, over HTTPS or HTTP.
-   - Addresses outside Lazurio go to the system's browser, apart from GitHub's sign-in pages during a sign-in. Lazurio's addresses are `lazurio.io` with its subdomains, plus exactly `auth.lazurio.ai` and `dashboard.lazurio.ai` (ADR 0002).
+   - Addresses outside Lazurio go to the system's browser, apart from GitHub's sign-in pages during a sign-in. Lazurio's addresses are `lazurio.io` and `lazurio.app` with their subdomains, plus exactly `auth.lazurio.ai` and `dashboard.lazurio.ai` (ADR 0002).
    - The Electron Fuses are set by electron-builder and read back from the built app (`pnpm --filter @lazurio/app-desktop check:fuses`).
 5. **Supply chain.**
    - Only exact versions are used, the lockfiles are committed and installs run with `--frozen-lockfile`.
