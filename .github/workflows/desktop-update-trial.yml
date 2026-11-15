@@ -162,6 +162,9 @@ jobs:
             --mac zip --arm64 --publish never \
             -c.extraMetadata.version=0.0.1 \
             -c.directories.output=trial/out/0.0.1
+      - name: Signature and launch
+        working-directory: apps/desktop/trial
+        run: ./launch-check-macos.sh "out/0.0.1/mac-arm64/Lazurio App.app"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: lazurio-app-macos-trial

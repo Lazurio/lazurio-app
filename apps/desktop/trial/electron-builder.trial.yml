@@ -5,3 +5,9 @@ extends: ./electron-builder.yml
 publish:
   - provider: generic
     url: http://127.0.0.1:47123/
+# Without a Developer ID, the Mac trial build is signed ad hoc after the fuses are set: Apple
+# silicon kills an app whose framework signature the fuses invalidated. Ad hoc signing works only
+# without hardened runtime, which enforces a Team ID the frameworks do not share.
+mac:
+  identity: "-"
+  hardenedRuntime: false
