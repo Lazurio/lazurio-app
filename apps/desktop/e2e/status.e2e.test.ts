@@ -15,11 +15,14 @@ import * as NodePath from "node:path";
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
+import { removeUserData, temporaryUserData } from "./user-data.ts";
+
 const page = Promise.withResolvers<void>();
 const pageRequested = Promise.withResolvers<void>();
 const running = Promise.withResolvers<void>();
 
 let server: NodeHttp.Server;
+let userData: string;
 let app: ElectronApplication;
 let shell: Page;
 
@@ -40,12 +43,14 @@ beforeAll(async () => {
   if (address === null || typeof address === "string") throw new Error("no server address");
   const origin = `http://127.0.0.1:${address.port}`;
 
+  userData = temporaryUserData();
   app = await _electron.launch({
     args: [NodePath.resolve(import.meta.dirname, "..")],
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
     env: {
       ...process.env,
       LAZURIO_APP_E2E: "true",
+      LAZURIO_APP_E2E_USER_DATA: userData,
       LAZURIO_APP_E2E_REMOTE_URL: `${origin}/`,
       LAZURIO_APP_E2E_NODE: process.execPath,
       LAZURIO_APP_E2E_TAILNET_HELPER: NodePath.resolve(
@@ -70,6 +75,7 @@ afterAll(async () => {
   page.resolve();
   running.resolve();
   await app?.close();
+  removeUserData(userData);
   server?.closeAllConnections();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
