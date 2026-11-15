@@ -31,6 +31,8 @@ pub mod lazurio {
 }
 
 pub mod device;
+pub mod history;
+pub mod lock;
 pub mod secret_start;
 
 use lazurio::app::helper::v1::{

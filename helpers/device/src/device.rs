@@ -1,16 +1,21 @@
 //! The Device's work in the helper protocol (`lazurio.app.device.v1`, ADR 0006 point 2).
 //!
-//! This step answers every request of the package and checks it, so that the main process can be
-//! built against the protocol. The attach channel itself, the lock of one agent and the history
-//! come with the core in the next step; until then `StartChannel`, which arrives decoded apart
-//! with its secrets in self-wiping types (`secret_start`), is refused with `not_implemented` after
-//! its checks, no agent can hold the computer, and the history is empty.
+//! The helper answers every request of the package and checks it. The lock of one agent with the
+//! device lock around it (`lock`) and the history without content (`history`) are in place. The
+//! attach channel comes next; until then `StartChannel`, which arrives decoded apart with its
+//! secrets in self-wiping types (`secret_start`), is refused with `not_implemented` after its
+//! checks, so no agent can yet hold the computer through this helper.
 
+use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
-    ChannelState, ConfigureDevice, DeviceReady, HistoryPage, HoldForUpdate, ListHistory, LockState,
-    Off, StopChannel, channel_state,
+    ChannelState, ConfigureDevice, DeviceReady, HoldForUpdate, ListHistory, LockState, Off,
+    StopChannel, channel_state,
 };
 use crate::lazurio::app::helper::v1::{Failure, app_message, helper_message};
+use crate::lock::{self, DeviceLock, SharedLock};
 use crate::secret_start::StartRequest;
 
 /// The newest version of contract v1 of the attach session this helper speaks.
@@ -19,21 +24,36 @@ pub const CONTRACT_VERSION: u32 = 1;
 /// The size of an Ed25519 seed.
 const KEY_SEED_BYTES: usize = 32;
 
-/// What the helper knows after `ConfigureDevice`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Configuration {
-    data_directory: String,
-    computer_name: String,
+/// What the helper holds after `ConfigureDevice`.
+struct Runtime {
+    history: History,
+    lock: SharedLock,
 }
 
 /// The Device's state in the helper.
-#[derive(Debug, Default)]
 pub struct Device {
-    configuration: Option<Configuration>,
-    update_hold: bool,
+    /// Where the device lock of the person's session is; `None` when the system gives no place
+    /// for it, and then `ConfigureDevice` is refused (the lock fails closed).
+    lock_path: Option<PathBuf>,
+    runtime: Option<Runtime>,
+}
+
+impl Default for Device {
+    fn default() -> Self {
+        Self::with_lock_path(lock::device_lock_path())
+    }
 }
 
 impl Device {
+    /// A Device whose device lock is at `lock_path`.
+    #[must_use]
+    pub fn with_lock_path(lock_path: Option<PathBuf>) -> Self {
+        Self {
+            lock_path,
+            runtime: None,
+        }
+    }
+
     /// Answers one request of `lazurio.app.device.v1`, or returns `None` for a kind of another
     /// package, which the caller answers itself.
     pub fn answer(&mut self, kind: &app_message::Kind) -> Option<helper_message::Kind> {
@@ -44,7 +64,7 @@ impl Device {
                 "StartChannel is decoded apart from the other requests",
             )),
             app_message::Kind::StopChannel(request) => self.stop_channel(request),
-            app_message::Kind::StopAgent(_) => self.configured().map(|()| self.lock_state()),
+            app_message::Kind::StopAgent(_) => self.stop_agent(),
             app_message::Kind::HoldForUpdate(request) => self.hold_for_update(*request),
             app_message::Kind::ListHistory(request) => self.list_history(request),
             app_message::Kind::Ping(_)
@@ -61,9 +81,15 @@ impl Device {
         if request.computer_name.trim().is_empty() {
             return Err(invalid("computer_name is empty"));
         }
-        self.configuration = Some(Configuration {
-            data_directory: request.data_directory.clone(),
-            computer_name: request.computer_name.clone(),
+        let lock_path = self
+            .lock_path
+            .clone()
+            .ok_or_else(|| invalid("the system gives no place for the device lock"))?;
+        self.runtime = Some(Runtime {
+            history: History::new(Path::new(&request.data_directory)),
+            // The hold ends on its own at its deadline; telling the main process about it
+            // comes with the channel, which owns the helper's output.
+            lock: SharedLock::new(DeviceLock::new(lock_path), |_| {}),
         });
         Ok(helper_message::Kind::DeviceReady(DeviceReady {
             contract_version: CONTRACT_VERSION,
@@ -108,35 +134,84 @@ impl Device {
         }))
     }
 
+    fn stop_agent(&mut self) -> Result<helper_message::Kind, Failure> {
+        let runtime = self.runtime_mut()?;
+        let now = Instant::now();
+        let stopped = runtime.lock.with(|lock| {
+            let holder = lock.holder(now);
+            lock.release_any();
+            holder
+        });
+        if let Some(holder) = stopped {
+            // The history is a record for the person; a failed write never blocks Stop.
+            let _ = runtime.history.record(
+                unix_ms(),
+                &holder.environment_id,
+                history::kind::STOPPED,
+                None,
+            );
+        }
+        Ok(lock_state(runtime, now))
+    }
+
     fn hold_for_update(&mut self, request: HoldForUpdate) -> Result<helper_message::Kind, Failure> {
-        self.configured()?;
-        // No agent can hold the computer before the channel exists, so a hold is always granted.
-        self.update_hold = request.hold;
-        Ok(self.lock_state())
+        let runtime = self.runtime_mut()?;
+        let now = Instant::now();
+        runtime
+            .lock
+            .with(|lock| lock.hold_for_update(request.hold, now));
+        Ok(lock_state(runtime, now))
     }
 
-    fn list_history(&self, _request: &ListHistory) -> Result<helper_message::Kind, Failure> {
-        self.configured()?;
-        Ok(helper_message::Kind::HistoryPage(HistoryPage::default()))
-    }
-
-    fn lock_state(&self) -> helper_message::Kind {
-        helper_message::Kind::LockState(LockState {
-            idle: true,
-            update_hold: self.update_hold,
-            ..LockState::default()
-        })
+    fn list_history(&self, request: &ListHistory) -> Result<helper_message::Kind, Failure> {
+        let runtime = self.runtime.as_ref().ok_or_else(not_configured)?;
+        Ok(helper_message::Kind::HistoryPage(
+            runtime.history.page(&request.page_token, request.limit),
+        ))
     }
 
     fn configured(&self) -> Result<(), Failure> {
-        self.configuration
-            .as_ref()
-            .map(|_| ())
-            .ok_or_else(|| Failure {
-                code: "not_configured".to_owned(),
-                message: "ConfigureDevice comes first".to_owned(),
-            })
+        self.runtime.as_ref().map(|_| ()).ok_or_else(not_configured)
     }
+
+    fn runtime_mut(&mut self) -> Result<&mut Runtime, Failure> {
+        self.runtime.as_mut().ok_or_else(not_configured)
+    }
+}
+
+fn lock_state(runtime: &mut Runtime, now: Instant) -> helper_message::Kind {
+    let (holder, update_hold) = runtime
+        .lock
+        .with(|lock| (lock.holder(now), lock.update_hold()));
+    helper_message::Kind::LockState(LockState {
+        idle: holder.is_none(),
+        holder_environment_id: holder
+            .as_ref()
+            .map(|holder| holder.environment_id.clone())
+            .unwrap_or_default(),
+        holder_environment_label: holder
+            .as_ref()
+            .map(|holder| holder.environment_label.clone())
+            .unwrap_or_default(),
+        since_unix_ms: holder.map_or(0, |holder| holder.since_unix_ms),
+        update_hold,
+    })
+}
+
+fn not_configured() -> Failure {
+    Failure {
+        code: "not_configured".to_owned(),
+        message: "ConfigureDevice comes first".to_owned(),
+    }
+}
+
+/// Unix milliseconds now, or 0 before 1970.
+fn unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn invalid(message: &str) -> Failure {
@@ -179,14 +254,23 @@ mod tests {
     use crate::secret_start::ProxyRequest;
     use zeroize::Zeroizing;
 
+    /// A fresh directory for one test; tests run in parallel, so each gets its own.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir()
+            .join("lazurio-device-tests")
+            .join(format!("device-{name}-{}-{index}", std::process::id()))
+    }
+
+    fn test_device() -> Device {
+        Device::with_lock_path(Some(scratch("lock").join("agent.lock")))
+    }
+
     fn configured() -> Device {
-        let mut device = Device::default();
+        let mut device = test_device();
         let answer = device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
-            data_directory: std::env::temp_dir()
-                .join("Lazurio App")
-                .join("device")
-                .to_string_lossy()
-                .into_owned(),
+            data_directory: scratch("data").to_string_lossy().into_owned(),
             computer_name: "Work laptop".to_owned(),
         }));
         assert_eq!(
@@ -229,7 +313,7 @@ mod tests {
 
     #[test]
     fn every_request_waits_for_configure_device() {
-        let mut device = Device::default();
+        let mut device = test_device();
         assert_eq!(
             failure_code(Some(device.start_channel(&start(
                 ATTACH,
@@ -252,7 +336,7 @@ mod tests {
 
     #[test]
     fn configure_device_needs_an_absolute_directory_and_a_name() {
-        let mut device = Device::default();
+        let mut device = test_device();
         let relative = device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
             data_directory: "device".to_owned(),
             computer_name: "Work laptop".to_owned(),
@@ -359,13 +443,57 @@ mod tests {
         let mut device = configured();
         assert_eq!(
             device.answer(&app_message::Kind::ListHistory(ListHistory::default())),
-            Some(helper_message::Kind::HistoryPage(HistoryPage::default()))
+            Some(helper_message::Kind::HistoryPage(
+                crate::lazurio::app::device::v1::HistoryPage::default()
+            ))
         );
         assert_eq!(
             device.answer(&app_message::Kind::StartNode(
                 crate::lazurio::app::tailnet::v1::StartNode::default()
             )),
             None
+        );
+    }
+
+    #[test]
+    fn configure_device_is_refused_without_a_place_for_the_device_lock() {
+        let mut device = Device::with_lock_path(None);
+        let answer = device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
+            data_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+            computer_name: "Work laptop".to_owned(),
+        }));
+        assert_eq!(failure_code(answer), "invalid_request");
+    }
+
+    #[test]
+    fn list_history_pages_what_the_data_directory_holds() {
+        let directory = scratch("history");
+        History::new(&directory)
+            .record(5, "env-a", history::kind::TOOL, Some("desktop_click"))
+            .expect("recorded");
+        let mut device = test_device();
+        device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
+            data_directory: directory.to_string_lossy().into_owned(),
+            computer_name: "Work laptop".to_owned(),
+        }));
+        let Some(helper_message::Kind::HistoryPage(page)) =
+            device.answer(&app_message::Kind::ListHistory(ListHistory::default()))
+        else {
+            panic!("a history page");
+        };
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].tool, "desktop_click");
+    }
+
+    #[test]
+    fn stop_agent_with_nobody_holding_answers_idle() {
+        let mut device = configured();
+        assert_eq!(
+            device.answer(&app_message::Kind::StopAgent(StopAgent {})),
+            Some(helper_message::Kind::LockState(LockState {
+                idle: true,
+                ..LockState::default()
+            }))
         );
     }
 }

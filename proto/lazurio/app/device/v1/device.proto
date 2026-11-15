@@ -83,7 +83,8 @@ message HoldForUpdate {
 
 // Asks for a page of the history, the newest first.
 message ListHistory {
-  // From HistoryPage.next_page_token; empty for the first page.
+  // From HistoryPage.next_page_token; empty for the first page. The page holds the entries older
+  // than the token, so entries recorded meanwhile never shift it.
   string page_token = 1;
 
   // At most this many entries; the helper caps it.
@@ -158,6 +159,10 @@ message HistoryEntry {
 
   // For kind "tool": the tool's name.
   string tool = 4;
+
+  // The entry's place in the history: one more than the entry before it, never reused. A page
+  // token is a sequence, so pages stay stable while new entries arrive.
+  uint64 sequence = 5;
 }
 
 // A page of the history.

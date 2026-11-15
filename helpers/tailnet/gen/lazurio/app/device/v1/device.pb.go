@@ -433,7 +433,8 @@ func (x *HoldForUpdate) GetHold() bool {
 // Asks for a page of the history, the newest first.
 type ListHistory struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// From HistoryPage.next_page_token; empty for the first page.
+	// From HistoryPage.next_page_token; empty for the first page. The page holds the entries older
+	// than the token, so entries recorded meanwhile never shift it.
 	PageToken string `protobuf:"bytes,1,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	// At most this many entries; the helper caps it.
 	Limit         uint32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
@@ -936,7 +937,10 @@ type HistoryEntry struct {
 	// For example "connected", "disconnected", "refused", "tool", "stopped".
 	Kind string `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
 	// For kind "tool": the tool's name.
-	Tool          string `protobuf:"bytes,4,opt,name=tool,proto3" json:"tool,omitempty"`
+	Tool string `protobuf:"bytes,4,opt,name=tool,proto3" json:"tool,omitempty"`
+	// The entry's place in the history: one more than the entry before it, never reused. A page
+	// token is a sequence, so pages stay stable while new entries arrive.
+	Sequence      uint64 `protobuf:"varint,5,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -997,6 +1001,13 @@ func (x *HistoryEntry) GetTool() string {
 		return x.Tool
 	}
 	return ""
+}
+
+func (x *HistoryEntry) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
 }
 
 // A page of the history.
@@ -1111,13 +1122,14 @@ const file_lazurio_app_device_v1_device_proto_rawDesc = "" +
 	"\x18holder_environment_label\x18\x03 \x01(\tR\x16holderEnvironmentLabel\x12\"\n" +
 	"\rsince_unix_ms\x18\x04 \x01(\x04R\vsinceUnixMs\x12\x1f\n" +
 	"\vupdate_hold\x18\x05 \x01(\bR\n" +
-	"updateHold\"{\n" +
+	"updateHold\"\x97\x01\n" +
 	"\fHistoryEntry\x12\x1c\n" +
 	"\n" +
 	"at_unix_ms\x18\x01 \x01(\x04R\batUnixMs\x12%\n" +
 	"\x0eenvironment_id\x18\x02 \x01(\tR\renvironmentId\x12\x12\n" +
 	"\x04kind\x18\x03 \x01(\tR\x04kind\x12\x12\n" +
-	"\x04tool\x18\x04 \x01(\tR\x04tool\"t\n" +
+	"\x04tool\x18\x04 \x01(\tR\x04tool\x12\x1a\n" +
+	"\bsequence\x18\x05 \x01(\x04R\bsequence\"t\n" +
 	"\vHistoryPage\x12=\n" +
 	"\aentries\x18\x01 \x03(\v2#.lazurio.app.device.v1.HistoryEntryR\aentries\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageTokenBSZQgithub.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/device/v1;devicev1b\x06proto3"
