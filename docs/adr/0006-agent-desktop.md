@@ -1,7 +1,7 @@
 # 0006 — Lazurio Agent Desktop inside Lazurio App GEN4
 
 - **Status:** proposed
-- **Proposed:** 2026-11-15
+- **Proposed:** 2026-11-15; point 3 and the macOS pilot decided by Matěj Suchánek on 2026-11-15
 - **Related:**
   - decisions 0240, 0241, 0247 and 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md);
   - [ADR 0001](0001-technological-foundation.md) (helper protocol, pages hold no power), [ADR 0003](0003-node-state-sealed.md) (keys in the system's keystore), ADR 0005 (installation, updates and channels, proposed in parallel);
@@ -33,7 +33,7 @@ Decision 0248 puts the Device's capabilities into Lazurio App GEN4 as a Rust hel
 3. **The channel is contract v1, unchanged.**
    - `wss://<the Environment's Lazurio host>/.lazurio/computers/attach?device=<id>`, the challenge signed with `lazurio-computer-attach-v1`, pings every 15 s, the end after 45 s without an answer, reconnection with back-off only while the switch is on, then one MCP message per text frame. The Environment's side is #943, which passes the gateway through the exception for this one path.
    - When the app is a node of the Environment's tailnet, the helper connects through the tailnet helper's loopback proxy with the credentials of its current start, which only the main process knows and gives to it. The computer then needs no Tailscale of its own. Otherwise it connects directly, as the utility does today with the system's Tailscale. The proxy stays closed to pages: a view still gets no proxy credentials, and this is the app's own process.
-   - **Decision 0248 wants this channel to carry a short-lived permission from Lazurio Auth, with no lasting key of the Device kept in the Environment.** That permission does not exist yet. This ADR therefore asks for one exception and does not assume it: until the permission from Auth is deployed, pilot builds of Lazurio App for named people open the channel as the utility does, contract v1 with the Device's key in the Environment's registry (the pairing channel that 0247 names as an exception, as #943 records it), and move to the permission from Auth together with the Environment's side. The exception has to be recorded as an addendum to 0248 in Lazurio Platform before step 7 below. Without it, steps 2 to 6 still go ahead, and step 7 waits for the channel from Auth. No build goes beyond a named pilot on contract v1.
+   - **Decision 0248 wants this channel to carry a short-lived permission from Lazurio Auth, with no lasting key of the Device kept in the Environment.** That permission does not exist yet. On 2026-11-15 Matěj decided a pilot of named people now ([his answer](https://github.com/Lazurio/lazurio-app/pull/15#issuecomment-6900363040)): until the permission from Auth is deployed, pilot builds of Lazurio App for the people of a named pilot open the channel as the utility does, contract v1 with the Device's key in the Environment's registry (the pairing channel that 0247 names as an exception, as #943 records it), and move to the permission from Auth together with the Environment's side. The exception is written into 0248 by [Lazurio/LazurioPlatform#1008](https://github.com/Lazurio/LazurioPlatform/pull/1008). The coordinator of the pilot keeps the list of its people outside the public repositories, and no build beyond that pilot opens the channel on contract v1.
 
 4. **Pairing follows #943 as it is, takes over the utility's pairing, and never turns a switch on.**
    - In the native window the person enters the address of their Environment's Lazurio. The main process makes the key, listens once on `127.0.0.1:<random port>` for at most ten minutes with a random `state`, and opens `/connect/computer?name&os&pubkey&callback&state` in the system's browser, where the person is signed in to Lazurio. It accepts exactly one answer with the same `state`, then closes the port. This listener belongs to the main process for the length of one pairing, not to a helper.
@@ -72,7 +72,7 @@ The Apple Developer ID and the Windows signing are still being set up (LZD-0017)
 - **Windows** shows SmartScreen ("unknown publisher") at installation. The app then runs normally and UI Automation does not depend on the signature.
 - **Trust in the download** rests on where it comes from: only the GitHub Release of this repository, with SHA-256 checksums in the release. That is enough for a pilot with named people, not for distribution.
 
-So a pilot on macOS waits for the Developer ID and notarization, as LZD-0017 requires of every GEN4 pilot on a Mac. An unsigned build is fit at most for a Windows pilot with named people, if the coordinator offers one. Signed builds are a condition of anything wider.
+On 2026-11-15 Matěj decided how this applies ([his answer](https://github.com/Lazurio/lazurio-app/pull/15#issuecomment-6900363040)): a pilot on Windows may start with an unsigned build; on macOS only as a trial with the people of the pilot, who know they grant the permissions again after each version and install new versions by hand, and lasting use on a Mac waits for the Developer ID and notarization. Signed builds are a condition of anything wider.
 
 ## Steps
 
@@ -85,7 +85,7 @@ Each step is one small pull request with targeted tests and a review on its exac
 4. the engine: the lock of its fork release, the verified download of its attested assets in `build:helpers` and CI, its place in `resources/helpers`, the helper starting and ending it (after the fork's release `v1.3.1-lazurio.1` exists);
 5. the main process: the device service in Effect, the key sealed with `safeStorage`, pairing, taking over the utility's pairing, and the state for the updater (`DeviceActivity`);
 6. the native window, the icon's states and the macOS permission guide, with end-to-end tests that a remote page reaches none of it;
-7. a trial on macOS and Windows against Lazurio Example, recorded in the pull request, before any build goes to people (with the exception of point 3 decided, or on the channel from Auth);
+7. a trial on macOS and Windows against Lazurio Example, recorded in the pull request, before any build goes to people (on contract v1 only for the named pilot of point 3, after #1008);
 8. commands on the computer behind their own switch;
 9. the channel with the short-lived permission from Lazurio Auth, together with the Environment's side.
 
