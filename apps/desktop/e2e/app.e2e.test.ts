@@ -11,10 +11,13 @@ import { _electron, type ElectronApplication, type Page } from "playwright-core"
 
 import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../src/shared/bridge.ts";
 
+import { removeUserData, temporaryUserData } from "./user-data.ts";
+
 const HOSTILE_PAGE = `<!doctype html><title>hostile</title><p id="hostile">hostile</p>`;
 
 let server: NodeHttp.Server;
 let remoteUrl: string;
+let userData: string;
 let app: ElectronApplication;
 let shell: Page;
 const output: Array<string> = [];
@@ -29,6 +32,7 @@ beforeAll(async () => {
   if (address === null || typeof address === "string") throw new Error("no server address");
   remoteUrl = `http://127.0.0.1:${address.port}/`;
 
+  userData = temporaryUserData();
   app = await _electron.launch({
     args: [NodePath.resolve(import.meta.dirname, "..")],
     // Playwright adds --no-sandbox on Linux unless told otherwise. CI configures the SUID sandbox
@@ -37,6 +41,7 @@ beforeAll(async () => {
     env: {
       ...process.env,
       LAZURIO_APP_E2E: "true",
+      LAZURIO_APP_E2E_USER_DATA: userData,
       LAZURIO_APP_E2E_REMOTE_URL: remoteUrl,
     },
   });
@@ -46,6 +51,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
+  removeUserData(userData);
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
 

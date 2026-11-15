@@ -3,12 +3,13 @@
 // keeps its data in a directory of this test (LAZURIO_APP_E2E_USER_DATA).
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test prepares the app's data on disk.
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the app on disk.
 import * as NodePath from "node:path";
 
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
+
+import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const UNREADABLE_KEY = new TextEncoder().encode("not a key any keystore sealed");
 
@@ -24,7 +25,7 @@ const tailnet = (name: string) => ({
 });
 
 beforeAll(async () => {
-  userData = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "lazurio-app-e2e-"));
+  userData = temporaryUserData();
   NodeFS.mkdirSync(NodePath.join(userData, "tailnets"), { mode: 0o700 });
   NodeFS.writeFileSync(NodePath.join(userData, "tailnets", "e2e-key.key"), UNREADABLE_KEY);
   // A key "file" that cannot be read, as a file without permission or on a failing disk.
@@ -54,7 +55,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
-  if (userData !== undefined) NodeFS.rmSync(userData, { recursive: true, force: true });
+  removeUserData(userData);
 });
 
 describe("Lazurio App GEN4 node keys", () => {

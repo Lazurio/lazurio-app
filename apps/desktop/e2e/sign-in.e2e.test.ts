@@ -13,6 +13,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
+import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const LAUNCHPAD = "https://launchpad.e2e.lazurio.io/";
 const ENVIRONMENT = "https://env.e2e.lazurio.io";
@@ -22,6 +23,7 @@ const GITHUB_LOGIN = `${GITHUB}/login`;
 const HOSTS = ["launchpad.e2e.lazurio.io", "env.e2e.lazurio.io", "auth.lazurio.ai", "github.com"];
 
 let server: NodeHttps.Server;
+let userData: string;
 let app: ElectronApplication;
 const output: Array<string> = [];
 // Every request the sites served, as "METHOD host/path".
@@ -129,6 +131,7 @@ beforeAll(async () => {
     "MAP * ~NOTFOUND",
   ];
 
+  userData = temporaryUserData();
   app = await _electron.launch({
     args: [
       NodePath.resolve(import.meta.dirname, ".."),
@@ -136,7 +139,12 @@ beforeAll(async () => {
       "--ignore-certificate-errors",
     ],
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
-    env: { ...process.env, LAZURIO_APP_E2E: "true", LAZURIO_APP_E2E_REMOTE_URL: LAUNCHPAD },
+    env: {
+      ...process.env,
+      LAZURIO_APP_E2E: "true",
+      LAZURIO_APP_E2E_USER_DATA: userData,
+      LAZURIO_APP_E2E_REMOTE_URL: LAUNCHPAD,
+    },
   });
   app.process().stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
 });
@@ -144,6 +152,7 @@ beforeAll(async () => {
 afterAll(async () => {
   hang.resolve();
   await app?.close();
+  removeUserData(userData);
   server?.closeAllConnections();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
