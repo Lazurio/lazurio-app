@@ -13,6 +13,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
+import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const PAGE = "https://launchpad.e2e.lazurio.io/";
 
@@ -20,6 +21,7 @@ const running = Promise.withResolvers<void>();
 let pageRequests = 0;
 let pageServer: NodeHttps.Server;
 let control: NodeHttp.Server;
+let userData: string;
 let app: ElectronApplication;
 let shell: Page;
 
@@ -47,12 +49,14 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", resolve));
   await new Promise<void>((resolve) => control.listen(0, "127.0.0.1", resolve));
 
+  userData = temporaryUserData();
   app = await _electron.launch({
     args: [NodePath.resolve(import.meta.dirname, ".."), "--ignore-certificate-errors"],
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
     env: {
       ...process.env,
       LAZURIO_APP_E2E: "true",
+      LAZURIO_APP_E2E_USER_DATA: userData,
       LAZURIO_APP_E2E_REMOTE_URL: PAGE,
       LAZURIO_APP_E2E_NODE: process.execPath,
       LAZURIO_APP_E2E_TAILNET_HELPER: NodePath.resolve(
@@ -78,6 +82,7 @@ beforeAll(async () => {
 afterAll(async () => {
   running.resolve();
   await app?.close();
+  removeUserData(userData);
   for (const server of [pageServer, control]) {
     server?.closeAllConnections();
     await new Promise<void>((resolve) => server?.close(() => resolve()));
