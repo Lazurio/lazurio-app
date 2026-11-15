@@ -157,6 +157,10 @@ jobs:
       - run: pnpm --filter @lazurio/app-desktop build
       - name: Package N
         working-directory: apps/desktop
+        env:
+          # electron-builder skips signing on pull requests, even the ad hoc signature, which uses no
+          # secret (trial/electron-builder.trial.yml); this job holds no signing secret.
+          CSC_FOR_PULL_REQUEST: "true"
         run: |
           pnpm exec electron-builder --config trial/electron-builder.trial.yml \
             --mac zip --arm64 --publish never \
