@@ -12,3 +12,4 @@ playwright-report/
 helpers/device/target/
 helpers/tailnet/bin/
 .DS_Store
+apps/desktop/trial/out/

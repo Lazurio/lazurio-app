@@ -1,0 +1,121 @@
+# The update test from build N to N+1 on Windows (docs/adr/0005, point 9), and the trial builds a
+# person tries by hand. Both builds come from the same commit, as 0.0.1 (N) and 0.0.2 (N+1), with
+# their update feed baked in at packaging on the loopback (http://127.0.0.1:47123/), where
+# trial/serve-feed.ps1 serves N+1. Nothing is published: the builds are this run's artifacts.
+name: Desktop update trial
+
+on:
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - helpers/**
+      - packages/**
+      - proto/**
+      - scripts/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/desktop-update-trial.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-update-trial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    env:
+      # Unsigned until the signing identities exist; electron-builder must not pick a random one.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers --release
+      - run: pnpm --filter @lazurio/app-desktop build
+      - name: Package N and N+1
+        shell: pwsh
+        working-directory: apps/desktop
+        run: |
+          foreach ($version in '0.0.1', '0.0.2') {
+            pnpm exec electron-builder --win nsis --x64 --publish never `
+              "-c.extraMetadata.version=$version" `
+              "-c.directories.output=trial/out/$version" `
+              "-c.publish.provider=generic" `
+              "-c.publish.url=http://127.0.0.1:47123/" `
+              "-c.nsis.differentialPackage=false"
+            if ($LASTEXITCODE -ne 0) { throw "Packaging $version failed." }
+          }
+      - name: Update from N to N+1
+        shell: pwsh
+        working-directory: apps/desktop/trial
+        run: |
+          ./update-trial.ps1 `
+            -InstallerN (Get-Item out/0.0.1/Lazurio-App-Setup-0.0.1.exe).FullName `
+            -Feed (Resolve-Path out/0.0.2).Path `
+            -ExpectedVersion 0.0.2
+      - name: Collect the trial builds
+        shell: pwsh
+        working-directory: apps/desktop/trial
+        run: |
+          New-Item -ItemType Directory -Force -Path out/artifact/n, out/artifact/n1 | Out-Null
+          Copy-Item out/0.0.1/Lazurio-App-Setup-0.0.1.exe out/artifact/n/
+          Copy-Item out/0.0.2/Lazurio-App-Setup-0.0.2.exe, out/0.0.2/latest.yml, serve-feed.ps1 out/artifact/n1/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lazurio-app-windows-trial
+          path: apps/desktop/trial/out/artifact
+          retention-days: 7
+          if-no-files-found: error
+
+  # The Mac gets a trial build of N only: without a Developer ID, Squirrel.Mac never installs an
+  # update (docs/adr/0005, point 7), so a person installs and starts it by hand.
+  macos:
+    runs-on: macos-15
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers --release
+      - run: pnpm --filter @lazurio/app-desktop build
+      - name: Package N
+        working-directory: apps/desktop
+        run: |
+          pnpm exec electron-builder --mac zip --arm64 --publish never \
+            -c.extraMetadata.version=0.0.1 \
+            -c.directories.output=trial/out/0.0.1 \
+            -c.publish.provider=generic \
+            -c.publish.url=http://127.0.0.1:47123/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lazurio-app-macos-trial
+          path: apps/desktop/trial/out/0.0.1/*.zip
+          retention-days: 7
+          if-no-files-found: error

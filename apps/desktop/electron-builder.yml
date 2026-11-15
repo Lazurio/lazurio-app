@@ -39,7 +39,15 @@ mac:
     - zip
 win:
   target:
-    - nsis
+    - target: nsis
+      arch:
+        - x64
+# Per user, without administrator rights, so that a person installs it without IT and the app
+# updates itself without a prompt (docs/adr/0005, point 1).
+nsis:
+  oneClick: true
+  perMachine: false
+  artifactName: Lazurio-App-Setup-${version}.${ext}
 # macOS and Windows show the product's name (Lazurio App.app, Lazurio App.exe); Linux uses a
 # command-line name.
 linux:
