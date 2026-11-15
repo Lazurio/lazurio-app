@@ -2,6 +2,11 @@
 # keeps the person's Accessibility and Screen Recording permissions with it and its signing team.
 appId: io.lazurio.app
 productName: Lazurio App
+# The package's name, which names the per-user Windows installation folder
+# (%LOCALAPPDATA%\Programs\lazurio-app) and the updater's cache. It never changes after the first
+# release, since every update installs into the same folder.
+extraMetadata:
+  name: lazurio-app
 copyright: Copyright © 2026 Lazurio
 directories:
   output: release
@@ -39,7 +44,15 @@ mac:
     - zip
 win:
   target:
-    - nsis
+    - target: nsis
+      arch:
+        - x64
+# Per user, without administrator rights, so that a person installs it without IT and the app
+# updates itself without a prompt (docs/adr/0005, point 1).
+nsis:
+  oneClick: true
+  perMachine: false
+  artifactName: Lazurio-App-Setup-${version}.${ext}
 # macOS and Windows show the product's name (Lazurio App.app, Lazurio App.exe); Linux uses a
 # command-line name.
 linux:
