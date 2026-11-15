@@ -10,6 +10,7 @@ syntax = "proto3";
 // renumbered (buf breaking, FILE).
 package lazurio.app.helper.v1;
 
+import "lazurio/app/device/v1/device.proto";
 import "lazurio/app/tailnet/v1/tailnet.proto";
 
 option go_package = "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/helper/v1;helperv1";
@@ -26,6 +27,14 @@ message AppMessage {
 
     // The tailnet helper (lazurio.app.tailnet.v1).
     lazurio.app.tailnet.v1.StartNode start_node = 10;
+
+    // The Device helper (lazurio.app.device.v1).
+    lazurio.app.device.v1.ConfigureDevice configure_device = 20;
+    lazurio.app.device.v1.StartChannel start_channel = 21;
+    lazurio.app.device.v1.StopChannel stop_channel = 22;
+    lazurio.app.device.v1.StopAgent stop_agent = 23;
+    lazurio.app.device.v1.HoldForUpdate hold_for_update = 24;
+    lazurio.app.device.v1.ListHistory list_history = 25;
   }
 }
 
@@ -42,6 +51,12 @@ message HelperMessage {
     // The tailnet helper (lazurio.app.tailnet.v1).
     lazurio.app.tailnet.v1.NodeState node_state = 10;
     lazurio.app.tailnet.v1.ProxyEndpoint proxy_endpoint = 11;
+
+    // The Device helper (lazurio.app.device.v1).
+    lazurio.app.device.v1.DeviceReady device_ready = 20;
+    lazurio.app.device.v1.ChannelState channel_state = 21;
+    lazurio.app.device.v1.LockState lock_state = 22;
+    lazurio.app.device.v1.HistoryPage history_page = 23;
   }
 }
 

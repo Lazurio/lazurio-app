@@ -1,6 +1,7 @@
 //! The Device helper of Lazurio App. The app's main process starts it and speaks the helper
-//! protocol of `proto/lazurio/app/helper/v1` with it over standard input and output. The engine
-//! that operates the computer's applications (`Lazurio/agent-desktop`) joins in a later step.
+//! protocol of `proto/lazurio/app/helper/v1` with it over standard input and output, and the
+//! Device's work of `proto/lazurio/app/device/v1` (ADR 0006). The engine that operates the
+//! computer's applications (`Lazurio/agent-desktop`) joins in a later step.
 
 use std::io::{self, Read, Write};
 
@@ -10,6 +11,11 @@ use prost::Message;
 #[allow(clippy::all, clippy::pedantic)]
 pub mod lazurio {
     pub mod app {
+        pub mod device {
+            pub mod v1 {
+                include!(concat!(env!("OUT_DIR"), "/lazurio.app.device.v1.rs"));
+            }
+        }
         pub mod helper {
             pub mod v1 {
                 include!(concat!(env!("OUT_DIR"), "/lazurio.app.helper.v1.rs"));
@@ -22,6 +28,8 @@ pub mod lazurio {
         }
     }
 }
+
+pub mod device;
 
 use lazurio::app::helper::v1::{
     AppMessage, Failure, Hello, HelperMessage, Pong, app_message, helper_message,
@@ -60,6 +68,7 @@ pub fn serve<R: Read, W: Write>(
         },
     )?;
 
+    let mut device = device::Device::default();
     while let Some(frame) = read_frame(input)? {
         let message = AppMessage::decode(frame.as_slice())
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -69,10 +78,8 @@ pub fn serve<R: Read, W: Write>(
             }
             Some(app_message::Kind::Shutdown(_)) => return Ok(()),
             // This helper serves no other helper's work, such as the tailnet's.
-            Some(_) | None => helper_message::Kind::Failure(Failure {
-                code: "unknown_request".to_owned(),
-                message: "the helper does not serve this kind of request".to_owned(),
-            }),
+            Some(kind) => device.answer(kind).unwrap_or_else(unknown_request),
+            None => unknown_request(),
         };
         send(
             output,
@@ -83,6 +90,13 @@ pub fn serve<R: Read, W: Write>(
         )?;
     }
     Ok(())
+}
+
+fn unknown_request() -> helper_message::Kind {
+    helper_message::Kind::Failure(Failure {
+        code: "unknown_request".to_owned(),
+        message: "the helper does not serve this kind of request".to_owned(),
+    })
 }
 
 fn send<W: Write>(output: &mut W, message: &HelperMessage) -> io::Result<()> {
@@ -215,6 +229,30 @@ mod tests {
         assert_eq!(replies[2].request_id, 8);
         assert!(
             matches!(replies[2].kind, Some(helper_message::Kind::Failure(ref failure)) if failure.code == "unknown_request")
+        );
+    }
+
+    #[test]
+    fn serves_the_devices_work_through_the_envelope() {
+        use super::lazurio::app::device::v1::{ConfigureDevice, DeviceReady};
+        let input = frames(&[AppMessage {
+            request_id: 11,
+            kind: Some(app_message::Kind::ConfigureDevice(ConfigureDevice {
+                data_directory: "/tmp/lazurio-device".to_owned(),
+                computer_name: "Work laptop".to_owned(),
+            })),
+        }]);
+        let mut output = Vec::new();
+
+        serve(&mut input.as_slice(), &mut output, "1.2.3").expect("serve ends cleanly");
+
+        let replies = replies(&output);
+        assert_eq!(replies[1].request_id, 11);
+        assert_eq!(
+            replies[1].kind,
+            Some(helper_message::Kind::DeviceReady(DeviceReady {
+                contract_version: 1
+            }))
         );
     }
 

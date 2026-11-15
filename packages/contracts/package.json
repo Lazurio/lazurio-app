@@ -8,6 +8,10 @@
       "types": "./src/framing.ts",
       "import": "./src/framing.ts"
     },
+    "./device/v1": {
+      "types": "./src/gen/lazurio/app/device/v1/device_pb.ts",
+      "import": "./src/gen/lazurio/app/device/v1/device_pb.ts"
+    },
     "./helper/v1": {
       "types": "./src/gen/lazurio/app/helper/v1/helper_pb.ts",
       "import": "./src/gen/lazurio/app/helper/v1/helper_pb.ts"

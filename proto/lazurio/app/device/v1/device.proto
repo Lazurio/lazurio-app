@@ -1,0 +1,169 @@
+syntax = "proto3";
+
+// The work of the Device helper: the channels through which the agents of a person's Environments
+// use this computer while its owner allows it (decision 0248, ADR 0006). The messages travel in
+// the envelope of lazurio.app.helper.v1 from field 20 on.
+//
+// The main process owns every switch and every key. The helper opens a channel only on
+// StartChannel, keeps the key only in memory, writes only to the data directory it is given, and
+// reports every change of state on its own.
+package lazurio.app.device.v1;
+
+option go_package = "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/device/v1;devicev1";
+
+// Tells the helper where it keeps its files and how the computer is named. The first request of
+// the device's work; until it, the helper answers every other request of this package with
+// Failure "not_configured".
+message ConfigureDevice {
+  // A directory inside the app's userData, never next to the helper's binary: an update replaces
+  // the whole package. The helper keeps there the history without content.
+  string data_directory = 1;
+
+  // The computer's name as the person sees it, for the Environment's list of computers.
+  string computer_name = 2;
+}
+
+// The answer to ConfigureDevice.
+message DeviceReady {
+  // The newest version of contract v1 of the attach session this helper speaks.
+  uint32 contract_version = 1;
+}
+
+// Opens the channel of one Environment and keeps it open, reconnecting with back-off, until
+// StopChannel. The main process sends it only while the person has the Environment's switch on.
+// The helper answers with the channel's state at once and sends every later change on its own.
+message StartChannel {
+  // The app's id for the Environment. Unique among the channels.
+  string environment_id = 1;
+
+  // The Environment's name as the person sees it, for the indicator.
+  string environment_label = 2;
+
+  // The attach address, `wss://<the Environment's Lazurio host>/.lazurio/computers/attach`,
+  // without credentials or query.
+  string attach_url = 3;
+
+  // The device id the Environment gave at pairing.
+  string device_id = 4;
+
+  // The 32-byte Ed25519 seed of the Device's key for this Environment. The main process keeps it
+  // only sealed by the system's keystore (ADR 0003) and gives it here; the helper holds it in
+  // memory, zeroed on drop, and never writes it.
+  bytes key_seed = 5;
+
+  // Present when the app is a node of the Environment's tailnet: the tailnet helper's loopback
+  // proxy and the credentials of its current start. Absent: the helper connects directly.
+  TailnetProxy proxy = 6;
+}
+
+// The tailnet helper's loopback proxy, as its ProxyEndpoint gave it to the main process.
+message TailnetProxy {
+  string host = 1;
+  uint32 port = 2;
+  string username = 3;
+  string password = 4;
+}
+
+// Closes the channel of one Environment at once, with any agent's work on it. The helper answers
+// with the channel's state, Off.
+message StopChannel {
+  string environment_id = 1;
+}
+
+// Stop: ends the work of the agent that holds the computer now, whatever its Environment. The
+// channels stay open. The helper answers with the lock's state.
+message StopAgent {}
+
+// The updater's gate (ADR 0006, point 7). With hold set, the helper grants the hold only while no
+// agent holds the computer, and while it is granted refuses every new tool call. With hold unset,
+// the hold ends. The helper answers with the lock's state.
+message HoldForUpdate {
+  bool hold = 1;
+}
+
+// Asks for a page of the history, the newest first.
+message ListHistory {
+  // From HistoryPage.next_page_token; empty for the first page.
+  string page_token = 1;
+
+  // At most this many entries; the helper caps it.
+  uint32 limit = 2;
+}
+
+// The state of one Environment's channel.
+message ChannelState {
+  string environment_id = 1;
+
+  oneof state {
+    Off off = 2;
+    Connecting connecting = 3;
+    Connected connected = 4;
+    Refused refused = 5;
+    Working working = 6;
+  }
+}
+
+// No channel: never started, stopped, or the switch is off.
+message Off {}
+
+// Connecting or reconnecting.
+message Connecting {
+  // How many attempts failed in a row before this one.
+  uint32 failed_attempts = 1;
+}
+
+// The Environment accepted the computer; no agent works through this channel now.
+message Connected {}
+
+// The Environment refused the computer, for example after it was removed there. The helper does
+// not retry until the next StartChannel.
+message Refused {
+  // A stable code the main process can branch on, for example "unknown_device".
+  string reason = 1;
+}
+
+// An agent of this Environment works on the computer.
+message Working {
+  // The tool's name, never its arguments.
+  string tool = 1;
+
+  // The application the tool works in, when the engine names one.
+  string application = 2;
+}
+
+// Who holds the computer: one agent at a time on the whole computer (contract v1).
+message LockState {
+  // True when no agent holds the computer.
+  bool idle = 1;
+
+  // The Environment that holds it, when one does.
+  string holder_environment_id = 2;
+  string holder_environment_label = 3;
+
+  // Unix milliseconds since the holder holds the computer.
+  uint64 since_unix_ms = 4;
+
+  // True while the updater's hold is granted.
+  bool update_hold = 5;
+}
+
+// One entry of the history. It names what happened and never holds content: no screen, no text,
+// no arguments.
+message HistoryEntry {
+  uint64 at_unix_ms = 1;
+  string environment_id = 2;
+
+  // For example "connected", "disconnected", "refused", "tool", "stopped".
+  string kind = 3;
+
+  // For kind "tool": the tool's name.
+  string tool = 4;
+}
+
+// A page of the history.
+message HistoryPage {
+  repeated HistoryEntry entries = 1;
+
+  // Empty when there is no further page.
+  string next_page_token = 2;
+}
