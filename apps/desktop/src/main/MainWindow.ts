@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
@@ -20,7 +21,27 @@ export interface MainWindowOptions {
   // Reads the app's current status whenever a local window asks.
   readonly status: () => AppStatus;
   readonly remoteUrl: Option.Option<string>;
+  // Waits until the remote page's tailnet can reach it (Tailnet.Tailnets.whenReachable).
+  readonly whenReachable: (url: string) => Effect.Effect<void>;
 }
+
+// The first remote page loads again after these failures, which a network that changed or a
+// tailnet node that started a moment ago gives (Lazurio/lazurio-app#5), up to three times in all.
+const RETRIED_FAILURES: ReadonlySet<string> = new Set([
+  "ERR_NETWORK_CHANGED",
+  "ERR_TUNNEL_CONNECTION_FAILED",
+]);
+const codeOf = (failure: unknown): string =>
+  typeof failure === "object" &&
+  failure !== null &&
+  "code" in failure &&
+  typeof failure.code === "string"
+    ? failure.code
+    : "";
+
+class RemoteLoadError extends Schema.TaggedError<RemoteLoadError>()("RemoteLoadError", {
+  code: Schema.String,
+}) {}
 
 // The sender's frame must be a local window of the app. Compared through destinationOf, not URL
 // origins: Node's URL gives a custom scheme the opaque origin "null".
@@ -43,6 +64,7 @@ const serveStatus = (status: () => AppStatus) =>
 const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
   window: Electron.BrowserWindow,
   url: string,
+  whenReachable: (url: string) => Effect.Effect<void>,
 ) {
   const view = new Electron.WebContentsView({
     webPreferences: {
@@ -63,7 +85,18 @@ const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
   };
   layout();
   window.on("resize", layout);
-  yield* Effect.promise(() => view.webContents.loadURL(url).catch(() => undefined));
+  // The page loads only once its tailnet runs, so the first load does not fail while the node
+  // starts.
+  yield* whenReachable(url).pipe(
+    Effect.andThen(
+      Effect.tryPromise({
+        try: () => view.webContents.loadURL(url),
+        catch: (failure) => new RemoteLoadError({ code: codeOf(failure) }),
+      }),
+    ),
+    Effect.retry({ times: 2, while: (failure) => RETRIED_FAILURES.has(failure.code) }),
+    Effect.ignore,
+  );
 });
 
 export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowOptions) {
@@ -94,6 +127,8 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   registerView(window.webContents, "Local");
   window.once("ready-to-show", () => window.show());
   yield* Effect.promise(() => window.loadURL(LOCAL_ENTRY));
-  if (Option.isSome(options.remoteUrl)) yield* attachRemoteView(window, options.remoteUrl.value);
+  if (Option.isSome(options.remoteUrl)) {
+    yield* attachRemoteView(window, options.remoteUrl.value, options.whenReachable);
+  }
   return window;
 });

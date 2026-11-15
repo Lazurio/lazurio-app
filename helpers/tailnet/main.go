@@ -27,7 +27,7 @@ func main() {
 			logger.Error("cannot report a node's state", "error", err)
 		}
 	}, logger)
-	proxy, err := StartProxy(nodes)
+	proxy, err := StartProxy(nodes, logger)
 	if err != nil {
 		logger.Error("helper stopped", "error", err)
 		os.Exit(1)

@@ -2,13 +2,17 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -54,9 +58,32 @@ func echoServer(t *testing.T) string {
 	return listener.Addr().String()
 }
 
+// lockedBuffer collects a logger's output from the proxy's goroutines.
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
 func startTestProxy(t *testing.T, router Router) *Proxy {
 	t.Helper()
-	proxy, err := StartProxy(router)
+	return startLoggingTestProxy(t, router, &lockedBuffer{})
+}
+
+func startLoggingTestProxy(t *testing.T, router Router, log io.Writer) *Proxy {
+	t.Helper()
+	proxy, err := StartProxy(router, slog.New(slog.NewTextHandler(log, nil)))
 	if err != nil {
 		t.Fatalf("start the proxy: %v", err)
 	}
@@ -163,5 +190,52 @@ func TestProxyListensOnlyOnLoopback(t *testing.T) {
 	address, ok := proxy.listener.Addr().(*net.TCPAddr)
 	if !ok || !address.IP.IsLoopback() {
 		t.Fatalf("listens on %v", proxy.listener.Addr())
+	}
+}
+
+func TestProxyLogsAFailedDialWithoutAnyAddress(t *testing.T) {
+	log := &lockedBuffer{}
+	proxy := startLoggingTestProxy(t, routeTo{
+		domain: "example-org.lazurio.io",
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial tcp 100.64.0.7:443 via [fd7a:115c:a1e0::7]:41641 to https://headscale.example-org.lazurio.io/x: connection refused")
+		},
+	}, log)
+
+	status, _, _ := connect(t, proxy, "launchpad.alice.example-org.lazurio.io:443", proxy.username+":"+proxy.password)
+	if status != "502 Bad Gateway" {
+		t.Fatalf("status = %q", status)
+	}
+	line := log.String()
+	if !strings.Contains(line, "the tailnet could not reach a name") ||
+		!strings.Contains(line, "launchpad.alice.example-org.lazurio.io") ||
+		!strings.Contains(line, "connection refused") {
+		t.Fatalf("log = %q", line)
+	}
+	for _, address := range []string{"100.64.0.7", "fd7a:115c", "41641", "https://", "headscale."} {
+		if strings.Contains(line, address) {
+			t.Fatalf("log names %q: %q", address, line)
+		}
+	}
+}
+
+func TestRedactNetworkAddressesRemovesEveryFormOfAnAddress(t *testing.T) {
+	cases := map[string]string{
+		"dial tcp [fd00::]:443: network unreachable":                             "dial tcp <ip>: network unreachable",
+		"no route to fd00::":                                                     "no route to <ip>",
+		"via [fd7a:115c:a1e0::7]:41641 and fd7a:115c:a1e0:ab12:4843:cd96:6265:7": "via <ip> and <ip>",
+		"loopback ::1 and [::1]:53":                                              "loopback <ip> and <ip>",
+		"link-local fe80::1%eth0 refused":                                        "link-local <ip> refused",
+		"mapped ::ffff:10.0.0.1, documented 2001:db8::":                          "mapped <ip>, documented <ip>",
+		"dial tcp 100.64.0.7:443: i/o timeout":                                   "dial tcp <ip>: i/o timeout",
+		"connect to 10.0.0.1.":                                                   "connect to <ip>.",
+		"lookup launchpad.alice.example-org.lazurio.io: no such host":            "lookup launchpad.alice.example-org.lazurio.io: no such host",
+		"context deadline exceeded":                                              "context deadline exceeded",
+		"see https://headscale.example-org.lazurio.io/x":                         "see <address>",
+	}
+	for input, want := range cases {
+		if got := redactNetworkAddresses(input); got != want {
+			t.Errorf("redactNetworkAddresses(%q) = %q, want %q", input, got, want)
+		}
 	}
 }

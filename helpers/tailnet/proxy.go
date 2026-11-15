@@ -8,8 +8,11 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -28,6 +31,39 @@ const (
 	dialTimeout   = 15 * time.Second
 )
 
+// ipCandidate matches every run of the characters an IP address may be written with, brackets,
+// a zone and a port included. net/netip decides which runs are addresses, so every valid form of
+// IPv4 and IPv6 counts, also a compressed one that ends in "::".
+var ipCandidate = regexp.MustCompile(`[0-9A-Za-z:.%_\[\]-]+`)
+
+// isIPAddress reports whether a word is an IP address, alone, in brackets or with a port.
+func isIPAddress(word string) bool {
+	if _, err := netip.ParseAddrPort(word); err == nil {
+		return true
+	}
+	_, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(word, "["), "]"))
+	return err == nil
+}
+
+// redactIPAddress replaces a word that is an IP address, also one followed by ".", ",", ";" or ":".
+func redactIPAddress(word string) string {
+	for core, rest := word, ""; core != ""; core, rest = core[:len(core)-1], core[len(core)-1:]+rest {
+		if isIPAddress(core) {
+			return "<ip>" + rest
+		}
+		if !strings.ContainsAny(core[len(core)-1:], ".,;:") {
+			break
+		}
+	}
+	return word
+}
+
+// redactNetworkAddresses keeps a dial error's words without any web or IP address, because the
+// error of a tailnet's dial names its peers' addresses.
+func redactNetworkAddresses(text string) string {
+	return ipCandidate.ReplaceAllStringFunc(redactAddresses(text), redactIPAddress)
+}
+
 // Proxy is the helper's local HTTP proxy. It listens only on the loopback address, accepts only
 // CONNECT with its credentials, and sends a name only to the tailnet that serves it, so other
 // processes on the computer cannot use it and nothing else on the web goes through it.
@@ -35,12 +71,14 @@ type Proxy struct {
 	listener net.Listener
 	server   *http.Server
 	router   Router
+	logger   *slog.Logger
 	username string
 	password string
 }
 
-// StartProxy listens on a free loopback port with credentials made for this start only.
-func StartProxy(router Router) (*Proxy, error) {
+// StartProxy listens on a free loopback port with credentials made for this start only. It logs
+// why a tailnet could not reach a name, without any address.
+func StartProxy(router Router, logger *slog.Logger) (*Proxy, error) {
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return nil, fmt.Errorf("make the proxy's password: %w", err)
@@ -52,6 +90,7 @@ func StartProxy(router Router) (*Proxy, error) {
 	proxy := &Proxy{
 		listener: listener,
 		router:   router,
+		logger:   logger,
 		username: proxyUsername,
 		password: base64.RawURLEncoding.EncodeToString(secret),
 	}
@@ -111,6 +150,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	upstream, err := dial(ctx, "tcp", r.Host)
 	if err != nil {
+		p.logger.Warn("the tailnet could not reach a name", "name", hostname,
+			"error", redactNetworkAddresses(err.Error()))
 		http.Error(w, "the tailnet could not reach the target", http.StatusBadGateway)
 		return
 	}

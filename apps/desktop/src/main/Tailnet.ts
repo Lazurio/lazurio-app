@@ -64,6 +64,22 @@ export const pacScript = (
   ].join("\n");
 };
 
+// The tailnet whose domains serve the address's name, as the PAC script and the helper's proxy
+// route it; none for a name outside every tailnet, or for an address that is not one.
+export const servingTailnet = (
+  tailnets: ReadonlyArray<TailnetConfig>,
+  address: string,
+): string | undefined => {
+  const url = URL.parse(address);
+  if (url === null) return undefined;
+  const name = normalizeDomain(url.hostname);
+  return tailnets.find((tailnet) =>
+    tailnet.domains
+      .map(normalizeDomain)
+      .some((domain) => domain !== "" && (name === domain || name.endsWith(`.${domain}`))),
+  )?.tailnet;
+};
+
 // Chromium takes a PAC script reliably only as a data: URL.
 export const pacDataUrl = (script: string): string =>
   `data:application/x-ns-proxy-autoconfig;base64,${btoa(script)}`;
@@ -166,7 +182,16 @@ export interface Tailnets {
   readonly current: () => ReadonlyArray<TailnetStatus>;
   // Calls the listener after every change of a status; the result stops it.
   readonly subscribe: (listener: () => void) => () => void;
+  // Waits until the tailnet that serves the address runs; at once for an address no tailnet serves.
+  readonly whenReachable: (address: string) => Effect.Effect<void>;
 }
+
+// Tailnets of an app that runs no tailnet helper: every address is reachable as it is.
+export const noTailnets: Tailnets = {
+  current: () => [],
+  subscribe: () => () => {},
+  whenReachable: () => Effect.void,
+};
 
 // Runs the tailnets for as long as the scope lives.
 export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) {
@@ -241,11 +266,32 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
     yield* change(afterReply(board, next));
   }
 
+  const runs = (tailnet: string) =>
+    board.statuses.some((status) => status.tailnet === tailnet && status.state === "running");
   const tailnets: Tailnets = {
     current: () => board.statuses,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    whenReachable: (address) => {
+      const tailnet = servingTailnet(options.tailnets, address);
+      if (tailnet === undefined) return Effect.void;
+      return Effect.callback<void>((resume) => {
+        if (runs(tailnet)) {
+          resume(Effect.void);
+          return;
+        }
+        const listener = () => {
+          if (!runs(tailnet)) return;
+          listeners.delete(listener);
+          resume(Effect.void);
+        };
+        listeners.add(listener);
+        return Effect.sync(() => {
+          listeners.delete(listener);
+        });
+      });
     },
   };
   return tailnets;
