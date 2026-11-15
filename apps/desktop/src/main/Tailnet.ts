@@ -17,6 +17,7 @@ import type { TailnetStatus } from "../shared/bridge.ts";
 import type { NavigationObserver } from "./Hardening.ts";
 import type { HelperConnection } from "./Helpers.ts";
 import type { NodeKeyError } from "./NodeKeys.ts";
+import { stoppedForFailure, stoppedForKey } from "./StoppedTailnet.ts";
 
 // The app's side of the tailnet helper (decision 0248): it starts one node per tailnet, gives the
 // remote views a PAC script that sends only the tailnets' names to the helper's proxy, answers the
@@ -172,46 +173,6 @@ export interface Tailnets {
   // Calls the listener after every change of a status; the result stops it.
   readonly subscribe: (listener: () => void) => () => void;
 }
-
-interface Recovery {
-  readonly keyFile: string;
-  readonly stateDirectory: string;
-}
-
-// A tailnet whose node key the keystore did not give: no keystore, or a key it does not open.
-export const stoppedForKey = (
-  tailnet: string,
-  error: NodeKeyError,
-  recovery: Recovery,
-): TailnetStatus => {
-  switch (error.reason) {
-    case "no-keystore":
-      return { tailnet, state: "stopped", problem: error.problem, reason: "no-keystore" };
-    case "key-unreadable":
-      return {
-        tailnet,
-        state: "stopped",
-        problem: error.problem,
-        reason: "key-unreadable",
-        recovery,
-      };
-    case "key-not-saved":
-      return { tailnet, state: "stopped", problem: error.problem };
-  }
-};
-
-// The helper's code for a node whose sealed state does not open with its key (statestore.go).
-const FAILURE_STATE_UNREADABLE = "state_unreadable";
-
-// A tailnet whose node the helper did not start.
-export const stoppedForFailure = (
-  tailnet: string,
-  failure: { readonly code: string; readonly message: string },
-  recovery: Recovery,
-): TailnetStatus =>
-  failure.code === FAILURE_STATE_UNREADABLE
-    ? { tailnet, state: "stopped", problem: failure.message, reason: "state-unreadable", recovery }
-    : { tailnet, state: "stopped", problem: failure.message };
 
 // Runs the tailnets for as long as the scope lives.
 export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) {
