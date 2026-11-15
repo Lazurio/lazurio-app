@@ -15,6 +15,7 @@ import * as Hardening from "./Hardening.ts";
 import * as Helpers from "./Helpers.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
+import { destinationOf } from "./Navigation.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as Tailnet from "./Tailnet.ts";
 
@@ -69,6 +70,19 @@ const developmentTailnets = Effect.gen(function* () {
   if (Electron.app.isPackaged) return [];
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
   return Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [];
+});
+
+// Development only, and never in a packaged app: the page of the web Lazurio the main window shows,
+// for trying a sign-in or a page by hand. Only an address of Lazurio over HTTPS counts.
+const developmentRemoteUrl = Effect.gen(function* () {
+  if (Electron.app.isPackaged) return Option.none<string>();
+  const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_REMOTE_URL"));
+  if (Option.isNone(setting)) return setting;
+  if (destinationOf(setting.value)._tag !== "Lazurio") {
+    yield* Effect.logWarning("LAZURIO_APP_DEV_REMOTE_URL is no address of Lazurio over HTTPS");
+    return Option.none<string>();
+  }
+  return setting;
 });
 
 const helperBinaries = Effect.fn("main.helperBinaries")(function* (
@@ -180,7 +194,7 @@ const program = Effect.gen(function* () {
     MainWindow.open({
       preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
       status,
-      remoteUrl: hooks.remoteUrl,
+      remoteUrl: Option.isSome(hooks.remoteUrl) ? hooks.remoteUrl : yield* developmentRemoteUrl,
       whenReachable: tailnets.whenReachable,
     }).pipe(Effect.andThen(Effect.never)),
     allWindowsClosed,

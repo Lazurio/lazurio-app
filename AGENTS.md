@@ -34,6 +34,9 @@ Node 26.12.1, pnpm 12.14.0, Go 1.27.4 and Rust 1.99.1 (`helpers/device/rust-tool
 - `pnpm proto:generate` after any change in `proto/`; commit the generated code.
 - `pnpm build:helpers` (add `--release` for packaging).
 - `pnpm --filter @lazurio/app-desktop ensure:electron`, then `build`, then `test:e2e`. On Linux, run `test:e2e` under `xvfb-run -a`.
+- `pnpm --filter @lazurio/app-desktop start` runs the app unpackaged. Only an unpackaged app reads these settings, and a packaged one never does:
+  - `LAZURIO_APP_DEV_TAILNETS`: a JSON array of tailnets to join;
+  - `LAZURIO_APP_DEV_REMOTE_URL`: an `https://` address of Lazurio for the main window, for example `https://dashboard.lazurio.ai/sign-in` to try a sign-in by hand.
 - Go, in `helpers/tailnet`: `go vet ./...`, `go test -race ./...` and `golangci-lint run`.
 - Rust, in `helpers/device`: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings` and `cargo test --locked`.
 
