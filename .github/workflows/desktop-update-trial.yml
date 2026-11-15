@@ -62,14 +62,7 @@ jobs:
               "-c.nsis.differentialPackage=false"
             if ($LASTEXITCODE -ne 0) { throw "Packaging $version failed." }
           }
-      - name: Update from N to N+1
-        shell: pwsh
-        working-directory: apps/desktop/trial
-        run: |
-          ./update-trial.ps1 `
-            -InstallerN (Get-Item out/0.0.1/Lazurio-App-Setup-0.0.1.exe).FullName `
-            -Feed (Resolve-Path out/0.0.2).Path `
-            -ExpectedVersion 0.0.2
+      # The trial builds are uploaded before the test, so a person can try them even when it fails.
       - name: Collect the trial builds
         shell: pwsh
         working-directory: apps/desktop/trial
@@ -83,6 +76,14 @@ jobs:
           path: apps/desktop/trial/out/artifact
           retention-days: 7
           if-no-files-found: error
+      - name: Update from N to N+1
+        shell: pwsh
+        working-directory: apps/desktop/trial
+        run: |
+          ./update-trial.ps1 `
+            -InstallerN (Get-Item out/0.0.1/Lazurio-App-Setup-0.0.1.exe).FullName `
+            -Feed (Resolve-Path out/0.0.2).Path `
+            -ExpectedVersion 0.0.2
 
   linux:
     runs-on: ubuntu-24.04

@@ -32,7 +32,12 @@ function Wait-Until([scriptblock]$Condition, [string]$What) {
 try {
   $install = Start-Process -FilePath $InstallerN -ArgumentList '/S' -Wait -PassThru
   if ($install.ExitCode -ne 0) { throw "The installer of N exited with $($install.ExitCode)." }
-  $exe = Join-Path $env:LOCALAPPDATA 'Programs\Lazurio App\Lazurio App.exe'
+  # Where the installer put the app, as its uninstall entry says.
+  $entry = Get-ChildItem -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
+    Get-ItemProperty | Where-Object { $_.DisplayName -like 'Lazurio App*' } | Select-Object -First 1
+  if ($null -eq $entry) { throw 'The installer of N left no uninstall entry for Lazurio App.' }
+  $exe = Join-Path $entry.InstallLocation 'Lazurio App.exe'
+  Write-Host "Installed into $($entry.InstallLocation)"
   $before = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
   Write-Host "Installed N: $before"
   if ($before -like "$ExpectedVersion*") { throw "N already has the version of N+1." }
