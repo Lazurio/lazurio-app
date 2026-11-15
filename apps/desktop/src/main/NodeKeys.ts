@@ -22,9 +22,10 @@ export interface Keystore {
 const NO_KEYSTORE: ReadonlySet<string> = new Set(["basic_text", "unknown"]);
 
 export class NodeKeyError extends Schema.TaggedError<NodeKeyError>()("NodeKeyError", {
-  // no-keystore: no keystore to seal with; key-unreadable: the sealed key does not open or cannot
-  // be read; key-not-saved: a new key could not be sealed or written.
-  reason: Schema.Literals(["no-keystore", "key-unreadable", "key-not-saved"]),
+  // no-keystore: no keystore to seal with; key-inaccessible: the key's file cannot be checked or
+  // read, which a person can repair; key-unreadable: the file was read and the keystore does not
+  // open it; key-not-saved: a new key could not be sealed or written.
+  reason: Schema.Literals(["no-keystore", "key-inaccessible", "key-unreadable", "key-not-saved"]),
   problem: Schema.String,
 }) {
   override get message(): string {
@@ -70,11 +71,11 @@ export const stateKey = Effect.fn("NodeKeys.stateKey")(function* (options: State
   const fileSystem = yield* FileSystem.FileSystem;
   const exists = yield* fileSystem
     .exists(options.path)
-    .pipe(Effect.mapError(() => failure("key-unreadable", "its sealed key cannot be read")));
+    .pipe(Effect.mapError(() => failure("key-inaccessible", "its key file cannot be checked")));
   if (exists) {
     const sealed = yield* fileSystem
       .readFile(options.path)
-      .pipe(Effect.mapError(() => failure("key-unreadable", "its sealed key cannot be read")));
+      .pipe(Effect.mapError(() => failure("key-inaccessible", "its key file cannot be read")));
     const key = yield* Effect.try({
       try: () => fromBase64(options.keystore.open(sealed)),
       catch: () => failure("key-unreadable", "the keystore does not open its sealed key"),

@@ -4,41 +4,35 @@ import { NodeKeyError } from "./NodeKeys.ts";
 import { stoppedForFailure, stoppedForKey } from "./StoppedTailnet.ts";
 
 describe("a stopped tailnet's reason", () => {
-  const recovery = {
-    keyFile: "/data/tailnets/example.key",
-    stateDirectory: "/data/tailnets/example",
-  };
+  const files = { keyFile: "/data/tailnets/example.key", stateDirectory: "/data/tailnets/example" };
+  const keyError = (reason: NodeKeyError["reason"]) =>
+    stoppedForKey("example", new NodeKeyError({ reason, problem: "p" }), files);
 
-  it("names no keystore, and an unreadable key with the files that start the node afresh", () => {
-    assert.deepStrictEqual(
-      stoppedForKey("example", new NodeKeyError({ reason: "no-keystore", problem: "p" }), recovery),
-      { tailnet: "example", state: "stopped", problem: "p", reason: "no-keystore" },
-    );
-    assert.deepStrictEqual(
-      stoppedForKey(
-        "example",
-        new NodeKeyError({ reason: "key-unreadable", problem: "q" }),
-        recovery,
-      ),
-      { tailnet: "example", state: "stopped", problem: "q", reason: "key-unreadable", recovery },
-    );
-    assert.deepStrictEqual(
-      stoppedForKey(
-        "example",
-        new NodeKeyError({ reason: "key-not-saved", problem: "r" }),
-        recovery,
-      ),
-      { tailnet: "example", state: "stopped", problem: "r" },
-    );
+  it("names each reason a node key gives, with the node's files where the advice needs them", () => {
+    assert.deepStrictEqual(keyError("no-keystore"), {
+      tailnet: "example",
+      state: "stopped",
+      problem: "p",
+      reason: "no-keystore",
+    });
+    for (const reason of ["key-inaccessible", "key-not-saved", "key-unreadable"] as const) {
+      assert.deepStrictEqual(keyError(reason), {
+        tailnet: "example",
+        state: "stopped",
+        problem: "p",
+        reason,
+        files,
+      });
+    }
   });
 
   it("names a sealed state that its key does not open, from the helper's code", () => {
     assert.deepStrictEqual(
-      stoppedForFailure("example", { code: "state_unreadable", message: "m" }, recovery),
-      { tailnet: "example", state: "stopped", problem: "m", reason: "state-unreadable", recovery },
+      stoppedForFailure("example", { code: "state_unreadable", message: "m" }, files),
+      { tailnet: "example", state: "stopped", problem: "m", reason: "state-unreadable", files },
     );
     assert.deepStrictEqual(
-      stoppedForFailure("example", { code: "start_node_failed", message: "n" }, recovery),
+      stoppedForFailure("example", { code: "start_node_failed", message: "n" }, files),
       { tailnet: "example", state: "stopped", problem: "n" },
     );
   });

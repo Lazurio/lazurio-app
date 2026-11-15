@@ -25,11 +25,16 @@ export type TailnetStatus =
       readonly problem: string;
       // Why the node did not start, when the person can do something about it (ADR 0003).
       readonly reason?: TailnetStopReason;
-      // The files that start the node afresh once deleted, for an unreadable key or state.
-      readonly recovery?: { readonly keyFile: string; readonly stateDirectory: string };
+      // The node's key file and state directory, which the window names in its advice.
+      readonly files?: { readonly keyFile: string; readonly stateDirectory: string };
     };
 
-type TailnetStopReason = "no-keystore" | "key-unreadable" | "state-unreadable";
+type TailnetStopReason =
+  | "no-keystore"
+  | "key-inaccessible"
+  | "key-not-saved"
+  | "key-unreadable"
+  | "state-unreadable";
 
 export interface AppStatus {
   readonly appVersion: string;

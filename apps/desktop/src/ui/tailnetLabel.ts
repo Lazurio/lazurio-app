@@ -20,25 +20,40 @@ export const tailnetLabel = (status: TailnetStatus, text: Text): TailnetLabel =>
     case "running":
       return { state: `${text.running} · ${status.addresses.join(", ")}` };
     case "stopped": {
-      const recovery = status.recovery;
-      const instructions =
-        status.reason === "key-unreadable"
-          ? text.keyUnreadable
-          : status.reason === "state-unreadable"
-            ? text.stateUnreadable
-            : undefined;
+      const files = status.files;
       if (status.reason === "no-keystore") {
         return { state: text.stopped, detail: { text: text.noKeystore } };
       }
-      if (instructions !== undefined && recovery !== undefined) {
-        return {
-          state: text.stopped,
-          detail: {
-            text: instructions.lead,
-            files: [recovery.keyFile, recovery.stateDirectory],
-            after: instructions.after,
-          },
-        };
+      if (files !== undefined) {
+        switch (status.reason) {
+          // Nothing is deleted for a file a person can repair.
+          case "key-inaccessible":
+            return {
+              state: text.stopped,
+              detail: { text: text.keyInaccessible.lead, files: [files.keyFile] },
+            };
+          case "key-not-saved":
+            return {
+              state: text.stopped,
+              detail: { text: text.keyNotSaved.lead, files: [files.keyFile] },
+            };
+          // Deleting both files is the last step: the node signs in again as a new device.
+          case "key-unreadable":
+          case "state-unreadable": {
+            const advice =
+              status.reason === "key-unreadable" ? text.keyUnreadable : text.stateUnreadable;
+            return {
+              state: text.stopped,
+              detail: {
+                text: advice.lead,
+                files: [files.keyFile, files.stateDirectory],
+                ...(advice.after === undefined ? {} : { after: advice.after }),
+              },
+            };
+          }
+          case undefined:
+            break;
+        }
       }
       return { state: text.stopped, detail: { text: status.problem } };
     }

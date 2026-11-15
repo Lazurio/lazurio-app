@@ -235,18 +235,18 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
     );
   for (const tailnet of options.tailnets) {
     const stateDirectory = path.join(options.stateRoot, tailnet.tailnet);
-    // Deleting both starts the node afresh: it signs in again and needs approval again.
-    const recovery = {
+    // The node's files, which the window names when the node does not start (ADR 0003).
+    const files = {
       keyFile: path.join(options.stateRoot, `${tailnet.tailnet}.key`),
       stateDirectory,
     };
     // A node whose key the keystore does not give starts nowhere, and says why.
-    const key = yield* options.stateKeyOf(recovery.keyFile).pipe(
+    const key = yield* options.stateKeyOf(files.keyFile).pipe(
       Effect.map((value) => ({ _tag: "Key" as const, value })),
       Effect.catch((error) => Effect.succeed({ _tag: "NoKey" as const, error })),
     );
     if (key._tag === "NoKey") {
-      yield* change(afterReply(board, stoppedForKey(tailnet.tailnet, key.error, recovery)));
+      yield* change(afterReply(board, stoppedForKey(tailnet.tailnet, key.error, files)));
       continue;
     }
     const reply = yield* options.connection.request({
@@ -264,7 +264,7 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
       reply.kind.case === "nodeState"
         ? statusOf(reply.kind.value)
         : reply.kind.case === "failure"
-          ? stoppedForFailure(tailnet.tailnet, reply.kind.value, recovery)
+          ? stoppedForFailure(tailnet.tailnet, reply.kind.value, files)
           : { tailnet: tailnet.tailnet, state: "stopped", problem: "no answer" };
     yield* change(afterReply(board, next));
   }

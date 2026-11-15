@@ -1,34 +1,30 @@
 import type { TailnetStatus } from "../shared/bridge.ts";
 import type { NodeKeyError } from "./NodeKeys.ts";
 
-// What the local window learns of a tailnet whose node did not start, and why (ADR 0003): no
-// keystore, a key the keystore does not open, or a sealed state the key does not open, with the
-// files that start the node afresh once deleted.
+// What the local window learns of a tailnet whose node did not start, and why (ADR 0003), with the
+// node's key file and state directory, which the window's advice names.
 
-export interface Recovery {
+export interface NodeFiles {
   readonly keyFile: string;
   readonly stateDirectory: string;
 }
 
-// A tailnet whose node key the keystore did not give: no keystore, or a key it does not open.
+// A tailnet whose node key the keystore did not give.
 export const stoppedForKey = (
   tailnet: string,
   error: NodeKeyError,
-  recovery: Recovery,
+  files: NodeFiles,
 ): TailnetStatus => {
+  const stopped = { tailnet, state: "stopped", problem: error.problem } as const;
   switch (error.reason) {
     case "no-keystore":
-      return { tailnet, state: "stopped", problem: error.problem, reason: "no-keystore" };
-    case "key-unreadable":
-      return {
-        tailnet,
-        state: "stopped",
-        problem: error.problem,
-        reason: "key-unreadable",
-        recovery,
-      };
+      return { ...stopped, reason: "no-keystore" };
+    case "key-inaccessible":
+      return { ...stopped, reason: "key-inaccessible", files };
     case "key-not-saved":
-      return { tailnet, state: "stopped", problem: error.problem };
+      return { ...stopped, reason: "key-not-saved", files };
+    case "key-unreadable":
+      return { ...stopped, reason: "key-unreadable", files };
   }
 };
 
@@ -39,8 +35,8 @@ const FAILURE_STATE_UNREADABLE = "state_unreadable";
 export const stoppedForFailure = (
   tailnet: string,
   failure: { readonly code: string; readonly message: string },
-  recovery: Recovery,
+  files: NodeFiles,
 ): TailnetStatus =>
   failure.code === FAILURE_STATE_UNREADABLE
-    ? { tailnet, state: "stopped", problem: failure.message, reason: "state-unreadable", recovery }
+    ? { tailnet, state: "stopped", problem: failure.message, reason: "state-unreadable", files }
     : { tailnet, state: "stopped", problem: failure.message };

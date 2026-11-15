@@ -27,6 +27,8 @@ beforeAll(async () => {
   userData = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "lazurio-app-e2e-"));
   NodeFS.mkdirSync(NodePath.join(userData, "tailnets"), { mode: 0o700 });
   NodeFS.writeFileSync(NodePath.join(userData, "tailnets", "e2e-key.key"), UNREADABLE_KEY);
+  // A key "file" that cannot be read, as a file without permission or on a failing disk.
+  NodeFS.mkdirSync(NodePath.join(userData, "tailnets", "e2e-dir.key"));
 
   app = await _electron.launch({
     args: [NodePath.resolve(import.meta.dirname, "..")],
@@ -40,7 +42,11 @@ beforeAll(async () => {
         import.meta.dirname,
         "fake-tailnet-helper.ts",
       ),
-      LAZURIO_APP_DEV_TAILNETS: JSON.stringify([tailnet("e2e-key"), tailnet("e2e-fresh")]),
+      LAZURIO_APP_DEV_TAILNETS: JSON.stringify([
+        tailnet("e2e-key"),
+        tailnet("e2e-dir"),
+        tailnet("e2e-fresh"),
+      ]),
     },
   });
   shell = await app.firstWindow();
@@ -63,6 +69,19 @@ describe("Lazurio App GEN4 node keys", () => {
     // The app never replaces a key it cannot open.
     const onDisk = NodeFS.readFileSync(NodePath.join(userData, "tailnets", "e2e-key.key"));
     assert.deepStrictEqual([...onDisk], [...UNREADABLE_KEY]);
+  });
+
+  it("advises deleting nothing when a tailnet's key file cannot be read", async () => {
+    const stopped = shell.locator(
+      '[data-tailnet="e2e-dir"][data-state="stopped"][data-reason="key-inaccessible"]',
+    );
+    await stopped.waitFor();
+    const reason = (await stopped.locator(".shell__reason").textContent()) ?? "";
+    assert.include(reason, NodePath.join(userData, "tailnets", "e2e-dir.key"));
+    assert.notMatch(reason, /smažte|\bdelete\b(?! nothing)/iu);
+    assert.isTrue(
+      NodeFS.statSync(NodePath.join(userData, "tailnets", "e2e-dir.key")).isDirectory(),
+    );
   });
 
   it("gives a tailnet without a key a new one, sealed, and starts its node", async () => {

@@ -1,11 +1,11 @@
 // Every text a person sees in the app's local windows, in Czech and English. Components never
 // carry text of their own.
 
-// What to do about a key or a state that does not open: the lead before the files to delete
-// (ADR 0003), and what follows once they are gone.
-interface Recovery {
+// What to do about a node that did not start (ADR 0003): the lead before the files it names, and
+// what follows.
+interface Advice {
   readonly lead: string;
-  readonly after: string;
+  readonly after?: string;
 }
 
 export interface Text {
@@ -21,8 +21,10 @@ export interface Text {
   readonly running: string;
   readonly stopped: string;
   readonly noKeystore: string;
-  readonly keyUnreadable: Recovery;
-  readonly stateUnreadable: Recovery;
+  readonly keyInaccessible: Advice;
+  readonly keyNotSaved: Advice;
+  readonly keyUnreadable: Advice;
+  readonly stateUnreadable: Advice;
 }
 
 const cs: Text = {
@@ -39,8 +41,14 @@ const cs: Text = {
   stopped: "Zastaveno",
   noKeystore:
     "Úložiště klíčů systému není dostupné, a proto se tailnet nespustil. Odemkněte ho (na Macu Klíčenku) a Lazurio App spusťte znovu.",
+  keyInaccessible: {
+    lead: "Lazurio App nemůže přečíst klíč tohoto tailnetu, a proto se tailnet nespustil. Nic nemažte: zkontrolujte, že soubor patří vám, že ho jde číst a že disk funguje, a Lazurio App spusťte znovu. Jde o tento soubor:",
+  },
+  keyNotSaved: {
+    lead: "Lazurio App nemůže uložit nový klíč tohoto tailnetu, a proto se tailnet nespustil. Zkontrolujte, že do jeho složky jde zapisovat a že je na disku místo, a Lazurio App spusťte znovu. Klíč patří do tohoto souboru:",
+  },
   keyUnreadable: {
-    lead: "Klíč tohoto tailnetu nejde otevřít, a proto se tailnet nespustil. Ukončete Lazurio App, smažte tento soubor a tuto složku a aplikaci spusťte znovu:",
+    lead: "Úložiště klíčů systému neotevře klíč tohoto tailnetu, a proto se tailnet nespustil. Pokud systém žádal o odemčení úložiště klíčů, povolte ho a Lazurio App spusťte znovu. Když se klíč neotevře ani potom, ukončete Lazurio App, smažte tento soubor a tuto složku a aplikaci spusťte znovu:",
     after: "Počítač se pak do tailnetu přihlásí znovu a jako nové zařízení čeká na schválení.",
   },
   stateUnreadable: {
@@ -63,8 +71,14 @@ const en: Text = {
   stopped: "Stopped",
   noKeystore:
     "The system's keystore is not available, so the tailnet did not start. Unlock it (the Keychain on a Mac) and start Lazurio App again.",
+  keyInaccessible: {
+    lead: "Lazurio App cannot read the key of this tailnet, so the tailnet did not start. Delete nothing: check that the file is yours, that it can be read and that the disk works, then start Lazurio App again. This is the file:",
+  },
+  keyNotSaved: {
+    lead: "Lazurio App cannot save a new key for this tailnet, so the tailnet did not start. Check that its folder can be written and that the disk has space, then start Lazurio App again. The key belongs in this file:",
+  },
   keyUnreadable: {
-    lead: "The key of this tailnet does not open, so the tailnet did not start. Quit Lazurio App, delete this file and this folder, and start the app again:",
+    lead: "The system's keystore does not open the key of this tailnet, so the tailnet did not start. If the system asked to unlock its keystore, allow it and start Lazurio App again. If the key still does not open, quit Lazurio App, delete this file and this folder, and start the app again:",
     after:
       "The computer then signs in to the tailnet again and waits for approval as a new device.",
   },

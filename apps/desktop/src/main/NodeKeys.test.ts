@@ -165,6 +165,13 @@ describe("stateKey", () => {
           stateKey({ keystore: fakeKeystore(), path: foreign, allowWithoutKeystore: false }),
         );
         assert.strictEqual(unopened.reason, "key-unreadable");
+        // A key file that cannot be read is no key that does not open: a person can repair it.
+        const directoryKey = path.join(directory, "directory.key");
+        yield* fileSystem.makeDirectory(directoryKey);
+        const inaccessible = yield* Effect.flip(
+          stateKey({ keystore: fakeKeystore(), path: directoryKey, allowWithoutKeystore: false }),
+        );
+        assert.strictEqual(inaccessible.reason, "key-inaccessible");
         const unsealed = yield* Effect.flip(
           stateKey({
             keystore: fakeKeystore({
