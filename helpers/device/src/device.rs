@@ -2,14 +2,16 @@
 //!
 //! This step answers every request of the package and checks it, so that the main process can be
 //! built against the protocol. The attach channel itself, the lock of one agent and the history
-//! come with the core in the next step; until then `StartChannel` is refused with
-//! `not_implemented` after its checks, no agent can hold the computer, and the history is empty.
+//! come with the core in the next step; until then `StartChannel`, which arrives decoded apart
+//! with its secrets in self-wiping types (`secret_start`), is refused with `not_implemented` after
+//! its checks, no agent can hold the computer, and the history is empty.
 
 use crate::lazurio::app::device::v1::{
     ChannelState, ConfigureDevice, DeviceReady, HistoryPage, HoldForUpdate, ListHistory, LockState,
-    Off, StartChannel, StopChannel, channel_state,
+    Off, StopChannel, channel_state,
 };
 use crate::lazurio::app::helper::v1::{Failure, app_message, helper_message};
+use crate::secret_start::StartRequest;
 
 /// The newest version of contract v1 of the attach session this helper speaks.
 pub const CONTRACT_VERSION: u32 = 1;
@@ -37,7 +39,10 @@ impl Device {
     pub fn answer(&mut self, kind: &app_message::Kind) -> Option<helper_message::Kind> {
         let answer = match kind {
             app_message::Kind::ConfigureDevice(request) => self.configure(request),
-            app_message::Kind::StartChannel(request) => self.start_channel(request),
+            // StartChannel carries secrets and is decoded apart (`secret_start`), never by prost.
+            app_message::Kind::StartChannel(_) => Err(invalid(
+                "StartChannel is decoded apart from the other requests",
+            )),
             app_message::Kind::StopChannel(request) => self.stop_channel(request),
             app_message::Kind::StopAgent(_) => self.configured().map(|()| self.lock_state()),
             app_message::Kind::HoldForUpdate(request) => self.hold_for_update(*request),
@@ -65,7 +70,13 @@ impl Device {
         }))
     }
 
-    fn start_channel(&self, request: &StartChannel) -> Result<helper_message::Kind, Failure> {
+    /// Answers a `StartChannel`, read apart from the other requests (`secret_start`).
+    pub fn start_channel(&self, request: &StartRequest) -> helper_message::Kind {
+        self.check_start(request)
+            .unwrap_or_else(helper_message::Kind::Failure)
+    }
+
+    fn check_start(&self, request: &StartRequest) -> Result<helper_message::Kind, Failure> {
         self.configured()?;
         check_environment_id(&request.environment_id)?;
         check_attach_url(&request.attach_url)?;
@@ -164,7 +175,9 @@ fn check_attach_url(url: &str) -> Result<(), Failure> {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::lazurio::app::device::v1::{StopAgent, TailnetProxy};
+    use crate::lazurio::app::device::v1::StopAgent;
+    use crate::secret_start::ProxyRequest;
+    use zeroize::Zeroizing;
 
     fn configured() -> Device {
         let mut device = Device::default();
@@ -185,14 +198,23 @@ mod tests {
         device
     }
 
-    fn start(attach_url: &str, key_seed: Vec<u8>, proxy: Option<TailnetProxy>) -> StartChannel {
-        StartChannel {
+    fn start(attach_url: &str, key_seed: Vec<u8>, proxy: Option<ProxyRequest>) -> StartRequest {
+        StartRequest {
             environment_id: "env-a".to_owned(),
             environment_label: "Environment A".to_owned(),
             attach_url: attach_url.to_owned(),
             device_id: "work-laptop".to_owned(),
-            key_seed,
+            key_seed: Zeroizing::new(key_seed),
             proxy,
+        }
+    }
+
+    fn proxy(host: &str, password: &str) -> ProxyRequest {
+        ProxyRequest {
+            host: host.to_owned(),
+            port: if host == "127.0.0.1" { 41_000 } else { 1080 },
+            username: Zeroizing::new("u".to_owned()),
+            password: Zeroizing::new(password.to_owned()),
         }
     }
 
@@ -208,8 +230,15 @@ mod tests {
     #[test]
     fn every_request_waits_for_configure_device() {
         let mut device = Device::default();
+        assert_eq!(
+            failure_code(Some(device.start_channel(&start(
+                ATTACH,
+                vec![7; 32],
+                None
+            )))),
+            "not_configured"
+        );
         for kind in [
-            app_message::Kind::StartChannel(start(ATTACH, vec![7; 32], None)),
             app_message::Kind::StopChannel(StopChannel {
                 environment_id: "env-a".to_owned(),
             }),
@@ -238,7 +267,7 @@ mod tests {
 
     #[test]
     fn start_channel_refuses_anything_but_the_attach_address_of_contract_v1() {
-        let mut device = configured();
+        let device = configured();
         for url in [
             "ws://launchpad.example.lazurio.io/.lazurio/computers/attach",
             "https://launchpad.example.lazurio.io/.lazurio/computers/attach",
@@ -249,65 +278,39 @@ mod tests {
             "wss://launchpad.example.lazurio.io/other",
             "wss:///.lazurio/computers/attach",
         ] {
-            let answer = device.answer(&app_message::Kind::StartChannel(start(
-                url,
-                vec![7; 32],
-                None,
-            )));
-            assert_eq!(failure_code(answer), "invalid_request", "{url}");
+            let answer = device.start_channel(&start(url, vec![7; 32], None));
+            assert_eq!(failure_code(Some(answer)), "invalid_request", "{url}");
         }
     }
 
     #[test]
     fn start_channel_needs_a_32_byte_seed_and_only_the_loopback_proxy() {
-        let mut device = configured();
-        let short = device.answer(&app_message::Kind::StartChannel(start(
-            ATTACH,
-            vec![7; 31],
-            None,
-        )));
-        assert_eq!(failure_code(short), "invalid_request");
-        let foreign_proxy = TailnetProxy {
-            host: "192.0.2.1".to_owned(),
-            port: 1080,
-            username: "u".to_owned(),
-            password: "p".to_owned(),
-        };
-        let foreign = device.answer(&app_message::Kind::StartChannel(start(
-            ATTACH,
-            vec![7; 32],
-            Some(foreign_proxy),
-        )));
-        assert_eq!(failure_code(foreign), "invalid_request");
-        let no_password = TailnetProxy {
-            host: "127.0.0.1".to_owned(),
-            port: 41_000,
-            username: "u".to_owned(),
-            password: String::new(),
-        };
-        let unprotected = device.answer(&app_message::Kind::StartChannel(start(
-            ATTACH,
-            vec![7; 32],
-            Some(no_password),
-        )));
-        assert_eq!(failure_code(unprotected), "invalid_request");
+        let device = configured();
+        let short = device.start_channel(&start(ATTACH, vec![7; 31], None));
+        assert_eq!(failure_code(Some(short)), "invalid_request");
+        let foreign =
+            device.start_channel(&start(ATTACH, vec![7; 32], Some(proxy("192.0.2.1", "p"))));
+        assert_eq!(failure_code(Some(foreign)), "invalid_request");
+        let unprotected =
+            device.start_channel(&start(ATTACH, vec![7; 32], Some(proxy("127.0.0.1", ""))));
+        assert_eq!(failure_code(Some(unprotected)), "invalid_request");
     }
 
     #[test]
     fn a_valid_start_channel_is_refused_until_the_channel_exists() {
+        let device = configured();
+        let answer =
+            device.start_channel(&start(ATTACH, vec![7; 32], Some(proxy("127.0.0.1", "p"))));
+        assert_eq!(failure_code(Some(answer)), "not_implemented");
+    }
+
+    #[test]
+    fn a_start_channel_decoded_by_prost_is_never_served() {
         let mut device = configured();
-        let proxy = TailnetProxy {
-            host: "127.0.0.1".to_owned(),
-            port: 41_000,
-            username: "u".to_owned(),
-            password: "p".to_owned(),
-        };
-        let answer = device.answer(&app_message::Kind::StartChannel(start(
-            ATTACH,
-            vec![7; 32],
-            Some(proxy),
-        )));
-        assert_eq!(failure_code(answer), "not_implemented");
+        let answer = device.answer(&app_message::Kind::StartChannel(
+            crate::lazurio::app::device::v1::StartChannel::default(),
+        ));
+        assert_eq!(failure_code(answer), "invalid_request");
     }
 
     #[test]

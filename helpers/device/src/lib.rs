@@ -6,7 +6,7 @@
 use std::io::{self, Read, Write};
 
 use prost::Message;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 /// The code generated from `proto/`, in modules that follow its packages.
 #[allow(clippy::all, clippy::pedantic)]
@@ -31,6 +31,7 @@ pub mod lazurio {
 }
 
 pub mod device;
+pub mod secret_start;
 
 use lazurio::app::helper::v1::{
     AppMessage, Failure, Hello, HelperMessage, Pong, app_message, helper_message,
@@ -71,54 +72,54 @@ pub fn serve<R: Read, W: Write>(
 
     let mut device = device::Device::default();
     while let Some(frame) = read_frame(input)? {
-        // The frame and the decoded message are wiped when they go out of scope, on every path:
-        // a request carries the Device's key and the tailnet proxy's credentials (ADR 0006).
-        let mut message = Wiped(AppMessage::default());
-        message
-            .0
-            .merge(frame.as_slice())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let kind = match &message.0.kind {
-            Some(app_message::Kind::Ping(ping)) => helper_message::Kind::Pong(Pong {
-                nonce: ping.nonce.clone(),
-            }),
-            Some(app_message::Kind::Shutdown(_)) => return Ok(()),
-            // This helper serves no other helper's work, such as the tailnet's.
-            Some(kind) => device.answer(kind).unwrap_or_else(unknown_request),
-            None => unknown_request(),
+        // The frame is wiped when it goes out of scope. StartChannel, the one request with
+        // secrets, never goes through prost (`secret_start`).
+        let request_id;
+        let kind = match secret_start::scan(&frame)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.0))?
+        {
+            secret_start::Scanned::Start {
+                request_id: id,
+                request,
+            } => {
+                request_id = id;
+                device.start_channel(&request)
+            }
+            secret_start::Scanned::Refused {
+                request_id: id,
+                reason,
+            } => {
+                request_id = id;
+                helper_message::Kind::Failure(Failure {
+                    code: "invalid_request".to_owned(),
+                    message: reason.to_owned(),
+                })
+            }
+            secret_start::Scanned::Other => {
+                let message = AppMessage::decode(frame.as_slice())
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                request_id = message.request_id;
+                match message.kind {
+                    Some(app_message::Kind::Ping(ping)) => {
+                        helper_message::Kind::Pong(Pong { nonce: ping.nonce })
+                    }
+                    Some(app_message::Kind::Shutdown(_)) => return Ok(()),
+                    // This helper serves no other helper's work, such as the tailnet's.
+                    Some(kind) => device.answer(&kind).unwrap_or_else(unknown_request),
+                    None => unknown_request(),
+                }
+            }
         };
         send(
             output,
             &HelperMessage {
-                request_id: message.0.request_id,
+                request_id,
                 kind: Some(kind),
             },
         )?;
     }
     Ok(())
 }
-
-/// A decoded request whose secrets are wiped when it is dropped.
-struct Wiped(AppMessage);
-
-impl Drop for Wiped {
-    fn drop(&mut self) {
-        wipe_secrets(&mut self.0);
-    }
-}
-
-/// Overwrites the secrets a request carries: the Device's key and the tailnet proxy's
-/// credentials of `StartChannel`.
-fn wipe_secrets(message: &mut AppMessage) {
-    if let Some(app_message::Kind::StartChannel(start)) = &mut message.kind {
-        start.key_seed.zeroize();
-        if let Some(proxy) = &mut start.proxy {
-            proxy.username.zeroize();
-            proxy.password.zeroize();
-        }
-    }
-}
-
 fn unknown_request() -> helper_message::Kind {
     helper_message::Kind::Failure(Failure {
         code: "unknown_request".to_owned(),
@@ -284,35 +285,6 @@ mod tests {
                 contract_version: 1
             }))
         );
-    }
-
-    #[test]
-    fn wipes_the_key_and_the_proxy_credentials_of_a_start_channel() {
-        use super::lazurio::app::device::v1::{StartChannel, TailnetProxy};
-        let mut message = AppMessage {
-            request_id: 5,
-            kind: Some(app_message::Kind::StartChannel(StartChannel {
-                environment_id: "env-a".to_owned(),
-                key_seed: vec![7; 32],
-                proxy: Some(TailnetProxy {
-                    host: "127.0.0.1".to_owned(),
-                    port: 41_000,
-                    username: "user".to_owned(),
-                    password: "secret".to_owned(),
-                }),
-                ..StartChannel::default()
-            })),
-        };
-
-        wipe_secrets(&mut message);
-
-        let Some(app_message::Kind::StartChannel(start)) = message.kind else {
-            panic!("still a StartChannel");
-        };
-        assert!(start.key_seed.is_empty(), "the key is wiped");
-        let proxy = start.proxy.expect("the proxy stays");
-        assert!(proxy.username.is_empty() && proxy.password.is_empty());
-        assert_eq!(start.environment_id, "env-a", "nothing else is touched");
     }
 
     #[test]
