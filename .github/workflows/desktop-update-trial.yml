@@ -82,6 +82,46 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      # AppImages mount through FUSE 2; Electron's sandbox needs unprivileged user namespaces.
+      - name: FUSE, Xvfb and the operating system sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2t64 xvfb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers --release
+      - run: pnpm --filter @lazurio/app-desktop build
+      - name: Package N and N+1
+        working-directory: apps/desktop
+        run: |
+          for version in 0.0.1 0.0.2; do
+            pnpm exec electron-builder --linux AppImage --x64 --publish never \
+              -c.extraMetadata.version="$version" \
+              -c.directories.output="trial/out/$version" \
+              -c.appImage.artifactName=Lazurio-App.AppImage \
+              -c.publish.provider=generic \
+              -c.publish.url=http://127.0.0.1:47123/
+          done
+      - name: Update from N to N+1
+        working-directory: apps/desktop/trial
+        run: ./update-trial.sh out/0.0.1/Lazurio-App.AppImage "$PWD/out/0.0.2"
+
   # The Mac gets a trial build of N only: without a Developer ID, Squirrel.Mac never installs an
   # update (docs/adr/0005, point 7), so a person installs and starts it by hand.
   macos:

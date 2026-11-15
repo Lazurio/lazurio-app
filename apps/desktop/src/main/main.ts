@@ -238,6 +238,21 @@ const program = Effect.gen(function* () {
       Electron.app.off("window-all-closed", listener);
     });
   });
+  // SIGTERM (a session that logs out on Linux or macOS, or the update test) closes the windows as a
+  // person does, so that the app ends the same way and a downloaded update installs.
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const closeWindows = () => {
+        for (const window of Electron.BrowserWindow.getAllWindows()) window.close();
+      };
+      process.once("SIGTERM", closeWindows);
+      return closeWindows;
+    }),
+    (closeWindows) =>
+      Effect.sync(() => {
+        process.off("SIGTERM", closeWindows);
+      }),
+  );
   yield* Effect.raceFirst(
     MainWindow.open({
       preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),

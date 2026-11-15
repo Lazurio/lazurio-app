@@ -4,7 +4,10 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
-import { autoUpdater } from "electron-updater";
+import * as Electron from "electron";
+import { autoUpdater, BaseUpdater } from "electron-updater";
+
+import { installThenQuit } from "./UpdateInstall.ts";
 
 // electron-updater's autoUpdater as an Effect service, so that the updater (Updates.ts) runs against
 // a fake in its tests. The shape follows the fork's ElectronUpdater (Lazurio/t3code,
@@ -97,6 +100,19 @@ const make = ElectronUpdater.of({
     readonly isSilent: boolean;
     readonly isForceRunAfter: boolean;
   }) {
+    // NSIS and AppImage: install says whether the installer started (UpdateInstall.ts). The app
+    // quits as electron-updater's quitAndInstall does, only after a start.
+    if (autoUpdater instanceof BaseUpdater) {
+      const updater = autoUpdater;
+      yield* installThenQuit(updater, options, () => {
+        Electron.autoUpdater.emit("before-quit-for-update");
+        Electron.app.quit();
+      }).pipe(
+        Effect.mapError((cause) => new ElectronUpdaterError({ operation: "install", cause })),
+      );
+      return;
+    }
+    // Squirrel.Mac, once the app is signed: its failures arrive as `error`.
     yield* Effect.try({
       try: () => autoUpdater.quitAndInstall(options.isSilent, options.isForceRunAfter),
       catch: (cause) => new ElectronUpdaterError({ operation: "install", cause }),
