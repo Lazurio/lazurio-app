@@ -1,7 +1,7 @@
 # The update test from build N to N+1 on Windows (docs/adr/0005, point 9), and the trial builds a
 # person tries by hand. Both builds come from the same commit, as 0.0.1 (N) and 0.0.2 (N+1), with
-# their update feed baked in at packaging on the loopback (http://127.0.0.1:47123/), where
-# trial/serve-feed.ps1 serves N+1. Nothing is published: the builds are this run's artifacts.
+# their update feed baked in at packaging on the loopback (trial/electron-builder.trial.yml), where
+# a local server serves N+1. Nothing is published: the builds are this run's artifacts.
 name: Desktop update trial
 
 on:
@@ -52,11 +52,10 @@ jobs:
         working-directory: apps/desktop
         run: |
           foreach ($version in '0.0.1', '0.0.2') {
-            pnpm exec electron-builder --win nsis --x64 --publish never `
+            pnpm exec electron-builder --config trial/electron-builder.trial.yml `
+              --win nsis --x64 --publish never `
               "-c.extraMetadata.version=$version" `
               "-c.directories.output=trial/out/$version" `
-              "-c.publish.provider=generic" `
-              "-c.publish.url=http://127.0.0.1:47123/" `
               "-c.nsis.differentialPackage=false"
             if ($LASTEXITCODE -ne 0) { throw "Packaging $version failed." }
           }
@@ -111,12 +110,11 @@ jobs:
         working-directory: apps/desktop
         run: |
           for version in 0.0.1 0.0.2; do
-            pnpm exec electron-builder --linux AppImage --x64 --publish never \
+            pnpm exec electron-builder --config trial/electron-builder.trial.yml \
+              --linux AppImage --x64 --publish never \
               -c.extraMetadata.version="$version" \
               -c.directories.output="trial/out/$version" \
-              -c.appImage.artifactName=Lazurio-App.AppImage \
-              -c.publish.provider=generic \
-              -c.publish.url=http://127.0.0.1:47123/
+              -c.appImage.artifactName=Lazurio-App.AppImage
           done
       - name: Update from N to N+1
         working-directory: apps/desktop/trial
@@ -148,11 +146,10 @@ jobs:
       - name: Package N
         working-directory: apps/desktop
         run: |
-          pnpm exec electron-builder --mac zip --arm64 --publish never \
+          pnpm exec electron-builder --config trial/electron-builder.trial.yml \
+            --mac zip --arm64 --publish never \
             -c.extraMetadata.version=0.0.1 \
-            -c.directories.output=trial/out/0.0.1 \
-            -c.publish.provider=generic \
-            -c.publish.url=http://127.0.0.1:47123/
+            -c.directories.output=trial/out/0.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: lazurio-app-macos-trial

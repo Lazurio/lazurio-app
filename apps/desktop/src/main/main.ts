@@ -238,19 +238,23 @@ const program = Effect.gen(function* () {
       Electron.app.off("window-all-closed", listener);
     });
   });
-  // SIGTERM (a session that logs out on Linux or macOS, or the update test) closes the windows as a
-  // person does, so that the app ends the same way and a downloaded update installs.
+  // Quitting the app another way than closing its windows (Cmd+Q on a Mac, SIGTERM from a session
+  // that logs out, or the update test on Linux) installs a downloaded update first. Electron emits
+  // before-quit again when the install quits, and the updater is then no longer ready.
+  const services = yield* Effect.context<never>();
   yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const closeWindows = () => {
-        for (const window of Electron.BrowserWindow.getAllWindows()) window.close();
+      const installFirst = (event: Electron.Event) => {
+        if (updates.current().state.phase !== "ready") return;
+        event.preventDefault();
+        Effect.runForkWith(services)(updates.install);
       };
-      process.once("SIGTERM", closeWindows);
-      return closeWindows;
+      Electron.app.on("before-quit", installFirst);
+      return installFirst;
     }),
-    (closeWindows) =>
+    (installFirst) =>
       Effect.sync(() => {
-        process.off("SIGTERM", closeWindows);
+        Electron.app.off("before-quit", installFirst);
       }),
   );
   yield* Effect.raceFirst(

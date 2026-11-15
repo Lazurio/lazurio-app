@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The update test from build N to N+1 on Linux (docs/adr/0005, point 9), with AppImages. It starts
-# N, waits until N has downloaded N+1 from the loopback feed, sends SIGTERM to N's main process
-# (which closes the windows as a person does, main.ts), and waits until the AppImage file is N+1.
-# The marker in the data folder must survive. It stops only the processes it started, by PID.
+# N, waits until N has downloaded N+1 from the loopback feed, and sends SIGTERM to N's main process:
+# Electron quits the app, which installs the downloaded update first (main.ts, before-quit). It
+# then waits until the AppImage file is N+1. The marker in the data folder must survive. It stops
+# only the processes it started, by PID.
 #
 #   update-trial.sh <AppImage of N> <folder with latest-linux.yml and the AppImage of N+1>
 set -euo pipefail
