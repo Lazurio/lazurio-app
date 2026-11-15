@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -79,6 +80,9 @@ func validateStart(request *tailnetv1.StartNode) error {
 	if len(request.GetDomains()) == 0 {
 		return errors.New("a node needs at least one domain of its Environments")
 	}
+	if len(request.GetStateKey()) != stateKeySize {
+		return fmt.Errorf("a node needs its %d-byte state key, and never keeps its state in the clear", stateKeySize)
+	}
 	for _, domain := range request.GetDomains() {
 		if normalized := normalizeDomain(domain); normalized == "" || !strings.Contains(normalized, ".") {
 			return fmt.Errorf("%q is not a DNS suffix", domain)
@@ -113,8 +117,16 @@ func (n *Nodes) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, func(
 		}
 	}
 	logger := n.logger.With("tailnet", request.GetTailnet())
+	if err := os.MkdirAll(request.GetStateDirectory(), 0o700); err != nil {
+		return nil, nil, fmt.Errorf("make the state directory: %w", err)
+	}
+	store, err := openSealedStore(request.GetStateDirectory(), request.GetStateKey())
+	if err != nil {
+		return nil, nil, fmt.Errorf("open the node's sealed state: %w", err)
+	}
 	server := &tsnet.Server{
 		Dir:        request.GetStateDirectory(),
+		Store:      store,
 		Hostname:   request.GetHostname(),
 		ControlURL: request.GetControlUrl(),
 		Logf:       tsnetLogf(logger, slog.LevelDebug),

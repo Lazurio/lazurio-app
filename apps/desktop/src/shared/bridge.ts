@@ -19,7 +19,22 @@ export type TailnetStatus =
       readonly state: "running";
       readonly addresses: ReadonlyArray<string>;
     }
-  | { readonly tailnet: string; readonly state: "stopped"; readonly problem: string };
+  | {
+      readonly tailnet: string;
+      readonly state: "stopped";
+      readonly problem: string;
+      // Why the node did not start, when the person can do something about it (ADR 0003).
+      readonly reason?: TailnetStopReason;
+      // The node's key file and state directory, which the window names in its advice.
+      readonly files?: { readonly keyFile: string; readonly stateDirectory: string };
+    };
+
+type TailnetStopReason =
+  | "no-keystore"
+  | "key-inaccessible"
+  | "key-not-saved"
+  | "key-unreadable"
+  | "state-unreadable";
 
 export interface AppStatus {
   readonly appVersion: string;

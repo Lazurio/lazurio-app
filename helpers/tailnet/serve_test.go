@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protodelim"
@@ -23,6 +24,9 @@ func (f *fakeTailnets) Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState
 	f.started = append(f.started, request)
 	if request.GetTailnet() == "broken" {
 		return nil, nil, errors.New("no such tailnet")
+	}
+	if request.GetTailnet() == "sealed-elsewhere" {
+		return nil, nil, fmt.Errorf("open the node's sealed state: %w", errStateUnreadable)
 	}
 	begin := func() {
 		if f.out == nil {
@@ -129,4 +133,15 @@ func TestServeStartsNodesAndReportsWhatFails(t *testing.T) {
 
 func TestServeEndsQuietlyWhenTheAppClosesItsInput(t *testing.T) {
 	expect(t, runServe(t, nil, &fakeTailnets{}), []*helperv1.HelperMessage{hello, endpoint})
+}
+
+func TestServeNamesAStartWhoseSealedStateDoesNotOpen(t *testing.T) {
+	replies := runServe(t, []*helperv1.AppMessage{
+		{RequestId: 3, Kind: &helperv1.AppMessage_StartNode{StartNode: &tailnetv1.StartNode{Tailnet: "sealed-elsewhere"}}},
+	}, &fakeTailnets{})
+	expect(t, replies, []*helperv1.HelperMessage{
+		hello,
+		endpoint,
+		failure(3, failureStateUnreadable, "open the node's sealed state: the sealed state does not open with this state key"),
+	})
 }

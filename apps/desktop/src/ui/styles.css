@@ -64,9 +64,12 @@ body {
   list-style: none;
 }
 
+/* A row: the name, which wraps however long it is, and its state on the right. */
 .shell__helpers li {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0 12px;
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
   font-size: 14px;
@@ -85,10 +88,43 @@ body {
   font-size: 14px;
 }
 
-.shell__helpers li[data-state="running"] span:last-child {
+.shell__helpers li[data-state="running"] .shell__state {
   color: var(--ok);
 }
 
-.shell__helpers li[data-state="stopped"] span:last-child {
+.shell__helpers li[data-state="stopped"] .shell__state {
   color: var(--problem);
+}
+
+.shell__helpers li > span:first-child {
+  overflow-wrap: anywhere;
+}
+
+/* What a person can do about a stopped tailnet: on its own line below the row. */
+.shell__reason {
+  grid-column: 1 / -1;
+  max-width: 72ch;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.shell__reason p {
+  margin: 0 0 6px;
+  text-wrap: pretty;
+}
+
+/* A file to delete, whole on its own line; one click selects it for copying. */
+.shell__file {
+  display: block;
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--line);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: all;
 }

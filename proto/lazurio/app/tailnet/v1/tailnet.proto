@@ -25,6 +25,11 @@ message StartNode {
   // The DNS suffixes of the tailnet's Environments. The proxy sends a name ending in one of them
   // to this node and no other name.
   repeated string domains = 5;
+
+  // The 32-byte key that seals the node's state at rest (AES-256-GCM). The app keeps it only
+  // sealed by the system's keystore and gives it to the helper here; a node without it does not
+  // start, and the helper never writes the state in the clear (ADR 0003).
+  bytes state_key = 6;
 }
 
 // The state of one node.

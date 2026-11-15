@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file lazurio/app/tailnet/v1/tailnet.proto.
  */
 export const file_lazurio_app_tailnet_v1_tailnet: GenFile = /*@__PURE__*/
-  fileDesc("CiRsYXp1cmlvL2FwcC90YWlsbmV0L3YxL3RhaWxuZXQucHJvdG8SFmxhenVyaW8uYXBwLnRhaWxuZXQudjEibQoJU3RhcnROb2RlEg8KB3RhaWxuZXQYASABKAkSEwoLY29udHJvbF91cmwYAiABKAkSEAoIaG9zdG5hbWUYAyABKAkSFwoPc3RhdGVfZGlyZWN0b3J5GAQgASgJEg8KB2RvbWFpbnMYBSADKAki/gEKCU5vZGVTdGF0ZRIPCgd0YWlsbmV0GAEgASgJEjQKCHN0YXJ0aW5nGAIgASgLMiAubGF6dXJpby5hcHAudGFpbG5ldC52MS5TdGFydGluZ0gAEjkKC25lZWRzX2xvZ2luGAMgASgLMiIubGF6dXJpby5hcHAudGFpbG5ldC52MS5OZWVkc0xvZ2luSAASMgoHcnVubmluZxgEIAEoCzIfLmxhenVyaW8uYXBwLnRhaWxuZXQudjEuUnVubmluZ0gAEjIKB3N0b3BwZWQYBSABKAsyHy5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLlN0b3BwZWRIAEIHCgVzdGF0ZSIKCghTdGFydGluZyIfCgpOZWVkc0xvZ2luEhEKCWxvZ2luX3VybBgBIAEoCSIcCgdSdW5uaW5nEhEKCWFkZHJlc3NlcxgBIAMoCSIZCgdTdG9wcGVkEg4KBnJlYXNvbhgBIAEoCSJPCg1Qcm94eUVuZHBvaW50EgwKBGhvc3QYASABKAkSDAoEcG9ydBgCIAEoDRIQCgh1c2VybmFtZRgDIAEoCRIQCghwYXNzd29yZBgEIAEoCUJVWlNnaXRodWIuY29tL0xhenVyaW8vbGF6dXJpby1hcHAvaGVscGVycy90YWlsbmV0L2dlbi9sYXp1cmlvL2FwcC90YWlsbmV0L3YxO3RhaWxuZXR2MWIGcHJvdG8z");
+  fileDesc("CiRsYXp1cmlvL2FwcC90YWlsbmV0L3YxL3RhaWxuZXQucHJvdG8SFmxhenVyaW8uYXBwLnRhaWxuZXQudjEigAEKCVN0YXJ0Tm9kZRIPCgd0YWlsbmV0GAEgASgJEhMKC2NvbnRyb2xfdXJsGAIgASgJEhAKCGhvc3RuYW1lGAMgASgJEhcKD3N0YXRlX2RpcmVjdG9yeRgEIAEoCRIPCgdkb21haW5zGAUgAygJEhEKCXN0YXRlX2tleRgGIAEoDCL+AQoJTm9kZVN0YXRlEg8KB3RhaWxuZXQYASABKAkSNAoIc3RhcnRpbmcYAiABKAsyIC5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLlN0YXJ0aW5nSAASOQoLbmVlZHNfbG9naW4YAyABKAsyIi5sYXp1cmlvLmFwcC50YWlsbmV0LnYxLk5lZWRzTG9naW5IABIyCgdydW5uaW5nGAQgASgLMh8ubGF6dXJpby5hcHAudGFpbG5ldC52MS5SdW5uaW5nSAASMgoHc3RvcHBlZBgFIAEoCzIfLmxhenVyaW8uYXBwLnRhaWxuZXQudjEuU3RvcHBlZEgAQgcKBXN0YXRlIgoKCFN0YXJ0aW5nIh8KCk5lZWRzTG9naW4SEQoJbG9naW5fdXJsGAEgASgJIhwKB1J1bm5pbmcSEQoJYWRkcmVzc2VzGAEgAygJIhkKB1N0b3BwZWQSDgoGcmVhc29uGAEgASgJIk8KDVByb3h5RW5kcG9pbnQSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgNEhAKCHVzZXJuYW1lGAMgASgJEhAKCHBhc3N3b3JkGAQgASgJQlVaU2dpdGh1Yi5jb20vTGF6dXJpby9sYXp1cmlvLWFwcC9oZWxwZXJzL3RhaWxuZXQvZ2VuL2xhenVyaW8vYXBwL3RhaWxuZXQvdjE7dGFpbG5ldHYxYgZwcm90bzM");
 
 /**
  * Starts the node of one tailnet. The helper answers with the node's state at once, and sends
@@ -58,6 +58,15 @@ export type StartNode = Message<"lazurio.app.tailnet.v1.StartNode"> & {
    * @generated from field: repeated string domains = 5;
    */
   domains: string[];
+
+  /**
+   * The 32-byte key that seals the node's state at rest (AES-256-GCM). The app keeps it only
+   * sealed by the system's keystore and gives it to the helper here; a node without it does not
+   * start, and the helper never writes the state in the clear (ADR 0003).
+   *
+   * @generated from field: bytes state_key = 6;
+   */
+  stateKey: Uint8Array;
 };
 
 /**

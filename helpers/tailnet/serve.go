@@ -43,6 +43,9 @@ type TailnetService interface {
 	Start(request *tailnetv1.StartNode) (*tailnetv1.NodeState, func(), error)
 }
 
+// failureStateUnreadable answers a start whose node's sealed state does not open with its key.
+const failureStateUnreadable = "state_unreadable"
+
 func failure(requestID uint64, code, message string) *helperv1.HelperMessage {
 	return &helperv1.HelperMessage{
 		RequestId: requestID,
@@ -97,9 +100,12 @@ func serve(
 			return nil
 		case *helperv1.AppMessage_StartNode:
 			state, begin, err := tailnets.Start(kind.StartNode)
-			if err != nil {
+			switch {
+			case errors.Is(err, errStateUnreadable):
+				reply = failure(message.GetRequestId(), failureStateUnreadable, err.Error())
+			case err != nil:
 				reply = failure(message.GetRequestId(), "start_node_failed", err.Error())
-			} else {
+			default:
 				reply = &helperv1.HelperMessage{
 					RequestId: message.GetRequestId(),
 					Kind:      &helperv1.HelperMessage_NodeState{NodeState: state},

@@ -5,6 +5,7 @@ import {
   type ProxyEndpoint,
 } from "@lazurio/app-contracts/tailnet/v1";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -15,6 +16,8 @@ import * as Electron from "electron";
 import type { TailnetStatus } from "../shared/bridge.ts";
 import type { NavigationObserver } from "./Hardening.ts";
 import type { HelperConnection } from "./Helpers.ts";
+import type { NodeKeyError } from "./NodeKeys.ts";
+import { stoppedForFailure, stoppedForKey } from "./StoppedTailnet.ts";
 
 // The app's side of the tailnet helper (decision 0248): it starts one node per tailnet, gives the
 // remote views a PAC script that sends only the tailnets' names to the helper's proxy, answers the
@@ -175,6 +178,9 @@ export interface TailnetOptions {
   readonly session: Electron.Session;
   readonly observer: NavigationObserver;
   readonly stateRoot: string;
+  // The node's state key from its sealed file, kept only sealed by the system's keystore
+  // (NodeKeys, ADR 0003).
+  readonly stateKeyOf: (keyFile: string) => Effect.Effect<Uint8Array, NodeKeyError>;
 }
 
 export interface Tailnets {
@@ -244,25 +250,47 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
     Effect.forkScoped,
   );
 
+  const fileSystem = yield* FileSystem.FileSystem;
+  yield* fileSystem
+    .makeDirectory(options.stateRoot, { recursive: true, mode: 0o700 })
+    .pipe(
+      Effect.mapError(
+        () => new TailnetError({ problem: "the tailnets' state directory cannot be made" }),
+      ),
+    );
   for (const tailnet of options.tailnets) {
+    const stateDirectory = path.join(options.stateRoot, tailnet.tailnet);
+    // The node's files, which the window names when the node does not start (ADR 0003).
+    const files = {
+      keyFile: path.join(options.stateRoot, `${tailnet.tailnet}.key`),
+      stateDirectory,
+    };
+    // A node whose key the keystore does not give starts nowhere, and says why.
+    const key = yield* options.stateKeyOf(files.keyFile).pipe(
+      Effect.map((value) => ({ _tag: "Key" as const, value })),
+      Effect.catch((error) => Effect.succeed({ _tag: "NoKey" as const, error })),
+    );
+    if (key._tag === "NoKey") {
+      yield* change(afterReply(board, stoppedForKey(tailnet.tailnet, key.error, files)));
+      continue;
+    }
     const reply = yield* options.connection.request({
       case: "startNode",
       value: create(StartNodeSchema, {
         tailnet: tailnet.tailnet,
         controlUrl: tailnet.controlUrl,
         hostname: tailnet.hostname,
-        stateDirectory: path.join(options.stateRoot, tailnet.tailnet),
+        stateDirectory,
         domains: [...tailnet.domains],
+        stateKey: key.value,
       }),
     });
     const next: TailnetStatus =
       reply.kind.case === "nodeState"
         ? statusOf(reply.kind.value)
-        : {
-            tailnet: tailnet.tailnet,
-            state: "stopped",
-            problem: reply.kind.case === "failure" ? reply.kind.value.message : "no answer",
-          };
+        : reply.kind.case === "failure"
+          ? stoppedForFailure(tailnet.tailnet, reply.kind.value, files)
+          : { tailnet: tailnet.tailnet, state: "stopped", problem: "no answer" };
     yield* change(afterReply(board, next));
   }
 
