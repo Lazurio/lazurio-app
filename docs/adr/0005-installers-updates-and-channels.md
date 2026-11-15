@@ -1,7 +1,7 @@
 # 0005 — Installers, self-updates and the stable and nightly channels
 
-- **Status:** proposed
-- **Proposed:** 2026-11-15
+- **Status:** accepted
+- **Decided:** 2026-11-15 by Matěj Suchánek: two channels, nightly and stable, after T3 Code; Windows right away, the Mac on test builds until the Developer ID. The version numbers were decided by the coordinating thread on the recommendation of this ADR, as Matěj asked to be asked only about important choices ([#16](https://github.com/Lazurio/lazurio-app/pull/16#issuecomment-6900362821)).
 - **Related:**
   - decisions 0241 and 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md): one identity `io.lazurio.app`, the same signing identities and the same update channel for GEN4 and GEN5;
   - [ADR 0001](0001-technological-foundation.md) (Electron Fuses, supply chain, CI) and [ADR 0003](0003-node-state-sealed.md) (keys sealed by the system's keystore);
@@ -47,12 +47,12 @@ Three facts shape the design:
 - **Nightly runs on a schedule.** The workflow wakes up every 30 minutes (minutes 8 and 38, away from GitHub's busy minute zero) and releases only when `main` has commits since the last nightly and that nightly is at least six hours old. That is T3 Code's rule, which gives at most four nightlies a day and none on a quiet day.
 - **Stable is promoted by hand from nightly.** A manual run of the release workflow builds the commit of the latest published nightly, under that nightly's `X.Y.Z`. Stable therefore only ever ships what nightly users have already run. A stable version may be given by hand only to repeat a promotion.
 - **After a stable release** a pull request raises `apps/desktop/package.json` to the next version. The nightly workflow refuses to run while a stable release with the version in `package.json` exists, because its nightlies would sort below that stable.
-- **GEN4 stays below `1.0.0`; GEN5 starts at `1.0.0`** (proposed, for Matěj to confirm). The first release of GEN4 is `0.1.0`.
+- **GEN4 stays below `1.0.0`; GEN5 starts at `1.0.0`.** The first release of GEN4 is `0.1.0`.
 - **Publishing needs approval.** The jobs that create a release run in GitHub Environments:
-  - `lazurio-app-stable` requires an approval on every run;
-  - `lazurio-app-nightly` runs on its own once the first nightly was published with Matěj's go-ahead.
+  - `lazurio-app-stable` requires an approval on every run. Stable reaches everyone, so until Matěj says otherwise he is its approver: a stable release is a Publication that needs his go-ahead;
+  - `lazurio-app-nightly` runs on its own, after T3 Code, once the first nightly was published with Matěj's go-ahead.
 
-  Until then the schedule only checks and builds: the repository variable `LAZURIO_APP_NIGHTLY_PUBLISH` is off, and the publishing job is skipped. Turning it on is the Publication of nightly. The fork's `lazurio-release.yml` gates its releases the same way.
+  No version goes out before it was verified on real Macs and Windows PCs and Agent Desktop works in the app (plan LZD-0017). Until the first nightly, the schedule only checks and builds: the repository variable `LAZURIO_APP_NIGHTLY_PUBLISH` is off, and the publishing job is skipped. Turning it on is the Publication of nightly. The fork's `lazurio-release.yml` gates its releases the same way.
 
 - **Provenance.** Each release asset gets a GitHub build provenance attestation from the job that built it, from the exact commit the release names.
 
@@ -137,7 +137,7 @@ An update replaces the app's files and nothing else. Everything the person has l
   - `release-desktop.yml`: one system and architecture;
   - the update test.
 - `electron-builder.yml` gets the `dmg`, `zip` and `nsis` settings above and, for the test build, the local feed.
-- Until Lazurio's Apple Developer ID exists, the Mac is a testing platform: no self-update, and permissions asked again after each update. People who depend on Agent Desktop on a Mac should start on the first signed build.
+- **Windows ships right after its verification. Until Lazurio's Apple Developer ID exists, the Mac gets test builds only:** no self-update, and permissions asked again after each update. People who depend on Agent Desktop on a Mac start on the first signed build.
 
 ## Alternatives considered
 
