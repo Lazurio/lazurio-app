@@ -2,7 +2,8 @@
 # current user, leaves a marker in the app's data folder, starts N, waits for N's log line that the
 # update is ready, closes N's window the way a person does, and waits until N+1 is the installed
 # app and has opened the key N sealed with DPAPI (KeystoreCheck.ts). The marker must survive. It
-# stops only the processes it started, by their PIDs.
+# then uninstalls the app, which removes the updater's cache and keeps the data folder. It stops
+# only the processes it started, by their PIDs.
 param(
   [Parameter(Mandatory)] [string]$InstallerN,
   [Parameter(Mandatory)] [string]$Feed,
@@ -81,6 +82,23 @@ try {
 
   if (-not (Test-Path -LiteralPath $marker)) { throw 'The data folder lost its marker in the update.' }
   Write-Host 'The data folder kept its marker.'
+
+  # A real uninstall removes the app, its entry and the updater's cache, and keeps the data folder
+  # (build/installer.nsh). The uninstaller hands over to a copy of itself, so the test waits for
+  # its entry to go rather than for the process.
+  $cache = Join-Path $env:LOCALAPPDATA 'lazurio-app-updater'
+  # electron-updater may already have tidied it; the uninstall must remove whatever is there.
+  New-Item -ItemType Directory -Force -Path $cache | Out-Null
+  Set-Content -LiteralPath (Join-Path $cache 'update-trial-leftover.txt') -Value 'leftover'
+  $uninstall = Get-ChildItem -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
+    Get-ItemProperty | Where-Object { $_.DisplayName -like 'Lazurio App*' } | Select-Object -First 1
+  & cmd.exe /d /c $uninstall.QuietUninstallString | Write-Host
+  Wait-Until { -not (Get-ChildItem -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
+      Get-ItemProperty | Where-Object { $_.DisplayName -like 'Lazurio App*' }) } 'the uninstall entry is gone'
+  Wait-Until { -not (Test-Path -LiteralPath $exe) } 'the app is gone'
+  Wait-Until { -not (Test-Path -LiteralPath $cache) } "the updater's cache is gone"
+  if (-not (Test-Path -LiteralPath $marker)) { throw 'The uninstall removed the data folder.' }
+  Write-Host "The uninstall removed the app and the updater's cache and kept the data folder."
   Get-Content $log | Write-Host
 } finally {
   if (-not $server.HasExited) { Stop-Process -Id $server.Id }
