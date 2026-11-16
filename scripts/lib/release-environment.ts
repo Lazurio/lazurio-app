@@ -1,22 +1,36 @@
 // Whether a release Environment protects its publication (docs/adr/0005, point 3). GitHub creates
-// an unknown Environment without protection when a job names it, so the release workflow checks
-// first and fails closed: stable needs a required reviewer, and both channels a deployment policy.
+// an unknown Environment without protection when a job names it, and accepts the approval of any
+// one required reviewer, so the release workflow checks first and fails closed: stable needs the
+// stable approver as its only required reviewer, and both channels a deployment policy.
+
+interface EnvironmentReviewer {
+  readonly type: string;
+  readonly id: number;
+}
 
 export interface EnvironmentFacts {
   readonly exists: boolean;
-  readonly reviewers: number;
+  readonly reviewers: ReadonlyArray<EnvironmentReviewer>;
   readonly deploymentPolicy: boolean;
 }
 
 export const environmentProblem = (
   channel: "nightly" | "stable",
   facts: EnvironmentFacts,
+  // The GitHub user id whose go-ahead a stable release needs (Matěj's, until he says otherwise).
+  stableApprover: number,
 ): string | undefined => {
   const name = `lazurio-app-${channel}`;
   if (!facts.exists) return `the Environment ${name} does not exist`;
   if (!facts.deploymentPolicy) return `the Environment ${name} allows deployments from any ref`;
-  if (channel === "stable" && facts.reviewers === 0) {
-    return `the Environment ${name} has no required reviewer`;
+  if (channel === "stable") {
+    const onlyApprover =
+      facts.reviewers.length === 1 &&
+      facts.reviewers[0]?.type === "User" &&
+      facts.reviewers[0].id === stableApprover;
+    if (!onlyApprover) {
+      return `the Environment ${name} must have exactly one required reviewer, the user ${stableApprover}`;
+    }
   }
   return undefined;
 };

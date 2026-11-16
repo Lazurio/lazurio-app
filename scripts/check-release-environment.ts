@@ -18,7 +18,14 @@ const Environments = Schema.Struct({
       protection_rules: Schema.Array(
         Schema.Struct({
           type: Schema.String,
-          reviewers: Schema.optional(Schema.Array(Schema.Unknown)),
+          reviewers: Schema.optional(
+            Schema.Array(
+              Schema.Struct({
+                type: Schema.String,
+                reviewer: Schema.Struct({ id: Schema.Number }),
+              }),
+            ),
+          ),
         }),
       ),
       deployment_branch_policy: Schema.NullOr(Schema.Unknown),
@@ -40,6 +47,7 @@ const program = Effect.gen(function* () {
   const channel = yield* Config.Literals(["nightly", "stable"], "RELEASE_CHANNEL");
   const repository = yield* Config.String("GITHUB_REPOSITORY");
   const token = yield* Config.Redacted("GITHUB_TOKEN");
+  const stableApprover = yield* Config.Int("RELEASE_STABLE_APPROVER_ID");
   const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
   const listed = yield* client
     .execute(
@@ -56,14 +64,18 @@ const program = Effect.gen(function* () {
       Effect.flatMap(decodeEnvironments),
     );
   const environment = listed.environments.find((item) => item.name === `lazurio-app-${channel}`);
-  const problem = environmentProblem(channel, {
-    exists: environment !== undefined,
-    reviewers:
-      environment?.protection_rules
+  const problem = environmentProblem(
+    channel,
+    {
+      exists: environment !== undefined,
+      reviewers: (environment?.protection_rules ?? [])
         .filter((rule) => rule.type === "required_reviewers")
-        .reduce((count, rule) => count + (rule.reviewers?.length ?? 0), 0) ?? 0,
-    deploymentPolicy: environment?.deployment_branch_policy != null,
-  });
+        .flatMap((rule) => rule.reviewers ?? [])
+        .map((entry) => ({ type: entry.type, id: entry.reviewer.id })),
+      deploymentPolicy: environment?.deployment_branch_policy != null,
+    },
+    stableApprover,
+  );
   if (problem !== undefined) return yield* new UnprotectedEnvironment({ problem });
   yield* Effect.logInfo(`the Environment lazurio-app-${channel} protects the release`);
 });

@@ -76,6 +76,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - env:
           RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}
+          # Matěj (immakermatty) approves every stable release until he says otherwise (ADR 0005).
+          RELEASE_STABLE_APPROVER_ID: "16311043"
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/check-release-environment.ts
 
