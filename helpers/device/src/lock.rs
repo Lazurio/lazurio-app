@@ -349,6 +349,21 @@ mod tests {
 
     const LINGER: Duration = Duration::from_secs(20);
 
+    /// A child process started in one test thread inherits every descriptor of this process
+    /// until its `exec`, and `flock` belongs to the open file, so for that moment the child also
+    /// holds any device lock another test thread has taken (Lazurio/lazurio-app#29). Tests that
+    /// start a child take this exclusively; tests that take a device lock in this process take it
+    /// shared, so no child is ever started while they hold one.
+    static FORKS: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+    fn in_process() -> std::sync::RwLockReadGuard<'static, ()> {
+        FORKS.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn spawning() -> std::sync::RwLockWriteGuard<'static, ()> {
+        FORKS.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn lock_in(directory: &Path) -> DeviceLock {
         DeviceLock::with_linger(directory.join("agent.lock"), LINGER)
     }
@@ -363,6 +378,7 @@ mod tests {
 
     #[test]
     fn one_environment_at_a_time_and_the_hold_lasts_after_the_last_call() {
+        let _forks = in_process();
         let directory = scratch("hold");
         let mut lock = lock_in(&directory);
         let start = Instant::now();
@@ -390,6 +406,7 @@ mod tests {
 
     #[test]
     fn a_running_call_keeps_the_computer_however_long_it_runs() {
+        let _forks = in_process();
         let directory = scratch("running");
         let mut lock = lock_in(&directory);
         let start = Instant::now();
@@ -402,6 +419,7 @@ mod tests {
 
     #[test]
     fn the_updaters_hold_waits_for_the_agent_and_then_refuses_new_calls() {
+        let _forks = in_process();
         let directory = scratch("update");
         let mut lock = lock_in(&directory);
         let start = Instant::now();
@@ -426,6 +444,7 @@ mod tests {
 
     #[test]
     fn stop_releases_whoever_holds_the_computer() {
+        let _forks = in_process();
         let directory = scratch("stop");
         let mut lock = lock_in(&directory);
         let start = Instant::now();
@@ -436,6 +455,7 @@ mod tests {
 
     #[test]
     fn two_locks_on_one_file_exclude_each_other() {
+        let _forks = in_process();
         let directory = scratch("two");
         let mut first = lock_in(&directory);
         let mut second = lock_in(&directory);
@@ -499,6 +519,7 @@ mod tests {
 
     #[test]
     fn another_process_holding_the_device_lock_refuses_every_call_until_it_ends() {
+        let _forks = spawning();
         let directory = scratch("process");
         let path = directory.join("agent.lock");
         let mut child = spawn_child(&path);
@@ -516,6 +537,7 @@ mod tests {
 
     #[test]
     fn a_killed_process_releases_the_device_lock() {
+        let _forks = spawning();
         let directory = scratch("killed");
         let path = directory.join("agent.lock");
         let mut child = spawn_child(&path);
@@ -533,6 +555,7 @@ mod tests {
 
     #[test]
     fn while_this_process_holds_it_another_process_cannot_take_it() {
+        let _forks = spawning();
         let directory = scratch("reverse");
         let path = directory.join("agent.lock");
         let mut lock = DeviceLock::new(path.clone());
@@ -552,6 +575,7 @@ mod tests {
 
     #[test]
     fn a_quiet_app_releases_the_device_lock_at_the_deadline_for_another_process() {
+        let _forks = spawning();
         let directory = scratch("deadline");
         let path = directory.join("agent.lock");
         let (expired, released) = std::sync::mpsc::channel();
@@ -591,6 +615,7 @@ mod tests {
 
     #[test]
     fn a_running_call_is_never_expired_by_the_thread() {
+        let _forks = in_process();
         let directory = scratch("no-expiry");
         let (expired, released) = std::sync::mpsc::channel::<String>();
         let shared = SharedLock::new(
