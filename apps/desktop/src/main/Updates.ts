@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -172,21 +173,20 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
     });
 
   // One install at a time: every call while it runs waits for the same attempt, so a second quit or
-  // a closed window never ends the app before the install is safe or has failed.
+  // a closed window never ends the app before the install is safe or has failed. Starting an
+  // install and changing the channel take turns (transitions), so neither overwrites the other.
+  const transitions = Semaphore.makeUnsafe(1);
   let attempt: Option.Option<Deferred.Deferred<boolean>> = Option.none();
-  const attemptInstall = (version: string) =>
-    setState({ phase: "installing", version }).pipe(
-      Effect.andThen(
-        Effect.scoped(
-          Effect.gen(function* () {
-            yield* holdComputer(activity);
-            yield* options.stopHelpers;
-            yield* updater.install({ isSilent: true, isForceRunAfter: true });
-            yield* setState({ phase: "restarting", version });
-            yield* updater.quitForUpdate;
-          }),
-        ),
-      ),
+  const runInstall = (version: string) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* holdComputer(activity);
+        yield* options.stopHelpers;
+        yield* updater.install({ isSilent: true, isForceRunAfter: true });
+        yield* setState({ phase: "restarting", version });
+        yield* updater.quitForUpdate;
+      }),
+    ).pipe(
       Effect.as(true),
       // After a failed install, the helpers come back.
       Effect.catch((error) =>
@@ -196,38 +196,68 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
         ),
       ),
     );
-  const install = Effect.suspend(() => {
-    if (Option.isSome(attempt)) return Deferred.await(attempt.value);
-    const state = latest.state;
-    if (state.phase !== "ready") return Effect.succeed(false);
-    const done = Deferred.makeUnsafe<boolean>();
-    attempt = Option.some(done);
-    return attemptInstall(state.version).pipe(
-      Effect.tap((installed) =>
-        Effect.suspend(() => {
-          if (!installed) attempt = Option.none();
-          return Deferred.succeed(done, installed);
-        }),
-      ),
-    );
-  }).pipe(Effect.withSpan("Updates.install"));
+  type InstallStep =
+    | { readonly kind: "join"; readonly done: Deferred.Deferred<boolean> }
+    | { readonly kind: "none" }
+    | {
+        readonly kind: "start";
+        readonly done: Deferred.Deferred<boolean>;
+        readonly version: string;
+      };
+  const beginInstall = Semaphore.withPermit(
+    transitions,
+    Effect.suspend((): Effect.Effect<InstallStep> => {
+      if (Option.isSome(attempt)) return Effect.succeed({ kind: "join", done: attempt.value });
+      const state = latest.state;
+      if (state.phase !== "ready") return Effect.succeed({ kind: "none" });
+      const done = Deferred.makeUnsafe<boolean>();
+      attempt = Option.some(done);
+      return setState({ phase: "installing", version: state.version }).pipe(
+        Effect.as<InstallStep>({ kind: "start", done, version: state.version }),
+      );
+    }),
+  );
+  const install = beginInstall.pipe(
+    Effect.flatMap((step) => {
+      if (step.kind === "join") return Deferred.await(step.done);
+      if (step.kind === "none") return Effect.succeed(false);
+      return runInstall(step.version).pipe(
+        Effect.tap((installed) =>
+          Effect.suspend(() => {
+            if (!installed) attempt = Option.none();
+            return Deferred.succeed(step.done, installed);
+          }),
+        ),
+      );
+    }),
+    Effect.withSpan("Updates.install"),
+  );
 
   const setChannel = Effect.fn("Updates.setChannel")(function* (channel: UpdateChannel) {
-    if (channel === latest.channel) return;
-    const phase = latest.state.phase;
-    if (phase === "installing" || phase === "restarting") {
-      return yield* new UpdateChannelBusy({ phase });
-    }
-    yield* fileSystem
-      .writeFileString(options.settingsPath, encodeSettings({ channel }))
-      .pipe(
-        Effect.mapError((cause) => new UpdateSettingsError({ path: options.settingsPath, cause })),
-      );
-    const state: UpdateState = latest.state.phase === "off" ? latest.state : { phase: "idle" };
-    yield* setStatus({ channel, state });
-    if (state.phase === "off") return;
-    yield* applyChannel(channel);
-    yield* check;
+    // The whole change takes its turn with starting an install (transitions).
+    const changed = yield* Semaphore.withPermit(
+      transitions,
+      Effect.gen(function* () {
+        if (channel === latest.channel) return false;
+        const phase = latest.state.phase;
+        if (phase === "installing" || phase === "restarting") {
+          return yield* new UpdateChannelBusy({ phase });
+        }
+        yield* fileSystem
+          .writeFileString(options.settingsPath, encodeSettings({ channel }))
+          .pipe(
+            Effect.mapError(
+              (cause) => new UpdateSettingsError({ path: options.settingsPath, cause }),
+            ),
+          );
+        const state: UpdateState = latest.state.phase === "off" ? latest.state : { phase: "idle" };
+        yield* setStatus({ channel, state });
+        if (state.phase === "off") return false;
+        yield* applyChannel(channel);
+        return true;
+      }),
+    );
+    if (changed) yield* check;
   });
 
   if (Option.isNone(off)) {

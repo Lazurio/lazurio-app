@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -102,6 +103,8 @@ const withUpdates = <A, E>(
     readonly updater: ReturnType<typeof fakeUpdater>;
     readonly activity?: DeviceActivityShape;
     readonly options?: Partial<UpdatesOptions>;
+    // The file system the updater gets, for a test that holds its writes.
+    readonly fileSystem?: (real: FileSystem.FileSystem) => FileSystem.FileSystem;
   },
   run: (updates: Updates, settingsPath: string) => Effect.Effect<A, E, FileSystem.FileSystem>,
 ) =>
@@ -118,6 +121,10 @@ const withUpdates = <A, E>(
       restartHelpers: Effect.void,
       ...setup.options,
     }).pipe(
+      Effect.provideService(
+        FileSystem.FileSystem,
+        setup.fileSystem === undefined ? fileSystem : setup.fileSystem(fileSystem),
+      ),
       Effect.provideService(ElectronUpdater, setup.updater.service),
       setup.activity === undefined
         ? (effect) => effect
@@ -379,6 +386,52 @@ describe("Updates while an install waits", () => {
         }),
       );
     }),
+  );
+});
+
+describe("Updates while a change of channel is saving", () => {
+  it.effect(
+    "lets an install start only after the change, which then leaves nothing to install",
+    () =>
+      Effect.gen(function* () {
+        const updater = fakeUpdater();
+        const saving = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        return yield* withUpdates(
+          {
+            updater,
+            fileSystem: (real) =>
+              FileSystem.FileSystem.of({
+                ...real,
+                writeFileString: (path, data, options) =>
+                  Deferred.succeed(saving, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(real.writeFileString(path, data, options)),
+                  ),
+              }),
+          },
+          (updates) =>
+            Effect.gen(function* () {
+              yield* updater.emit("update-available", { version: "0.1.1" });
+              yield* updater.emit("update-downloaded", { version: "0.1.1" });
+              yield* waitFor(updates, "ready");
+              // The change of channel holds its turn while it saves updates.json.
+              const change = yield* Effect.forkChild(updates.setChannel("nightly"));
+              yield* Deferred.await(saving);
+              // The person presses Restart and update, or quits, meanwhile.
+              const installing = yield* Effect.forkChild(updates.install);
+              yield* Effect.yieldNow;
+              assert.strictEqual(updates.current().state.phase, "ready");
+              yield* Deferred.succeed(release, undefined);
+              yield* Fiber.join(change);
+              // The ready update belonged to the old channel; no install started or got overwritten.
+              assert.isFalse(yield* Fiber.join(installing));
+              assert.strictEqual(updates.current().channel, "nightly");
+              assert.notInclude(updater.calls, "install silent=true runAfter=true");
+              assert.strictEqual(quitDecision(updates.current().state.phase), "quit");
+            }),
+        );
+      }),
   );
 });
 

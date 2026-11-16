@@ -264,7 +264,16 @@ const program = Effect.gen(function* () {
         const decision = Updates.quitDecision(updates.current().state.phase);
         if (decision === "quit") return;
         event.preventDefault();
-        if (decision === "install") Effect.runForkWith(services)(updates.install);
+        // An install that does not start (the channel changed meanwhile) lets the quit through.
+        if (decision === "install") {
+          Effect.runForkWith(services)(
+            updates.install.pipe(
+              Effect.flatMap((installed) =>
+                installed ? Effect.void : Effect.sync(() => Electron.app.quit()),
+              ),
+            ),
+          );
+        }
       };
       Electron.app.on("before-quit", beforeQuit);
       return beforeQuit;
