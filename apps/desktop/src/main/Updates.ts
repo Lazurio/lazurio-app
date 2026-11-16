@@ -8,6 +8,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
+import type { UpdateState, UpdatesOffReason, UpdatesStatus } from "../shared/bridge.ts";
 import { DeviceActivity, type DeviceActivityShape } from "./DeviceActivity.ts";
 import { ElectronUpdater } from "./ElectronUpdater.ts";
 import { encodeSettings, isOffered, settingsFrom, type UpdateChannel } from "./UpdateChannel.ts";
@@ -22,21 +23,7 @@ const CHECK_EVERY = "1 hour";
 // A fallback for an idle change that came before the updater listened for it.
 const IDLE_RECHECK = "30 seconds";
 
-export type UpdateState =
-  | { readonly phase: "off"; readonly reason: string }
-  | { readonly phase: "idle" }
-  | { readonly phase: "checking" }
-  | { readonly phase: "downloading"; readonly version: string }
-  | { readonly phase: "ready"; readonly version: string }
-  | { readonly phase: "installing"; readonly version: string }
-  // The installer started and the app quits for it.
-  | { readonly phase: "restarting"; readonly version: string }
-  | { readonly phase: "failed"; readonly problem: string };
-
-export interface UpdatesStatus {
-  readonly channel: UpdateChannel;
-  readonly state: UpdateState;
-}
+export type { UpdateState, UpdatesStatus } from "../shared/bridge.ts";
 
 class UpdateSettingsError extends Schema.TaggedError<UpdateSettingsError>()("UpdateSettingsError", {
   path: Schema.String,
@@ -51,7 +38,7 @@ export interface UpdatesOptions {
   readonly appVersion: string;
   readonly packaged: boolean;
   // Why this system cannot update the app by itself, if it cannot (docs/adr/0005, point 7).
-  readonly unsupported: Option.Option<string>;
+  readonly unsupported: Option.Option<UpdatesOffReason>;
   // `<userData>/updates.json`.
   readonly settingsPath: string;
   // Stops every helper and waits for it to exit. On Windows a running helper keeps its .exe locked,
@@ -107,9 +94,9 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
     yield* fileSystem.readFileString(options.settingsPath).pipe(Effect.option),
     options.appVersion,
   );
-  const off: Option.Option<string> = options.packaged
+  const off: Option.Option<UpdatesOffReason> = options.packaged
     ? options.unsupported
-    : Option.some("Updates run only in a packaged app.");
+    : Option.some("unpackaged");
   let latest: UpdatesStatus = {
     channel: settings.channel,
     state: Option.match(off, {

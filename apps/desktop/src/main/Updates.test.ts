@@ -140,7 +140,7 @@ describe("Updates", () => {
   it.effect("does nothing on a system that cannot update the app by itself", () => {
     const updater = fakeUpdater();
     return withUpdates(
-      { updater, options: { unsupported: Option.some("needs a signed app") } },
+      { updater, options: { unsupported: Option.some("macos-unsigned") } },
       (updates) =>
         Effect.gen(function* () {
           yield* updates.check;
@@ -148,7 +148,7 @@ describe("Updates", () => {
           assert.deepStrictEqual(updater.calls, []);
           assert.deepStrictEqual(updates.current(), {
             channel: "nightly",
-            state: { phase: "off", reason: "needs a signed app" },
+            state: { phase: "off", reason: "macos-unsigned" },
           });
         }),
     );

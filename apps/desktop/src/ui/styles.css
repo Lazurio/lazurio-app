@@ -128,3 +128,35 @@ body {
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+.shell__updates button {
+  margin: 4px 0 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--surface);
+  font: inherit;
+  cursor: pointer;
+}
+
+.shell__channel {
+  display: flex;
+  gap: 16px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.shell__channel legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.shell__channel label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}

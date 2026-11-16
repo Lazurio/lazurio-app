@@ -4,6 +4,9 @@
 export const STATUS_CHANNEL = "lazurio:status";
 // The main process sends the whole status again on this channel after every change.
 export const STATUS_CHANGED_CHANNEL = "lazurio:status-changed";
+// The person picks the update channel and installs a downloaded update (docs/adr/0005, point 4).
+export const SET_UPDATE_CHANNEL_CHANNEL = "lazurio:set-update-channel";
+export const INSTALL_UPDATE_CHANNEL = "lazurio:install-update";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -36,15 +39,41 @@ type TailnetStopReason =
   | "key-unreadable"
   | "state-unreadable";
 
+export type UpdateChannelName = "latest" | "nightly";
+
+// Why the app does not update itself here: an unpackaged app, a Mac without Lazurio's Developer ID,
+// or Linux outside an AppImage (docs/adr/0005, point 7).
+export type UpdatesOffReason = "unpackaged" | "macos-unsigned" | "linux-not-appimage";
+
+export type UpdateState =
+  | { readonly phase: "off"; readonly reason: UpdatesOffReason }
+  | { readonly phase: "idle" }
+  | { readonly phase: "checking" }
+  | { readonly phase: "downloading"; readonly version: string }
+  | { readonly phase: "ready"; readonly version: string }
+  | { readonly phase: "installing"; readonly version: string }
+  // The installer started and the app quits for it.
+  | { readonly phase: "restarting"; readonly version: string }
+  | { readonly phase: "failed"; readonly problem: string };
+
+export interface UpdatesStatus {
+  readonly channel: UpdateChannelName;
+  readonly state: UpdateState;
+}
+
 export interface AppStatus {
   readonly appVersion: string;
   readonly generation: "GEN4";
   readonly helpers: ReadonlyArray<HelperStatus>;
   readonly tailnets: ReadonlyArray<TailnetStatus>;
+  readonly updates: UpdatesStatus;
 }
 
 export interface LazurioBridge {
   readonly status: () => Promise<AppStatus>;
   // Calls the listener with the whole status after every change; the result stops it.
   readonly onStatus: (listener: (status: AppStatus) => void) => () => void;
+  readonly setUpdateChannel: (channel: UpdateChannelName) => Promise<void>;
+  // Installs a downloaded update: the app restarts once no agent works on the computer.
+  readonly installUpdate: () => Promise<void>;
 }

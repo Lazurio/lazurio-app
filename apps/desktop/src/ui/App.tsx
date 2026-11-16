@@ -3,6 +3,7 @@ import { use, useEffect, useState } from "react";
 import type { AppStatus } from "../shared/bridge.ts";
 import { localeOf, messages } from "./messages.ts";
 import { tailnetLabel } from "./tailnetLabel.ts";
+import { UpdatesSection } from "./UpdatesSection.tsx";
 
 export function App({ status }: { readonly status: Promise<AppStatus> }) {
   const [current, setCurrent] = useState(use(status));
@@ -77,6 +78,11 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
           </ul>
         )}
       </section>
+      <UpdatesSection
+        updates={current.updates}
+        appVersion={current.appVersion}
+        text={text.updates}
+      />
     </main>
   );
 }
