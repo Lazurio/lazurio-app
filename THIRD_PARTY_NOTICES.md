@@ -10,6 +10,7 @@ From [Lazurio/t3code](https://github.com/Lazurio/t3code) at commit `3ffe8f47d2d2
 - `tsconfig.effect.json`: copied unchanged.
 - `patches/@effect__vitest@4.1.2.patch`: copied unchanged.
 - `tsconfig.base.json`, the lint and test settings in `vite.config.ts`, and the structure of `apps/desktop/src/main/LocalScheme.ts`: adapted.
+- `scripts/lib/update-manifest.ts`, `scripts/merge-update-manifests.ts` and `scripts/merge-update-manifests.test.ts`, from `scripts/` at commit `cab18ad99b`: copied, with two types no longer exported.
 - The shape of `apps/desktop/src/main/ElectronUpdater.ts` and the channel rules of `apps/desktop/src/main/Updates.ts` and `UpdateChannel.ts`, after `apps/desktop/src/electron/ElectronUpdater.ts` and `apps/desktop/src/updates/` at commit `cab18ad99b`: adapted.
 
 MIT License
