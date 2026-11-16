@@ -8,7 +8,8 @@ const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/u;
 export interface HelperBuild {
   readonly go: ReadonlyArray<string>;
   readonly cargo: ReadonlyArray<string>;
-  readonly cargoEnv: Readonly<Record<string, string>>;
+  // An undefined value keeps a variable of the parent environment out of the build.
+  readonly cargoEnv: Readonly<Record<string, string | undefined>>;
 }
 
 export const helperBuild = (options: {
@@ -31,7 +32,7 @@ export const helperBuild = (options: {
       ".",
     ],
     cargo: ["build", "--locked", ...(options.release ? ["--release"] : [])],
-    cargoEnv: options.release ? { LAZURIO_APP_VERSION: options.appVersion } : {},
+    cargoEnv: { LAZURIO_APP_VERSION: options.release ? options.appVersion : undefined },
   };
 };
 

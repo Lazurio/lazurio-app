@@ -17,8 +17,8 @@ export const runInherited = Effect.fn("runInherited")(function* (
   command: string,
   args: ReadonlyArray<string>,
   cwd: string,
-  // Added to the inherited environment.
-  env: Readonly<Record<string, string>> = {},
+  // Added to the inherited environment; an undefined value removes a variable.
+  env: Readonly<Record<string, string | undefined>> = {},
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(

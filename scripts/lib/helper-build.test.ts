@@ -31,7 +31,8 @@ describe("helperBuild", () => {
     assert.deepStrictEqual(build, {
       go: ["-C", "helpers/tailnet", "build", "-trimpath", "-o", "bin/x", "."],
       cargo: ["build", "--locked"],
-      cargoEnv: {},
+      // A development build never inherits the release's version from the shell.
+      cargoEnv: { LAZURIO_APP_VERSION: undefined },
     });
   });
 

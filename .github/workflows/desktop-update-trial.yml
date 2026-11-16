@@ -48,19 +48,23 @@ jobs:
         working-directory: helpers/device
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
-      - run: pnpm build:helpers --release
       - run: pnpm --filter @lazurio/app-desktop build
+      # Each trial build carries its own version in its helpers too (#22), checked through their Hello.
       - name: Package N and N+1
         shell: pwsh
         working-directory: apps/desktop
         run: |
           foreach ($version in '0.0.1', '0.0.2') {
+            pnpm build:helpers --release --app-version $version
+            if ($LASTEXITCODE -ne 0) { throw "Building the helpers of $version failed." }
             pnpm exec electron-builder --config trial/electron-builder.trial.yml `
               --win nsis --x64 --publish never `
               "-c.extraMetadata.version=$version" `
               "-c.directories.output=trial/out/$version" `
               "-c.nsis.differentialPackage=false"
             if ($LASTEXITCODE -ne 0) { throw "Packaging $version failed." }
+            node scripts/check-helper-versions.ts "trial/out/$version/win-unpacked/resources/helpers" $version
+            if ($LASTEXITCODE -ne 0) { throw "The helpers of $version name another version." }
           }
       # The trial builds are uploaded before the test, so a person can try them even when it fails.
       - name: Collect the trial builds
@@ -109,17 +113,18 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
-      - run: pnpm build:helpers --release
       - run: pnpm --filter @lazurio/app-desktop build
       - name: Package N and N+1
         working-directory: apps/desktop
         run: |
           for version in 0.0.1 0.0.2; do
+            pnpm build:helpers --release --app-version "$version"
             pnpm exec electron-builder --config trial/electron-builder.trial.yml \
               --linux AppImage --x64 --publish never \
               -c.extraMetadata.version="$version" \
               -c.directories.output="trial/out/$version" \
               -c.appImage.artifactName=Lazurio-App.AppImage
+            node scripts/check-helper-versions.ts "trial/out/$version/linux-unpacked/resources/helpers" "$version"
           done
       # A session bus with an unlocked keyring; GNOME makes Electron's safeStorage use it, in N and
       # in the N+1 that the update starts.
@@ -154,7 +159,7 @@ jobs:
         working-directory: helpers/device
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
-      - run: pnpm build:helpers --release
+      - run: pnpm build:helpers --release --app-version 0.0.1
       - run: pnpm --filter @lazurio/app-desktop build
       - name: Package N
         working-directory: apps/desktop
@@ -167,6 +172,9 @@ jobs:
             --mac zip --arm64 --publish never \
             -c.extraMetadata.version=0.0.1 \
             -c.directories.output=trial/out/0.0.1
+      - name: Helper versions
+        working-directory: apps/desktop
+        run: node scripts/check-helper-versions.ts "trial/out/0.0.1/mac-arm64/Lazurio App.app/Contents/Resources/helpers" 0.0.1
       - name: Signature and launch
         working-directory: apps/desktop/trial
         run: ./launch-check-macos.sh "out/0.0.1/mac-arm64/Lazurio App.app"
