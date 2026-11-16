@@ -1,22 +1,27 @@
 //! The Device's work in the helper protocol (`lazurio.app.device.v1`, ADR 0006 point 2).
 //!
 //! The helper answers every request of the package and checks it. The lock of one agent with the
-//! device lock around it (`lock`) and the history without content (`history`) are in place. The
-//! attach channel comes next; until then `StartChannel`, which arrives decoded apart with its
-//! secrets in self-wiping types (`secret_start`), is refused with `not_implemented` after its
-//! checks, so no agent can yet hold the computer through this helper.
+//! device lock around it (`lock`), the history without content (`history`) and the attach channel
+//! of each Environment (`channel`) are in place. `StartChannel` arrives decoded apart with its
+//! secrets in self-wiping types (`secret_start`); after its checks its secrets move into the
+//! channel's thread. Until the engine joins, the channel serves no tools (`mcp_stub`), so no
+//! agent can yet hold the computer through this helper.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::Instant;
 
+use crate::channel::{self, Channel, Report, Supervisor, Timing};
 use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
-    ChannelState, ConfigureDevice, DeviceReady, HoldForUpdate, ListHistory, LockState, Off,
+    ChannelState, ConfigureDevice, Connecting, DeviceReady, HoldForUpdate, ListHistory, LockState,
     StopChannel, channel_state,
 };
 use crate::lazurio::app::helper::v1::{Failure, app_message, helper_message};
 use crate::lock::{self, DeviceLock, SharedLock};
 use crate::secret_start::StartRequest;
+use crate::wire::Connector;
 
 /// The newest version of contract v1 of the attach session this helper speaks.
 pub const CONTRACT_VERSION: u32 = 1;
@@ -26,7 +31,7 @@ const KEY_SEED_BYTES: usize = 32;
 
 /// What the helper holds after `ConfigureDevice`.
 struct Runtime {
-    history: History,
+    history: Arc<History>,
     lock: SharedLock,
 }
 
@@ -36,6 +41,32 @@ pub struct Device {
     /// for it, and then `ConfigureDevice` is refused (the lock fails closed).
     lock_path: Option<PathBuf>,
     runtime: Option<Runtime>,
+    channels: Channels,
+}
+
+/// The channels of the Environments.
+struct Channels {
+    connector: Arc<Connector>,
+    timing: Timing,
+    report: Report,
+    helper_version: String,
+    /// The started channels, by environment id.
+    running: HashMap<String, Supervisor>,
+    /// Stopped channels whose threads may still be ending; Shutdown waits for them too.
+    stopping: Vec<Supervisor>,
+    /// A checked `StartChannel` that starts once its answer is on its way, so the answer always
+    /// comes before the channel's own reports.
+    prepared: Option<StartRequest>,
+}
+
+impl Channels {
+    fn stop(&mut self, environment_id: &str) {
+        self.stopping.retain(|supervisor| !supervisor.ended());
+        if let Some(supervisor) = self.running.remove(environment_id) {
+            supervisor.stop();
+            self.stopping.push(supervisor);
+        }
+    }
 }
 
 impl Default for Device {
@@ -51,7 +82,34 @@ impl Device {
         Self {
             lock_path,
             runtime: None,
+            channels: Channels {
+                connector: Arc::new(Connector::system()),
+                timing: Timing::default(),
+                report: Arc::new(|_| {}),
+                helper_version: String::new(),
+                running: HashMap::new(),
+                stopping: Vec::new(),
+                prepared: None,
+            },
         }
+    }
+
+    /// Sends every change of a channel's state to `report`, and names the helper's version in
+    /// the channels' MCP server.
+    #[must_use]
+    pub fn with_channel_report(mut self, report: Report, helper_version: &str) -> Self {
+        self.channels.report = report;
+        helper_version.clone_into(&mut self.channels.helper_version);
+        self
+    }
+
+    /// Channels that dial `connector` with `timing`, for tests against a fake Environment.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_channels(mut self, connector: Connector, timing: Timing) -> Self {
+        self.channels.connector = Arc::new(connector);
+        self.channels.timing = timing;
+        self
     }
 
     /// Answers one request of `lazurio.app.device.v1`, or returns `None` for a kind of another
@@ -86,7 +144,7 @@ impl Device {
             .clone()
             .ok_or_else(|| invalid("the system gives no place for the device lock"))?;
         self.runtime = Some(Runtime {
-            history: History::new(Path::new(&request.data_directory)),
+            history: Arc::new(History::new(Path::new(&request.data_directory))),
             // The hold ends on its own at its deadline; telling the main process about it
             // comes with the channel, which owns the helper's output.
             lock: SharedLock::new(DeviceLock::new(lock_path), |_| {}),
@@ -96,13 +154,62 @@ impl Device {
         }))
     }
 
-    /// Answers a `StartChannel`, read apart from the other requests (`secret_start`).
-    pub fn start_channel(&self, request: &StartRequest) -> helper_message::Kind {
-        self.check_start(request)
-            .unwrap_or_else(helper_message::Kind::Failure)
+    /// Answers a `StartChannel`, read apart from the other requests (`secret_start`): after its
+    /// checks it stops the Environment's channel if one runs and answers Connecting. The new
+    /// channel starts with [`Device::start_prepared`], once the answer is on its way.
+    pub fn start_channel(&mut self, request: StartRequest) -> helper_message::Kind {
+        if let Err(failure) = self.check_start(&request) {
+            return helper_message::Kind::Failure(failure);
+        }
+        let environment_id = request.environment_id.clone();
+        self.channels.stop(&environment_id);
+        self.channels.prepared = Some(request);
+        helper_message::Kind::ChannelState(ChannelState {
+            environment_id,
+            state: Some(channel_state::State::Connecting(Connecting {
+                failed_attempts: 0,
+            })),
+        })
     }
 
-    fn check_start(&self, request: &StartRequest) -> Result<helper_message::Kind, Failure> {
+    /// Starts the channel the last `StartChannel` prepared, if any.
+    pub fn start_prepared(&mut self) {
+        let (Some(request), Some(runtime)) = (self.channels.prepared.take(), &self.runtime) else {
+            return;
+        };
+        let environment_id = request.environment_id.clone();
+        let spawned = Supervisor::spawn(Channel {
+            request,
+            connector: Arc::clone(&self.channels.connector),
+            timing: self.channels.timing,
+            history: Arc::clone(&runtime.history),
+            report: Arc::clone(&self.channels.report),
+            helper_version: self.channels.helper_version.clone(),
+        });
+        match spawned {
+            Ok(supervisor) => {
+                self.channels.running.insert(environment_id, supervisor);
+            }
+            // The system gave no thread: there is no channel, which the main process learns.
+            Err(_) => (self.channels.report)(channel::off(&environment_id)),
+        }
+    }
+
+    /// Stops every channel and waits for their threads until `deadline`. Returns whether all of
+    /// them ended; once one has not, the deadline has passed and the rest are not waited for.
+    pub fn shutdown(&mut self, deadline: Instant) -> bool {
+        self.channels.prepared = None;
+        let ids: Vec<String> = self.channels.running.keys().cloned().collect();
+        for id in ids {
+            self.channels.stop(&id);
+        }
+        self.channels
+            .stopping
+            .iter_mut()
+            .all(|supervisor| supervisor.wait_ended(deadline))
+    }
+
+    fn check_start(&self, request: &StartRequest) -> Result<(), Failure> {
         self.configured()?;
         check_environment_id(&request.environment_id)?;
         check_attach_url(&request.attach_url)?;
@@ -113,25 +220,25 @@ impl Device {
             return Err(invalid("key_seed must be 32 bytes"));
         }
         if let Some(proxy) = &request.proxy
-            && (proxy.host != "127.0.0.1" || proxy.port == 0 || proxy.password.is_empty())
+            && (proxy.host != "127.0.0.1"
+                || proxy.port == 0
+                || proxy.port > u32::from(u16::MAX)
+                || proxy.password.is_empty())
         {
             return Err(invalid(
                 "proxy must be the tailnet helper's loopback proxy with its credentials",
             ));
         }
-        Err(Failure {
-            code: "not_implemented".to_owned(),
-            message: "the attach channel comes with the core of the Device helper".to_owned(),
-        })
+        Ok(())
     }
 
-    fn stop_channel(&self, request: &StopChannel) -> Result<helper_message::Kind, Failure> {
+    fn stop_channel(&mut self, request: &StopChannel) -> Result<helper_message::Kind, Failure> {
         self.configured()?;
         check_environment_id(&request.environment_id)?;
-        Ok(helper_message::Kind::ChannelState(ChannelState {
-            environment_id: request.environment_id.clone(),
-            state: Some(channel_state::State::Off(Off {})),
-        }))
+        self.channels.stop(&request.environment_id);
+        Ok(helper_message::Kind::ChannelState(channel::off(
+            &request.environment_id,
+        )))
     }
 
     fn stop_agent(&mut self) -> Result<helper_message::Kind, Failure> {
@@ -145,7 +252,7 @@ impl Device {
         if let Some(holder) = stopped {
             // The history is a record for the person; a failed write never blocks Stop.
             let _ = runtime.history.record(
-                unix_ms(),
+                history::now_unix_ms(),
                 &holder.environment_id,
                 history::kind::STOPPED,
                 None,
@@ -205,15 +312,6 @@ fn not_configured() -> Failure {
     }
 }
 
-/// Unix milliseconds now, or 0 before 1970.
-fn unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-
 fn invalid(message: &str) -> Failure {
     Failure {
         code: "invalid_request".to_owned(),
@@ -250,7 +348,7 @@ fn check_attach_url(url: &str) -> Result<(), Failure> {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::lazurio::app::device::v1::StopAgent;
+    use crate::lazurio::app::device::v1::{Off, StopAgent};
     use crate::secret_start::ProxyRequest;
     use zeroize::Zeroizing;
 
@@ -315,11 +413,7 @@ mod tests {
     fn every_request_waits_for_configure_device() {
         let mut device = test_device();
         assert_eq!(
-            failure_code(Some(device.start_channel(&start(
-                ATTACH,
-                vec![7; 32],
-                None
-            )))),
+            failure_code(Some(device.start_channel(start(ATTACH, vec![7; 32], None)))),
             "not_configured"
         );
         for kind in [
@@ -351,7 +445,7 @@ mod tests {
 
     #[test]
     fn start_channel_refuses_anything_but_the_attach_address_of_contract_v1() {
-        let device = configured();
+        let mut device = configured();
         for url in [
             "ws://launchpad.example.lazurio.io/.lazurio/computers/attach",
             "https://launchpad.example.lazurio.io/.lazurio/computers/attach",
@@ -362,30 +456,109 @@ mod tests {
             "wss://launchpad.example.lazurio.io/other",
             "wss:///.lazurio/computers/attach",
         ] {
-            let answer = device.start_channel(&start(url, vec![7; 32], None));
+            let answer = device.start_channel(start(url, vec![7; 32], None));
             assert_eq!(failure_code(Some(answer)), "invalid_request", "{url}");
         }
     }
 
     #[test]
     fn start_channel_needs_a_32_byte_seed_and_only_the_loopback_proxy() {
-        let device = configured();
-        let short = device.start_channel(&start(ATTACH, vec![7; 31], None));
+        let mut device = configured();
+        let short = device.start_channel(start(ATTACH, vec![7; 31], None));
         assert_eq!(failure_code(Some(short)), "invalid_request");
         let foreign =
-            device.start_channel(&start(ATTACH, vec![7; 32], Some(proxy("192.0.2.1", "p"))));
+            device.start_channel(start(ATTACH, vec![7; 32], Some(proxy("192.0.2.1", "p"))));
         assert_eq!(failure_code(Some(foreign)), "invalid_request");
         let unprotected =
-            device.start_channel(&start(ATTACH, vec![7; 32], Some(proxy("127.0.0.1", ""))));
+            device.start_channel(start(ATTACH, vec![7; 32], Some(proxy("127.0.0.1", ""))));
         assert_eq!(failure_code(Some(unprotected)), "invalid_request");
+        let mut beyond = proxy("127.0.0.1", "p");
+        beyond.port = 65_536;
+        let beyond = device.start_channel(start(ATTACH, vec![7; 32], Some(beyond)));
+        assert_eq!(failure_code(Some(beyond)), "invalid_request");
     }
 
     #[test]
-    fn a_valid_start_channel_is_refused_until_the_channel_exists() {
-        let device = configured();
-        let answer =
-            device.start_channel(&start(ATTACH, vec![7; 32], Some(proxy("127.0.0.1", "p"))));
-        assert_eq!(failure_code(Some(answer)), "not_implemented");
+    fn a_valid_start_channel_connects_and_stop_channel_closes_it_at_once() {
+        use crate::lazurio::app::device::v1::{Connected, Connecting};
+        use crate::testkit::{Event, FakeEnvironment, PATIENCE, Session, quick_timing};
+
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            if session.authenticate() {
+                session.until_closed();
+            }
+        });
+        let (sender, states) = std::sync::mpsc::channel();
+        let sender = std::sync::Mutex::new(sender);
+        let directory = scratch("channel");
+        let mut device = Device::with_lock_path(Some(scratch("lock").join("agent.lock")))
+            .with_channels(environment.connector(), quick_timing())
+            .with_channel_report(
+                std::sync::Arc::new(move |state| {
+                    let _ = sender.lock().expect("the test's sender").send(state);
+                }),
+                "1.2.3",
+            );
+        device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
+            data_directory: directory.to_string_lossy().into_owned(),
+            computer_name: "Work laptop".to_owned(),
+        }));
+        let mut request = start(
+            crate::testkit::ATTACH_URL,
+            crate::testkit::SEED.to_vec(),
+            None,
+        );
+        request.device_id = crate::testkit::DEVICE_ID.to_owned();
+
+        assert_eq!(
+            device.start_channel(request),
+            helper_message::Kind::ChannelState(ChannelState {
+                environment_id: "env-a".to_owned(),
+                state: Some(channel_state::State::Connecting(Connecting {
+                    failed_attempts: 0
+                })),
+            })
+        );
+        device.start_prepared();
+        assert_eq!(
+            states.recv_timeout(PATIENCE).expect("a state"),
+            ChannelState {
+                environment_id: "env-a".to_owned(),
+                state: Some(channel_state::State::Connected(Connected {})),
+            }
+        );
+
+        let answer = device.answer(&app_message::Kind::StopChannel(StopChannel {
+            environment_id: "env-a".to_owned(),
+        }));
+        assert_eq!(
+            answer,
+            Some(helper_message::Kind::ChannelState(ChannelState {
+                environment_id: "env-a".to_owned(),
+                state: Some(channel_state::State::Off(Off {})),
+            }))
+        );
+        assert_eq!(
+            environment.until(|event| *event == Event::Closed),
+            Event::Closed,
+            "the Environment sees the session end"
+        );
+        assert!(device.shutdown(Instant::now() + PATIENCE));
+        assert!(states.try_recv().is_err(), "nothing after Off");
+        let kinds: Vec<String> = History::new(&directory)
+            .page("", 10)
+            .entries
+            .into_iter()
+            .rev()
+            .map(|entry| entry.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [history::kind::CONNECTED, history::kind::DISCONNECTED]
+        );
+        let entry = &History::new(&directory).page("", 1).entries[0];
+        assert_eq!(entry.environment_id, "env-a");
+        assert_eq!(entry.tool, "", "no content in the history");
     }
 
     #[test]

@@ -8,8 +8,17 @@ publish = false
 description = "The Device helper of Lazurio App: lets the agents of an Environment use this computer while its owner allows it."
 
 [dependencies]
+base64 = "=0.22.1"
+ed25519-dalek = { version = "=2.2.0", features = ["zeroize"] }
 prost = "=0.14.4"
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "=0.8.5"
+serde_json = "=1.0.154"
+tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 zeroize = "=1.8.2"
+
+[dev-dependencies]
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
 
 [build-dependencies]
 prost-build = "=0.14.4"
