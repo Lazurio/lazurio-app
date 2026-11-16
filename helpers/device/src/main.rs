@@ -5,7 +5,8 @@ use std::io;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let mut output = io::stdout().lock();
+    // Standard output itself, not its lock: the helper writes it from its writer thread.
+    let mut output = io::stdout();
     let result = unbuffered_stdin().and_then(|mut input| {
         lazurio_device::serve(
             &mut input,
