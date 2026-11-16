@@ -29,6 +29,7 @@ const Environments = Schema.Struct({
         }),
       ),
       deployment_branch_policy: Schema.NullOr(Schema.Unknown),
+      can_admins_bypass: Schema.optional(Schema.Boolean),
     }),
   ),
 });
@@ -73,6 +74,7 @@ const program = Effect.gen(function* () {
         .flatMap((rule) => rule.reviewers ?? [])
         .map((entry) => ({ type: entry.type, id: entry.reviewer.id })),
       deploymentPolicy: environment?.deployment_branch_policy != null,
+      adminsCanBypass: environment?.can_admins_bypass,
     },
     stableApprover,
   );

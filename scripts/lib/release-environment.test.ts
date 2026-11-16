@@ -4,9 +4,22 @@ import { environmentProblem } from "./release-environment.ts";
 
 const APPROVER = 16311043;
 const approver = { type: "User", id: APPROVER };
-const protectedEnvironment = { exists: true, reviewers: [approver], deploymentPolicy: true };
+const protectedEnvironment = {
+  exists: true,
+  reviewers: [approver],
+  deploymentPolicy: true,
+  adminsCanBypass: false,
+};
 
 describe("environmentProblem", () => {
+  // An administrator could otherwise start a waiting stable release without the approver.
+  it("refuses stable when administrators may bypass its rules, or GitHub does not say", () => {
+    for (const adminsCanBypass of [true, undefined]) {
+      const environment = { ...protectedEnvironment, adminsCanBypass };
+      assert.isString(environmentProblem("stable", environment, APPROVER));
+    }
+  });
+
   it("lets a protected Environment publish", () => {
     assert.isUndefined(environmentProblem("stable", protectedEnvironment, APPROVER));
     const nightly = { ...protectedEnvironment, reviewers: [] };
