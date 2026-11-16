@@ -42,6 +42,11 @@ mac:
   target:
     - dmg
     - zip
+  # File names without spaces: GitHub turns a space in a release asset's name into a dot, and the
+  # update manifest would then name a file the release does not have.
+  artifactName: Lazurio-App-${version}-${arch}-mac.${ext}
+dmg:
+  artifactName: Lazurio-App-${version}-${arch}.${ext}
 win:
   target:
     - target: nsis

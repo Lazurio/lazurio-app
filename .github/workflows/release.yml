@@ -1,0 +1,200 @@
+# Releases Lazurio App to its two channels (docs/adr/0005, points 2, 3 and 8), after T3 Code's
+# release.yml. Nightly runs on a schedule and releases only with new commits, at most every six
+# hours; stable is started by hand and builds the commit of the latest nightly under its version.
+# Every release passes the update test first, is built from the exact commit, has its fuses checked,
+# carries build provenance, and goes out only through the approval of its GitHub Environment.
+# Nightly publishing stays off until the repository variable LAZURIO_APP_NIGHTLY_PUBLISH is true.
+name: Release
+
+on:
+  schedule:
+    # Away from minute zero, when GitHub's scheduled jobs are busiest.
+    - cron: "8,38 * * * *"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: nightly
+        type: choice
+        options:
+          - nightly
+          - stable
+
+permissions:
+  contents: read
+
+# One run per channel at a time, never cancelled, so no release is half published.
+concurrency:
+  group: release-${{ inputs.channel || 'nightly' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: github.repository == 'Lazurio/lazurio-app' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      channel: ${{ steps.plan.outputs.channel }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: plan
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_CHANNEL: ${{ inputs.channel || 'nightly' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/plan-release.ts
+
+  # The update test from N to N+1 on Windows and Linux, and the Mac's launch (docs/adr/0005, point 9).
+  trial:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    uses: ./.github/workflows/desktop-update-trial.yml
+
+  build:
+    needs: [plan, trial]
+    if: needs.plan.outputs.release == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: win-x64
+            os: windows-2025
+            targets: --win nsis --x64
+          - name: mac-arm64
+            os: macos-15
+            targets: --mac dmg zip --arm64
+          - name: mac-x64
+            os: macos-15-intel
+            targets: --mac dmg zip --x64
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      # Until Lazurio's signing identities exist (task 802 of plan LZD-0017) the Windows build is
+      # unsigned and the Mac build is signed ad hoc after its fuses; no runner picks an identity.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers --release
+      - run: pnpm --filter @lazurio/app-desktop build
+      # electron-builder takes the channel from the version: a nightly writes nightly*.yml, a stable
+      # latest*.yml. The feed is this repository's GitHub Releases (electron-builder.yml).
+      - name: Package
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          mac_ad_hoc=()
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            mac_ad_hoc=(-c.mac.identity=- -c.mac.hardenedRuntime=false)
+          fi
+          pnpm exec electron-builder ${{ matrix.targets }} --publish never \
+            -c.extraMetadata.version="$VERSION" "${mac_ad_hoc[@]}"
+      - run: pnpm --filter @lazurio/app-desktop check:fuses
+      # The release job merges the two Mac manifests into one per channel.
+      - name: Collect the release files
+        shell: bash
+        working-directory: apps/desktop/release
+        run: |
+          set -euo pipefail
+          mkdir -p ../release-files
+          shopt -s nullglob
+          for file in *.exe *.dmg *.zip *.blockmap *.yml; do
+            [[ "$file" == builder-debug.yml || "$file" == builder-effective-config.yaml ]] && continue
+            cp "$file" ../release-files/
+          done
+          if [[ "${{ matrix.name }}" == "mac-x64" ]]; then
+            for manifest in ../release-files/*-mac.yml; do
+              mv "$manifest" "${manifest%.yml}-x64.yml"
+            done
+          fi
+          ls -la ../release-files
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-${{ matrix.name }}
+          path: apps/desktop/release-files/*
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    needs: [plan, build]
+    if: >-
+      needs.plan.outputs.release == 'true' &&
+      (needs.plan.outputs.channel == 'stable' || vars.LAZURIO_APP_NIGHTLY_PUBLISH == 'true')
+    runs-on: ubuntu-24.04
+    # The approval of this Environment is the Publication (docs/adr/0005, point 3).
+    environment: lazurio-app-${{ needs.plan.outputs.channel }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      REF: ${{ needs.plan.outputs.ref }}
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      # electron-updater reads one manifest per channel and picks the file of the running arch.
+      - name: Merge the Mac update manifests
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for x64 in release-assets/*-mac-x64.yml; do
+            arm64="${x64%-x64.yml}.yml"
+            node scripts/merge-update-manifests.ts --platform mac "$arm64" "$x64"
+            rm -f "$x64"
+          done
+          ls -la release-assets
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/*
+      # Created as a draft and published in one step once every file is attached, so no installed
+      # app sees a release without its packages. A published release is never edited.
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          prerelease=()
+          latest=(--latest=false)
+          if [[ "$CHANNEL" == "nightly" ]]; then prerelease=(--prerelease); else latest=(--latest); fi
+          gh release create "$TAG" release-assets/* --draft --target "$REF" \
+            --title "Lazurio App ${TAG#v}" --generate-notes "${prerelease[@]}"
+          gh release edit "$TAG" --draft=false "${latest[@]}"

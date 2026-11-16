@@ -368,6 +368,9 @@ importers:
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.67.1
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.1.2(patch_hash=299510b71c36537a832a67e9d160a5f112a5f326a29e95c41cb45fc8234e47c7)(@types/node@24.12.4)(@vitest/ui@5.0.5)(effect@4.1.2)(jiti@2.7.0)(typescript@5.4.5)(yaml@2.9.1)
       '@types/node':
         specifier: 'catalog:'
         version: 24.12.4
