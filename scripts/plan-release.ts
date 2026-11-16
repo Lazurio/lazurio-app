@@ -46,6 +46,10 @@ const program = Effect.gen(function* () {
   const runNumber = yield* Config.Int("GITHUB_RUN_NUMBER");
   const token = yield* Config.Redacted("GITHUB_TOKEN");
   const output = yield* Config.String("GITHUB_OUTPUT");
+  const publishing = yield* Config.String("RELEASE_NIGHTLY_PUBLISH").pipe(
+    Config.withDefault(""),
+    Config.map((value) => value === "true"),
+  );
   const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
 
   const get = (apiPath: string) =>
@@ -72,6 +76,7 @@ const program = Effect.gen(function* () {
     channel === "nightly"
       ? yield* planNightly({
           scheduled: event === "schedule",
+          publishing,
           baseVersion: (yield* decodeDesktopPackage(
             yield* fileSystem.readFileString(
               path.join(import.meta.dirname, "..", "apps", "desktop", "package.json"),

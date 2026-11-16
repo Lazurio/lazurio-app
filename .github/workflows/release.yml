@@ -54,6 +54,7 @@ jobs:
         env:
           RELEASE_EVENT: ${{ github.event_name }}
           RELEASE_CHANNEL: ${{ inputs.channel || 'nightly' }}
+          RELEASE_NIGHTLY_PUBLISH: ${{ vars.LAZURIO_APP_NIGHTLY_PUBLISH }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/plan-release.ts
 

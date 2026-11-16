@@ -52,7 +52,7 @@ Three facts shape the design:
   - `lazurio-app-stable` requires an approval on every run. Stable reaches everyone, so until Matěj says otherwise he is its approver: a stable release is a Publication that needs his go-ahead;
   - `lazurio-app-nightly` runs on its own, after T3 Code, once the first nightly was published with Matěj's go-ahead.
 
-  No version goes out before it was verified on real Macs and Windows PCs and Agent Desktop works in the app (plan LZD-0017). Until the first nightly, the schedule only checks and builds: the repository variable `LAZURIO_APP_NIGHTLY_PUBLISH` is off, and the publishing job is skipped. Turning it on is the Publication of nightly. The fork's `lazurio-release.yml` gates its releases the same way.
+  No version goes out before it was verified on real Macs and Windows PCs and Agent Desktop works in the app (plan LZD-0017). Until the first nightly, the schedule only checks, and a run by hand builds without publishing (amended 2026-11-16: building on every schedule without a published nightly would build twice an hour): the repository variable `LAZURIO_APP_NIGHTLY_PUBLISH` is off, and the publishing job is skipped. Turning it on is the Publication of nightly. The fork's `lazurio-release.yml` gates its releases the same way.
 
 - **Provenance.** Each release asset gets a GitHub build provenance attestation from the job that built it, from the exact commit the release names.
 

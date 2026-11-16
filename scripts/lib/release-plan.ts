@@ -43,6 +43,9 @@ export const latestNightly = (
 
 export const planNightly = Effect.fn("ReleasePlan.planNightly")(function* <E>(input: {
   readonly scheduled: boolean;
+  // LAZURIO_APP_NIGHTLY_PUBLISH: until it is on, a schedule releases nothing and builds nothing,
+  // and a run by hand builds without publishing.
+  readonly publishing: boolean;
   readonly baseVersion: string;
   readonly releases: ReadonlyArray<PublishedRelease>;
   // The run's start, in milliseconds since the epoch and as its UTC date YYYYMMDD.
@@ -61,6 +64,12 @@ export const planNightly = Effect.fn("ReleasePlan.planNightly")(function* <E>(in
     return yield* refuse(
       `v${input.baseVersion} is already a stable release; raise apps/desktop/package.json first`,
     );
+  }
+  if (input.scheduled && !input.publishing) {
+    return {
+      release: false,
+      reason: "nightly publishing is off (LAZURIO_APP_NIGHTLY_PUBLISH)",
+    } as const;
   }
   const latest = latestNightly(input.releases);
   if (input.scheduled && latest !== undefined) {

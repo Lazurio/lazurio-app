@@ -19,6 +19,7 @@ const HOURS_AGO: Readonly<Record<number, string>> = {
 const hoursAgo = (hours: number): string => HOURS_AGO[hours] ?? "";
 const nightly = (base = "0.1.0") => ({
   scheduled: true,
+  publishing: true,
   baseVersion: base,
   nowMs: NOW,
   date: "20261116",
@@ -28,6 +29,15 @@ const nightly = (base = "0.1.0") => ({
 });
 
 describe("planNightly", () => {
+  // Without a published nightly, every schedule would otherwise test and build the app.
+  it.effect("plans nothing on a schedule while nightly publishing is off, but builds by hand", () =>
+    Effect.gen(function* () {
+      const off = { ...nightly(), publishing: false, releases: [] };
+      assert.isFalse((yield* planNightly(off)).release);
+      assert.isTrue((yield* planNightly({ ...off, scheduled: false })).release);
+    }),
+  );
+
   it.effect("releases the first nightly with T3 Code's version shape", () =>
     Effect.gen(function* () {
       assert.deepStrictEqual(yield* planNightly({ ...nightly(), releases: [] }), {
