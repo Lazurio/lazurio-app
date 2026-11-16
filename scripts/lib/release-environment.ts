@@ -1,8 +1,7 @@
-// Whether a release Environment protects its publication (docs/adr/0005, point 3). GitHub creates
-// an unknown Environment without protection when a job names it, and accepts the approval of any
-// one required reviewer and lets administrators bypass the rules by default, so the release
-// workflow checks first and fails closed: stable needs the stable approver as its only required
-// reviewer and no bypass for administrators, and both channels a deployment policy.
+// Whether a release Environment protects its publication (docs/adr/0005, point 3), failing closed:
+// GitHub creates an unknown Environment unprotected, accepts any one required reviewer and lets
+// administrators bypass by default. Stable needs the approver as its only reviewer and no bypass;
+// both channels need a deployment policy.
 
 interface EnvironmentReviewer {
   readonly type: string;
