@@ -82,6 +82,9 @@ export const planNightly = Effect.fn("ReleasePlan.planNightly")(function* <E>(in
 export const planStable = Effect.fn("ReleasePlan.planStable")(function* <E>(input: {
   readonly releases: ReadonlyArray<PublishedRelease>;
   readonly commitOf: (tag: string) => Effect.Effect<string, E>;
+  // The run's own commit. Stable runs on the latest nightly's tag, so that the update test, the
+  // builds and their provenance all name the commit the release ships.
+  readonly runSha: string;
 }): Effect.fn.Return<ReleasePlan, ReleasePlanError | E> {
   const latest = latestNightly(input.releases);
   if (latest === undefined) {
@@ -93,5 +96,10 @@ export const planStable = Effect.fn("ReleasePlan.planStable")(function* <E>(inpu
     return yield* refuse(`v${version} is already released`);
   }
   const ref = yield* input.commitOf(latest.tag);
+  if (ref !== input.runSha) {
+    return yield* refuse(
+      `stable runs on the latest nightly's tag: gh workflow run release.yml --ref ${latest.tag} -f channel=stable`,
+    );
+  }
   return { release: true, channel: "stable", version, ref } as const;
 });

@@ -77,10 +77,11 @@ describe("planStable", () => {
     { tag: "v0.0.9", publishedAt: hoursAgo(100) },
   ];
   const commitOf = (tag: string) => Effect.succeed(`commit of ${tag}`);
+  const runSha = "commit of v0.1.0-nightly.20261116.41";
 
   it.effect("promotes the latest nightly's commit under its version", () =>
     Effect.gen(function* () {
-      assert.deepStrictEqual(yield* planStable({ releases, commitOf }), {
+      assert.deepStrictEqual(yield* planStable({ releases, commitOf, runSha }), {
         release: true,
         channel: "stable",
         version: "0.1.0",
@@ -89,12 +90,20 @@ describe("planStable", () => {
     }),
   );
 
+  // main ahead of the nightly: a run from main would test and attest another commit.
+  it.effect("refuses to run anywhere but on the latest nightly's commit", () =>
+    Effect.gen(function* () {
+      const fromMain = planStable({ releases, commitOf, runSha: "commit of main, ahead" });
+      assert.isTrue(Exit.isFailure(yield* fromMain.pipe(Effect.exit)));
+    }),
+  );
+
   it.effect("refuses without a nightly, or when that version is already stable", () =>
     Effect.gen(function* () {
-      const none = yield* planStable({ releases: [], commitOf }).pipe(Effect.exit);
+      const none = yield* planStable({ releases: [], commitOf, runSha }).pipe(Effect.exit);
       assert.isTrue(Exit.isFailure(none));
       const done = [...releases, { tag: "v0.1.0", publishedAt: hoursAgo(1) }];
-      const again = yield* planStable({ releases: done, commitOf }).pipe(Effect.exit);
+      const again = yield* planStable({ releases: done, commitOf, runSha }).pipe(Effect.exit);
       assert.isTrue(Exit.isFailure(again));
     }),
   );

@@ -29,6 +29,12 @@ const decodeDesktopPackage = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
 );
 
+class NotFromMain extends Schema.TaggedError<NotFromMain>()("NotFromMain", { ref: Schema.String }) {
+  override get message(): string {
+    return `a nightly runs from main, not from ${this.ref}`;
+  }
+}
+
 const program = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -36,6 +42,7 @@ const program = Effect.gen(function* () {
   const channel = yield* Config.Literals(["nightly", "stable"], "RELEASE_CHANNEL");
   const repository = yield* Config.String("GITHUB_REPOSITORY");
   const sha = yield* Config.String("GITHUB_SHA");
+  const ref = yield* Config.String("GITHUB_REF");
   const runNumber = yield* Config.Int("GITHUB_RUN_NUMBER");
   const token = yield* Config.Redacted("GITHUB_TOKEN");
   const output = yield* Config.String("GITHUB_OUTPUT");
@@ -56,6 +63,10 @@ const program = Effect.gen(function* () {
     .filter((release) => !release.draft && release.published_at !== null)
     .map((release) => ({ tag: release.tag_name, publishedAt: release.published_at ?? "" }));
 
+  // Nightly runs from main; stable runs on the latest nightly's tag (planStable).
+  if (channel === "nightly" && ref !== "refs/heads/main") {
+    return yield* new NotFromMain({ ref });
+  }
   const now = yield* DateTime.now;
   const plan: ReleasePlan =
     channel === "nightly"
@@ -79,6 +90,7 @@ const program = Effect.gen(function* () {
         })
       : yield* planStable({
           releases,
+          runSha: sha,
           commitOf: (tag) =>
             get(`/commits/${tag}`).pipe(
               Effect.flatMap(decodeCommit),
