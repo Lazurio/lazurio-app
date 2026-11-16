@@ -55,7 +55,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           foreach ($version in '0.0.1', '0.0.2') {
-            pnpm build:helpers --release --app-version $version
+            pnpm -w build:helpers --release --app-version $version
             if ($LASTEXITCODE -ne 0) { throw "Building the helpers of $version failed." }
             pnpm exec electron-builder --config trial/electron-builder.trial.yml `
               --win nsis --x64 --publish never `
@@ -118,7 +118,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           for version in 0.0.1 0.0.2; do
-            pnpm build:helpers --release --app-version "$version"
+            pnpm -w build:helpers --release --app-version "$version"
             pnpm exec electron-builder --config trial/electron-builder.trial.yml \
               --linux AppImage --x64 --publish never \
               -c.extraMetadata.version="$version" \
