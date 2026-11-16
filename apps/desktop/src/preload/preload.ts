@@ -1,6 +1,8 @@
 import * as Electron from "electron";
 
 import {
+  INSTALL_UPDATE_CHANNEL,
+  SET_UPDATE_CHANNEL_CHANNEL,
   STATUS_CHANGED_CHANNEL,
   STATUS_CHANNEL,
   type AppStatus,
@@ -18,6 +20,12 @@ const bridge: LazurioBridge = {
     return () => {
       Electron.ipcRenderer.removeListener(STATUS_CHANGED_CHANNEL, receive);
     };
+  },
+  setUpdateChannel: async (channel) => {
+    await Electron.ipcRenderer.invoke(SET_UPDATE_CHANNEL_CHANNEL, channel);
+  },
+  installUpdate: async () => {
+    await Electron.ipcRenderer.invoke(INSTALL_UPDATE_CHANNEL);
   },
 };
 

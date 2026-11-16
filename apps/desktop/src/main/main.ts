@@ -8,10 +8,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 import * as Electron from "electron";
 
-import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../shared/bridge.ts";
+import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
 
 import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
@@ -23,6 +24,7 @@ import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
 import * as Tailnet from "./Tailnet.ts";
 import * as Updates from "./Updates.ts";
+import * as UpdatesIpc from "./UpdatesIpc.ts";
 
 // Lazurio App GEN4 (decision 0248): the main process. It serves the app's own windows, guards
 // every web contents, starts the helper processes and opens the main window.
@@ -144,18 +146,14 @@ const keystoreOn = (platform: string, development: boolean): NodeKeys.Keystore =
 // reads it the same way.
 const selfUpdateUnsupported = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
-  if (platform === "darwin") {
-    return Option.some(
-      "On macOS, Lazurio App updates itself once it is signed with a Developer ID.",
-    );
-  }
+  if (platform === "darwin") return Option.some<UpdatesOffReason>("macos-unsigned");
   if (platform === "linux") {
     const appImage = yield* Config.option(Config.String("APPIMAGE"));
     return Option.isSome(appImage)
-      ? Option.none()
-      : Option.some("On Linux, only an AppImage updates itself.");
+      ? Option.none<UpdatesOffReason>()
+      : Option.some<UpdatesOffReason>("linux-not-appimage");
   }
-  return Option.none<string>();
+  return Option.none<UpdatesOffReason>();
 });
 
 // The data folder keeps its name whatever the product's name or the generation: an update, and
@@ -226,19 +224,25 @@ const program = Effect.gen(function* () {
     generation: "GEN4",
     helpers: helpers.map((helper) => helper.status),
     tailnets: tailnets.current(),
+    updates: updates.current(),
   });
   // Every change of status goes to every local window, from before the first window exists. A
   // window reads the status after subscribing to these messages, so no change falls between.
+  const broadcastStatus = () => {
+    for (const contents of Hardening.localViews()) {
+      contents.send(STATUS_CHANGED_CHANNEL, status());
+    }
+  };
   yield* Effect.acquireRelease(
-    Effect.sync(() =>
-      tailnets.subscribe(() => {
-        for (const contents of Hardening.localViews()) {
-          contents.send(STATUS_CHANGED_CHANNEL, status());
-        }
-      }),
-    ),
+    Effect.sync(() => tailnets.subscribe(broadcastStatus)),
     (stop) => Effect.sync(stop),
   );
+  yield* updates.changes.pipe(
+    Stream.runForEach(() => Effect.sync(broadcastStatus)),
+    Effect.forkScoped,
+  );
+  // Only the app's local windows may pick the channel or install (UpdatesIpc.ts).
+  yield* UpdatesIpc.serve(updates);
   // The app ends when its windows are closed, also while the main window is still opening (its
   // remote page may wait for a tailnet's sign-in), and when opening it fails.
   const allWindowsClosed = Effect.callback<void>((resume) => {
@@ -260,7 +264,16 @@ const program = Effect.gen(function* () {
         const decision = Updates.quitDecision(updates.current().state.phase);
         if (decision === "quit") return;
         event.preventDefault();
-        if (decision === "install") Effect.runForkWith(services)(updates.install);
+        // An install that does not start (the channel changed meanwhile) lets the quit through.
+        if (decision === "install") {
+          Effect.runForkWith(services)(
+            updates.install.pipe(
+              Effect.flatMap((installed) =>
+                installed ? Effect.void : Effect.sync(() => Electron.app.quit()),
+              ),
+            ),
+          );
+        }
       };
       Electron.app.on("before-quit", beforeQuit);
       return beforeQuit;

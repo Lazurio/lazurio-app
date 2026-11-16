@@ -25,6 +25,28 @@ export interface Text {
   readonly keyNotSaved: Advice;
   readonly keyUnreadable: Advice;
   readonly stateUnreadable: Advice;
+  readonly updates: UpdatesText;
+}
+
+// The window's section about updates (docs/adr/0005). "{version}" stands for the version offered.
+export interface UpdatesText {
+  readonly title: string;
+  readonly channel: string;
+  readonly latest: string;
+  readonly nightly: string;
+  readonly floor: string;
+  readonly unpackaged: string;
+  readonly "macos-unsigned": string;
+  readonly "linux-not-appimage": string;
+  readonly idle: string;
+  readonly checking: string;
+  readonly downloading: string;
+  readonly ready: string;
+  readonly install: string;
+  readonly installing: string;
+  readonly restarting: string;
+  readonly failed: string;
+  readonly channelNotSaved: string;
 }
 
 const cs: Text = {
@@ -54,6 +76,30 @@ const cs: Text = {
   stateUnreadable: {
     lead: "Uložený stav tohoto tailnetu nejde otevřít jeho klíčem, a proto se tailnet nespustil. Ukončete Lazurio App, smažte tento soubor a tuto složku a aplikaci spusťte znovu:",
     after: "Počítač se pak do tailnetu přihlásí znovu a jako nové zařízení čeká na schválení.",
+  },
+  updates: {
+    title: "Aktualizace",
+    channel: "Kanál",
+    latest: "Stabilní",
+    nightly: "Noční (zkušební)",
+    floor:
+      "Na stabilní verzi přejdete, až vyjde stabilní verze novější než ta, kterou máte. Starší verzi Lazurio App neinstaluje.",
+    unpackaged: "Vývojová verze se sama neaktualizuje.",
+    "macos-unsigned":
+      "Na Macu se Lazurio App začne aktualizovat sama, až bude podepsaná certifikátem Apple. Do té doby novou verzi nainstalujte ručně.",
+    "linux-not-appimage": "Na Linuxu se sama aktualizuje jen verze AppImage.",
+    idle: "Novější verze zatím není.",
+    checking: "Hledá novou verzi…",
+    downloading: "Stahuje verzi {version}…",
+    ready:
+      "Verze {version} je připravená. Nainstaluje se, až Lazurio App zavřete, nebo hned tlačítkem.",
+    install: "Restartovat a aktualizovat",
+    installing:
+      "Instaluje verzi {version}. Pokud na počítači zrovna pracuje agent, počká, až skončí.",
+    restarting: "Restartuje se do verze {version}…",
+    failed: "Aktualizace se nepovedla. Lazurio App to zkusí znovu za hodinu.",
+    channelNotSaved:
+      "Kanál se nepodařilo změnit. Zkontrolujte, že do složky dat Lazurio App jde zapisovat, a zkuste to znovu.",
   },
 };
 
@@ -86,6 +132,30 @@ const en: Text = {
     lead: "The saved state of this tailnet does not open with its key, so the tailnet did not start. Quit Lazurio App, delete this file and this folder, and start the app again:",
     after:
       "The computer then signs in to the tailnet again and waits for approval as a new device.",
+  },
+  updates: {
+    title: "Updates",
+    channel: "Channel",
+    latest: "Stable",
+    nightly: "Nightly (preview)",
+    floor:
+      "You move to the stable channel once a stable version newer than yours is out. Lazurio App never installs an older version.",
+    unpackaged: "A development build does not update itself.",
+    "macos-unsigned":
+      "On a Mac, Lazurio App starts updating itself once it is signed with an Apple certificate. Until then, install a new version by hand.",
+    "linux-not-appimage": "On Linux, only the AppImage updates itself.",
+    idle: "No newer version yet.",
+    checking: "Looking for a new version…",
+    downloading: "Downloading version {version}…",
+    ready:
+      "Version {version} is ready. It installs when you quit Lazurio App, or now with the button.",
+    install: "Restart and update",
+    installing:
+      "Installing version {version}. If an agent is working on the computer, it waits until the agent is done.",
+    restarting: "Restarting into version {version}…",
+    failed: "The update did not work. Lazurio App tries again in an hour.",
+    channelNotSaved:
+      "The channel could not be changed. Check that Lazurio App's data folder can be written, and try again.",
   },
 };
 

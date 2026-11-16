@@ -160,6 +160,7 @@ describe("Lazurio App GEN4", () => {
       generation: "GEN4",
       helpers: [],
       tailnets: [{ tailnet: "e2e", state: "running", addresses: ["100.64.0.1"] }],
+      updates: { channel: "latest", state: { phase: "off", reason: "unpackaged" } },
     };
     await app.evaluate(
       ({ BrowserWindow }, { channel, status }) => {

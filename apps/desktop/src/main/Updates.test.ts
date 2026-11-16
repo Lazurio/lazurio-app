@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
@@ -101,6 +103,8 @@ const withUpdates = <A, E>(
     readonly updater: ReturnType<typeof fakeUpdater>;
     readonly activity?: DeviceActivityShape;
     readonly options?: Partial<UpdatesOptions>;
+    // The file system the updater gets, for a test that holds its writes.
+    readonly fileSystem?: (real: FileSystem.FileSystem) => FileSystem.FileSystem;
   },
   run: (updates: Updates, settingsPath: string) => Effect.Effect<A, E, FileSystem.FileSystem>,
 ) =>
@@ -117,6 +121,10 @@ const withUpdates = <A, E>(
       restartHelpers: Effect.void,
       ...setup.options,
     }).pipe(
+      Effect.provideService(
+        FileSystem.FileSystem,
+        setup.fileSystem === undefined ? fileSystem : setup.fileSystem(fileSystem),
+      ),
       Effect.provideService(ElectronUpdater, setup.updater.service),
       setup.activity === undefined
         ? (effect) => effect
@@ -140,7 +148,7 @@ describe("Updates", () => {
   it.effect("does nothing on a system that cannot update the app by itself", () => {
     const updater = fakeUpdater();
     return withUpdates(
-      { updater, options: { unsupported: Option.some("needs a signed app") } },
+      { updater, options: { unsupported: Option.some("macos-unsigned") } },
       (updates) =>
         Effect.gen(function* () {
           yield* updates.check;
@@ -148,7 +156,7 @@ describe("Updates", () => {
           assert.deepStrictEqual(updater.calls, []);
           assert.deepStrictEqual(updates.current(), {
             channel: "nightly",
-            state: { phase: "off", reason: "needs a signed app" },
+            state: { phase: "off", reason: "macos-unsigned" },
           });
         }),
     );
@@ -349,6 +357,78 @@ describe("Updates", () => {
                 ),
                 ["install silent=true runAfter=true", "quitForUpdate"],
               );
+            }),
+        );
+      }),
+  );
+});
+
+describe("Updates while an install waits", () => {
+  it.effect("refuses a change of channel, so a quit still waits for the install", () =>
+    Effect.gen(function* () {
+      const updater = fakeUpdater();
+      const { activity, setIdle } = yield* fakeActivity;
+      return yield* withUpdates({ updater, activity }, (updates, settingsPath) =>
+        Effect.gen(function* () {
+          yield* updater.emit("update-available", { version: "0.1.1" });
+          yield* updater.emit("update-downloaded", { version: "0.1.1" });
+          yield* waitFor(updates, "ready");
+          yield* setIdle(false);
+          const installing = yield* Effect.forkChild(updates.install);
+          yield* waitFor(updates, "installing");
+          const change = yield* updates.setChannel("nightly").pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(change));
+          assert.deepStrictEqual(updates.current().channel, "latest");
+          assert.strictEqual(quitDecision(updates.current().state.phase), "wait");
+          assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(settingsPath));
+          yield* setIdle(true);
+          assert.isTrue(yield* Fiber.join(installing));
+        }),
+      );
+    }),
+  );
+});
+
+describe("Updates while a change of channel is saving", () => {
+  it.effect(
+    "lets an install start only after the change, which then leaves nothing to install",
+    () =>
+      Effect.gen(function* () {
+        const updater = fakeUpdater();
+        const saving = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        return yield* withUpdates(
+          {
+            updater,
+            fileSystem: (real) =>
+              FileSystem.FileSystem.of({
+                ...real,
+                writeFileString: (path, data, options) =>
+                  Deferred.succeed(saving, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(real.writeFileString(path, data, options)),
+                  ),
+              }),
+          },
+          (updates) =>
+            Effect.gen(function* () {
+              yield* updater.emit("update-available", { version: "0.1.1" });
+              yield* updater.emit("update-downloaded", { version: "0.1.1" });
+              yield* waitFor(updates, "ready");
+              // The change of channel holds its turn while it saves updates.json.
+              const change = yield* Effect.forkChild(updates.setChannel("nightly"));
+              yield* Deferred.await(saving);
+              // The person presses Restart and update, or quits, meanwhile.
+              const installing = yield* Effect.forkChild(updates.install);
+              yield* Effect.yieldNow;
+              assert.strictEqual(updates.current().state.phase, "ready");
+              yield* Deferred.succeed(release, undefined);
+              yield* Fiber.join(change);
+              // The ready update belonged to the old channel; no install started or got overwritten.
+              assert.isFalse(yield* Fiber.join(installing));
+              assert.strictEqual(updates.current().channel, "nightly");
+              assert.notInclude(updater.calls, "install silent=true runAfter=true");
+              assert.strictEqual(quitDecision(updates.current().state.phase), "quit");
             }),
         );
       }),
