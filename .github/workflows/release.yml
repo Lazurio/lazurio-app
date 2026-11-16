@@ -135,7 +135,10 @@ jobs:
         working-directory: helpers/device
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
-      - run: pnpm build:helpers --release
+      # bash on every runner: the default shell on Windows reads the job's VERSION as $env:VERSION.
+      - name: Helpers at the release's version
+        shell: bash
+        run: pnpm build:helpers --release --app-version "$VERSION"
       - run: pnpm --filter @lazurio/app-desktop build
       # electron-builder takes the channel from the version: a nightly writes nightly*.yml, a stable
       # latest*.yml. The feed is this repository's GitHub Releases (electron-builder.yml).
@@ -151,6 +154,18 @@ jobs:
           pnpm exec electron-builder ${{ matrix.targets }} --publish never \
             -c.extraMetadata.version="$VERSION" "${mac_ad_hoc[@]}"
       - run: pnpm --filter @lazurio/app-desktop check:fuses
+      # The packaged helpers say Hello as the release's version (#22).
+      - name: Helper versions
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          case "${{ matrix.name }}" in
+            win-x64) helpers="release/win-unpacked/resources/helpers" ;;
+            mac-arm64) helpers="release/mac-arm64/Lazurio App.app/Contents/Resources/helpers" ;;
+            mac-x64) helpers="release/mac/Lazurio App.app/Contents/Resources/helpers" ;;
+          esac
+          node scripts/check-helper-versions.ts "$helpers" "$VERSION"
       # The release job merges the two Mac manifests into one per channel.
       - name: Collect the release files
         shell: bash
