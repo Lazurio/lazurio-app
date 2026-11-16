@@ -62,7 +62,11 @@ jobs:
   # protection.
   guard:
     needs: plan
-    if: needs.plan.outputs.release == 'true'
+    # Only where the release job runs: a manual nightly with publishing off builds everything and
+    # publishes nothing, so it needs no Environment.
+    if: >-
+      needs.plan.outputs.release == 'true' &&
+      (needs.plan.outputs.channel == 'stable' || vars.LAZURIO_APP_NIGHTLY_PUBLISH == 'true')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -175,22 +179,16 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  release:
-    needs: [plan, guard, build]
-    if: >-
-      needs.plan.outputs.release == 'true' &&
-      (needs.plan.outputs.channel == 'stable' || vars.LAZURIO_APP_NIGHTLY_PUBLISH == 'true')
+  # Merges the two Mac manifests and attests them, without an Environment, so that a run with
+  # publishing off also yields every release file (docs/adr/0005, point 3).
+  manifests:
+    needs: [plan, build]
+    if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-24.04
-    # The approval of this Environment is the Publication (docs/adr/0005, point 3).
-    environment: lazurio-app-${{ needs.plan.outputs.channel }}
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TAG: ${{ needs.plan.outputs.tag }}
-      CHANNEL: ${{ needs.plan.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -219,6 +217,34 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release-assets/*.yml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-files
+          path: release-assets/*
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    needs: [plan, guard, manifests]
+    if: >-
+      needs.plan.outputs.release == 'true' &&
+      (needs.plan.outputs.channel == 'stable' || vars.LAZURIO_APP_NIGHTLY_PUBLISH == 'true')
+    runs-on: ubuntu-24.04
+    # The approval of this Environment is the Publication (docs/adr/0005, point 3).
+    environment: lazurio-app-${{ needs.plan.outputs.channel }}
+    # It only publishes the files the manifests job collected and attested.
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-files
+          path: release-assets
       # Created as a draft and published in one step once every file is attached, so no installed
       # app sees a release without its packages. A published release is never edited.
       - name: Publish the release
