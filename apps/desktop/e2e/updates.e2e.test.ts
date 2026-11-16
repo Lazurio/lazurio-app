@@ -33,6 +33,27 @@ afterAll(async () => {
 });
 
 describe("Lazurio App GEN4 updates", () => {
+  // A directory where updates.json belongs makes the save fail; the window says so and the
+  // person can try again once it is gone.
+  it("says when the channel could not be saved, and lets the person try again", async () => {
+    const settings = NodePath.join(userData, "updates.json");
+    NodeFS.mkdirSync(settings);
+    await shell.locator('input[name="update-channel"][value="nightly"]').click();
+    await shell.locator('[data-updates-problem="channel-not-saved"]').waitFor();
+    await shell.locator("fieldset.shell__channel:not([disabled])").waitFor();
+    const section = shell.locator("section[data-updates-phase]");
+    assert.strictEqual(await section.getAttribute("data-updates-channel"), "latest");
+    NodeFS.rmdirSync(settings);
+    await shell.locator('input[name="update-channel"][value="nightly"]').click();
+    await shell.locator('section[data-updates-channel="nightly"]').waitFor();
+    assert.strictEqual(
+      await shell.locator('[data-updates-problem="channel-not-saved"]').count(),
+      0,
+    );
+    await shell.locator('input[name="update-channel"][value="latest"]').click();
+    await shell.locator('section[data-updates-channel="latest"]').waitFor();
+  });
+
   it("says that an unpackaged app does not update itself, and starts on stable", async () => {
     const section = shell.locator("section[data-updates-phase]");
     await section.waitFor();

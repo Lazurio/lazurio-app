@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
@@ -352,6 +353,32 @@ describe("Updates", () => {
             }),
         );
       }),
+  );
+});
+
+describe("Updates while an install waits", () => {
+  it.effect("refuses a change of channel, so a quit still waits for the install", () =>
+    Effect.gen(function* () {
+      const updater = fakeUpdater();
+      const { activity, setIdle } = yield* fakeActivity;
+      return yield* withUpdates({ updater, activity }, (updates, settingsPath) =>
+        Effect.gen(function* () {
+          yield* updater.emit("update-available", { version: "0.1.1" });
+          yield* updater.emit("update-downloaded", { version: "0.1.1" });
+          yield* waitFor(updates, "ready");
+          yield* setIdle(false);
+          const installing = yield* Effect.forkChild(updates.install);
+          yield* waitFor(updates, "installing");
+          const change = yield* updates.setChannel("nightly").pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(change));
+          assert.deepStrictEqual(updates.current().channel, "latest");
+          assert.strictEqual(quitDecision(updates.current().state.phase), "wait");
+          assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(settingsPath));
+          yield* setIdle(true);
+          assert.isTrue(yield* Fiber.join(installing));
+        }),
+      );
+    }),
   );
 });
 

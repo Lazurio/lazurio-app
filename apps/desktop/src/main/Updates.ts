@@ -25,6 +25,16 @@ const IDLE_RECHECK = "30 seconds";
 
 export type { UpdateState, UpdatesStatus } from "../shared/bridge.ts";
 
+// The channel does not change while an install runs: it would end the install's state, and a quit
+// would no longer wait for the attempt (quitDecision).
+class UpdateChannelBusy extends Schema.TaggedError<UpdateChannelBusy>()("UpdateChannelBusy", {
+  phase: Schema.String,
+}) {
+  override get message(): string {
+    return `the update channel does not change while the app is ${this.phase}`;
+  }
+}
+
 class UpdateSettingsError extends Schema.TaggedError<UpdateSettingsError>()("UpdateSettingsError", {
   path: Schema.String,
   cause: Schema.Defect(),
@@ -52,7 +62,9 @@ export interface Updates {
   readonly current: () => UpdatesStatus;
   readonly changes: Stream.Stream<UpdatesStatus>;
   readonly check: Effect.Effect<void>;
-  readonly setChannel: (channel: UpdateChannel) => Effect.Effect<void, UpdateSettingsError>;
+  readonly setChannel: (
+    channel: UpdateChannel,
+  ) => Effect.Effect<void, UpdateSettingsError | UpdateChannelBusy>;
   // Installs a downloaded update: `true` when the app quits to install it, `false` when there is
   // none or the install failed.
   readonly install: Effect.Effect<boolean>;
@@ -202,6 +214,10 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
 
   const setChannel = Effect.fn("Updates.setChannel")(function* (channel: UpdateChannel) {
     if (channel === latest.channel) return;
+    const phase = latest.state.phase;
+    if (phase === "installing" || phase === "restarting") {
+      return yield* new UpdateChannelBusy({ phase });
+    }
     yield* fileSystem
       .writeFileString(options.settingsPath, encodeSettings({ channel }))
       .pipe(

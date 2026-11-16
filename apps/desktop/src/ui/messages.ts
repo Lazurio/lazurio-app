@@ -46,6 +46,7 @@ export interface UpdatesText {
   readonly installing: string;
   readonly restarting: string;
   readonly failed: string;
+  readonly channelNotSaved: string;
 }
 
 const cs: Text = {
@@ -97,6 +98,8 @@ const cs: Text = {
       "Instaluje verzi {version}. Pokud na počítači zrovna pracuje agent, počká, až skončí.",
     restarting: "Restartuje se do verze {version}…",
     failed: "Aktualizace se nepovedla. Lazurio App to zkusí znovu za hodinu.",
+    channelNotSaved:
+      "Kanál se nepodařilo změnit. Zkontrolujte, že do složky dat Lazurio App jde zapisovat, a zkuste to znovu.",
   },
 };
 
@@ -151,6 +154,8 @@ const en: Text = {
       "Installing version {version}. If an agent is working on the computer, it waits until the agent is done.",
     restarting: "Restarting into version {version}…",
     failed: "The update did not work. Lazurio App tries again in an hour.",
+    channelNotSaved:
+      "The channel could not be changed. Check that Lazurio App's data folder can be written, and try again.",
   },
 };
 

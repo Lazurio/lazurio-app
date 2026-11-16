@@ -16,11 +16,18 @@ export function UpdatesSection({
   readonly text: UpdatesText;
 }) {
   const [busy, setBusy] = useState(false);
+  const [notSaved, setNotSaved] = useState(false);
   const label = updateLabel(updates, appVersion, text);
+  // While an install runs, the main process refuses a change of channel; the radios say so too.
+  const installing = updates.state.phase === "installing" || updates.state.phase === "restarting";
   const pick = (channel: UpdateChannelName) => {
     if (channel === updates.channel) return;
     setBusy(true);
-    void window.lazurio.setUpdateChannel(channel).finally(() => setBusy(false));
+    setNotSaved(false);
+    window.lazurio
+      .setUpdateChannel(channel)
+      .catch(() => setNotSaved(true))
+      .finally(() => setBusy(false));
   };
   return (
     <section
@@ -41,7 +48,7 @@ export function UpdatesSection({
           {text.install}
         </button>
       ) : null}
-      <fieldset className="shell__channel" disabled={busy}>
+      <fieldset className="shell__channel" disabled={busy || installing}>
         <legend>{text.channel}</legend>
         {(["latest", "nightly"] as const).map((channel) => (
           <label key={channel}>
@@ -56,6 +63,11 @@ export function UpdatesSection({
           </label>
         ))}
       </fieldset>
+      {notSaved ? (
+        <p className="shell__problem" role="alert" data-updates-problem="channel-not-saved">
+          {text.channelNotSaved}
+        </p>
+      ) : null}
       {label.floor ? <p className="shell__empty">{text.floor}</p> : null}
     </section>
   );
