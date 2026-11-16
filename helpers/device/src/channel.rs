@@ -41,7 +41,15 @@ pub struct Timing {
     pub first_retry: Duration,
     /// The longest pause between attempts.
     pub longest_retry: Duration,
+    /// How long `already-attached` counts as the Environment still letting go of this computer's
+    /// previous session, for example after a restart of the channel, and is retried. The
+    /// Environment ends a dead session after its own 45 s of silence, so the default leaves room
+    /// for that. A denial that lasts longer is another session of this device and is reported.
+    pub attached_grace: Duration,
 }
+
+/// The denial with which the Environment answers while it still holds a session of this device.
+pub const ALREADY_ATTACHED: &str = "already-attached";
 
 impl Default for Timing {
     fn default() -> Self {
@@ -51,6 +59,7 @@ impl Default for Timing {
             silent_after: Duration::from_secs(45),
             first_retry: Duration::from_secs(1),
             longest_retry: Duration::from_secs(60),
+            attached_grace: Duration::from_secs(120),
         }
     }
 }
@@ -261,6 +270,8 @@ enum Outcome {
     Ended,
     /// The Environment refused the computer, with this reason.
     Refused(String),
+    /// The Environment still holds a session of this device (`already-attached`).
+    Attached,
     /// The channel was stopped.
     Stopped,
 }
@@ -293,6 +304,8 @@ impl Worker {
         // StartChannel's answer already said Connecting with no failed attempt.
         let mut failed_attempts = 0_u32;
         let mut first = true;
+        // Since when the Environment answers `already-attached` without a break.
+        let mut attached_since: Option<std::time::Instant> = None;
         loop {
             if !first {
                 self.report(channel_state::State::Connecting(Connecting {
@@ -306,17 +319,33 @@ impl Worker {
                 }
             }
             first = false;
-            match self.session() {
+            let outcome = self.session();
+            if !matches!(outcome, Outcome::Attached) {
+                attached_since = None;
+            }
+            match outcome {
                 Outcome::Stopped => return,
+                Outcome::Attached => {
+                    let since = *attached_since.get_or_insert_with(std::time::Instant::now);
+                    if since.elapsed() >= self.channel.timing.attached_grace {
+                        self.refuse(ALREADY_ATTACHED.to_owned());
+                        return;
+                    }
+                    failed_attempts = failed_attempts.saturating_add(1);
+                }
                 Outcome::Refused(reason) => {
-                    self.record(history::kind::REFUSED);
-                    self.report(channel_state::State::Refused(Refused { reason }));
+                    self.refuse(reason);
                     return;
                 }
                 Outcome::Failed => failed_attempts = failed_attempts.saturating_add(1),
                 Outcome::Ended => failed_attempts = 0,
             }
         }
+    }
+
+    fn refuse(&self, reason: String) {
+        self.record(history::kind::REFUSED);
+        self.report(channel_state::State::Refused(Refused { reason }));
     }
 
     /// One session, from connecting to its end.
@@ -367,6 +396,8 @@ impl Worker {
                 self.close(&mut socket);
                 return if self.control.stopped() {
                     Outcome::Stopped
+                } else if reason == ALREADY_ATTACHED {
+                    Outcome::Attached
                 } else {
                     Outcome::Refused(reason)
                 };
@@ -625,6 +656,87 @@ mod tests {
             .filter(|event| *event == Event::Tcp)
             .count();
         assert_eq!(connections, 1, "one attempt, no retry");
+        assert_eq!(running.kinds(), [kind::REFUSED]);
+    }
+
+    #[test]
+    fn a_restart_waits_out_the_environment_letting_go_of_the_previous_session() {
+        // The Environment still holds this device's previous session: it answers
+        // `already-attached` until the test lets that session go, then accepts.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = std::sync::Mutex::new(released);
+        let let_go = std::sync::atomic::AtomicBool::new(false);
+        let environment = FakeEnvironment::start(move |session: &mut Session| {
+            if !let_go.load(std::sync::atomic::Ordering::SeqCst) {
+                if released
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .try_recv()
+                    .is_ok()
+                {
+                    let_go.store(true, std::sync::atomic::Ordering::SeqCst);
+                } else {
+                    session.challenge();
+                    let _ = session.read_json();
+                    session.send(&json!({"type": "denied", "reason": "already-attached"}));
+                    return;
+                }
+            }
+            if session.authenticate() {
+                session.silent_until_closed();
+            }
+        });
+        let running = run(environment.connector(), quick_timing(), None);
+
+        assert_eq!(running.next(), connecting(1), "a retry, not a refusal");
+        assert_eq!(running.next(), connecting(2));
+        release.send(()).expect("the previous session lets go");
+        loop {
+            match running.next() {
+                channel_state::State::Connecting(_) => {}
+                channel_state::State::Connected(_) => break,
+                other => panic!("recovered to Connected, not {other:?}"),
+            }
+        }
+        assert!(
+            !running
+                .kinds()
+                .iter()
+                .any(|kind| kind == history::kind::REFUSED),
+            "no refusal was recorded"
+        );
+        running.supervisor.stop();
+    }
+
+    #[test]
+    fn already_attached_beyond_the_grace_is_another_session_and_is_reported() {
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            session.challenge();
+            let _ = session.read_json();
+            session.send(&json!({"type": "denied", "reason": "already-attached"}));
+        });
+        let timing = Timing {
+            attached_grace: Duration::from_millis(30),
+            ..quick_timing()
+        };
+        let mut running = run(environment.connector(), timing, None);
+
+        loop {
+            match running.next() {
+                channel_state::State::Connecting(_) => {}
+                channel_state::State::Refused(Refused { reason }) => {
+                    assert_eq!(reason, "already-attached");
+                    break;
+                }
+                other => panic!("Connecting until Refused, not {other:?}"),
+            }
+        }
+        assert!(
+            running
+                .supervisor
+                .wait_ended(std::time::Instant::now() + PATIENCE),
+            "the channel ends after reporting"
+        );
         assert_eq!(running.kinds(), [kind::REFUSED]);
     }
 

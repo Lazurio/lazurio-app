@@ -53,6 +53,7 @@ pub fn quick_timing() -> Timing {
         silent_after: Duration::from_secs(30),
         first_retry: Duration::from_millis(1),
         longest_retry: Duration::from_millis(4),
+        attached_grace: Duration::from_secs(120),
     }
 }
 
