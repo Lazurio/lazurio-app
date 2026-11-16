@@ -117,6 +117,7 @@ jobs:
       attestations: write
     env:
       VERSION: ${{ needs.plan.outputs.version }}
+      CHANNEL: ${{ needs.plan.outputs.channel }}
       # Until Lazurio's signing identities exist (task 802 of plan LZD-0017) the Windows build is
       # unsigned and the Mac build is signed ad hoc after its fuses; no runner picks an identity.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -140,8 +141,9 @@ jobs:
         shell: bash
         run: pnpm build:helpers --release --app-version "$VERSION"
       - run: pnpm --filter @lazurio/app-desktop build
-      # electron-builder takes the channel from the version: a nightly writes nightly*.yml, a stable
-      # latest*.yml. The feed is this repository's GitHub Releases (electron-builder.yml).
+      # The channel is set, not left to electron-builder, which with --publish never writes latest*.yml
+      # for a nightly too (#31): a nightly writes nightly*.yml, a stable latest*.yml. The feed is this
+      # repository's GitHub Releases (electron-builder.yml).
       - name: Package
         shell: bash
         working-directory: apps/desktop
@@ -151,8 +153,10 @@ jobs:
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             mac_ad_hoc=(-c.mac.identity=- -c.mac.hardenedRuntime=false)
           fi
+          feed_channel=latest
+          if [[ "$CHANNEL" == "nightly" ]]; then feed_channel=nightly; fi
           pnpm exec electron-builder ${{ matrix.targets }} --publish never \
-            -c.extraMetadata.version="$VERSION" "${mac_ad_hoc[@]}"
+            -c.extraMetadata.version="$VERSION" -c.publish.channel="$feed_channel" "${mac_ad_hoc[@]}"
       - run: pnpm --filter @lazurio/app-desktop check:fuses
       # The packaged helpers say Hello as the release's version (#22).
       - name: Helper versions
@@ -228,6 +232,24 @@ jobs:
             rm -f "$x64"
           done
           ls -la release-assets
+      # Every release carries exactly its channel's manifests: nightly.yml and nightly-mac.yml for a
+      # nightly, latest.yml and latest-mac.yml for stable (#31).
+      - name: Check the manifests' channel
+        env:
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+        run: |
+          set -euo pipefail
+          feed_channel=latest
+          if [[ "$CHANNEL" == "nightly" ]]; then feed_channel=nightly; fi
+          expected="$(printf '%s\n' "$feed_channel-mac.yml" "$feed_channel.yml" | sort)"
+          actual="$(cd release-assets && ls -1 ./*.yml | sed 's#^\./##' | sort)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Manifests for the $CHANNEL channel should be:" >&2
+            echo "$expected" >&2
+            echo "but the release has:" >&2
+            echo "$actual" >&2
+            exit 1
+          fi
       # The builds attested their own files; the merged Mac manifests are made here.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
