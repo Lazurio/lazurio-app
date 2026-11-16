@@ -87,7 +87,9 @@ try {
   # (build/installer.nsh). The uninstaller hands over to a copy of itself, so the test waits for
   # its entry to go rather than for the process.
   $cache = Join-Path $env:LOCALAPPDATA 'lazurio-app-updater'
-  if (-not (Test-Path -LiteralPath $cache)) { throw 'The updater left no cache to test the uninstall with.' }
+  # electron-updater may already have tidied it; the uninstall must remove whatever is there.
+  New-Item -ItemType Directory -Force -Path $cache | Out-Null
+  Set-Content -LiteralPath (Join-Path $cache 'update-trial-leftover.txt') -Value 'leftover'
   $uninstall = Get-ChildItem -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
     Get-ItemProperty | Where-Object { $_.DisplayName -like 'Lazurio App*' } | Select-Object -First 1
   & cmd.exe /d /c $uninstall.QuietUninstallString | Write-Host
