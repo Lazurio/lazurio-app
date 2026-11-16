@@ -17,8 +17,9 @@ const START_CHANNEL_FIELD: u32 = 21;
 /// other variant of the oneof can replace it.
 const REQUEST_ID_FIELD: u32 = 1;
 
-/// A `StartChannel` whose secrets wipe themselves.
-#[derive(Debug, Default)]
+/// A `StartChannel` whose secrets wipe themselves. Its `Debug` names the secrets' presence and
+/// never their bytes, so no log or panic message can carry them.
+#[derive(Default)]
 pub struct StartRequest {
     pub environment_id: String,
     pub environment_label: String,
@@ -28,13 +29,38 @@ pub struct StartRequest {
     pub proxy: Option<ProxyRequest>,
 }
 
-/// The tailnet proxy of a `StartChannel`, whose credentials wipe themselves.
-#[derive(Debug, Default)]
+/// The tailnet proxy of a `StartChannel`, whose credentials wipe themselves. Its `Debug` hides
+/// the credentials.
+#[derive(Default)]
 pub struct ProxyRequest {
     pub host: String,
     pub port: u32,
     pub username: Zeroizing<String>,
     pub password: Zeroizing<String>,
+}
+
+impl std::fmt::Debug for StartRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StartRequest")
+            .field("environment_id", &self.environment_id)
+            .field("environment_label", &self.environment_label)
+            .field("attach_url", &self.attach_url)
+            .field("device_id", &self.device_id)
+            .field("key_seed", &format_args!("<{} bytes>", self.key_seed.len()))
+            .field("proxy", &self.proxy)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ProxyRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyRequest")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &"<hidden>")
+            .field("password", &"<hidden>")
+            .finish()
+    }
 }
 
 /// What the scan of a frame found.
@@ -429,6 +455,17 @@ mod tests {
         prost::encoding::encode_varint(u64::from(98_u32 << 3), &mut frame);
         prost::encoding::encode_varint(5, &mut frame);
         assert!(matches!(scan(&frame), Ok(Scanned::Refused { .. })));
+    }
+
+    #[test]
+    fn debug_output_never_carries_the_secrets() {
+        let Ok(Scanned::Start { request, .. }) = scan(&start_message().encode_to_vec()) else {
+            panic!("a StartChannel");
+        };
+        let shown = format!("{request:?}");
+        assert!(shown.contains("<32 bytes>") && shown.contains("<hidden>"));
+        assert!(!shown.contains("secret") && !shown.contains("user\""));
+        assert!(!shown.contains("165"), "no byte of the seed (0xA5 = 165)");
     }
 
     #[test]
