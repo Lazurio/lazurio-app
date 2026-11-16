@@ -4,6 +4,8 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = "../../proto";
     println!("cargo:rerun-if-changed={proto_root}");
+    // A release build carries the app's version (scripts/build-helpers.ts); a change rebuilds.
+    println!("cargo:rerun-if-env-changed=LAZURIO_APP_VERSION");
     let descriptors = protox::compile(
         [
             "lazurio/app/device/v1/device.proto",

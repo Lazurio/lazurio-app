@@ -135,7 +135,7 @@ jobs:
         working-directory: helpers/device
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
-      - run: pnpm build:helpers --release
+      - run: pnpm build:helpers --release --app-version "$VERSION"
       - run: pnpm --filter @lazurio/app-desktop build
       # electron-builder takes the channel from the version: a nightly writes nightly*.yml, a stable
       # latest*.yml. The feed is this repository's GitHub Releases (electron-builder.yml).

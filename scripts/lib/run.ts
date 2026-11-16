@@ -17,10 +17,18 @@ export const runInherited = Effect.fn("runInherited")(function* (
   command: string,
   args: ReadonlyArray<string>,
   cwd: string,
+  // Added to the inherited environment.
+  env: Readonly<Record<string, string>> = {},
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(
-    ChildProcess.make(command, [...args], { cwd, stdout: "inherit", stderr: "inherit" }),
+    ChildProcess.make(command, [...args], {
+      cwd,
+      stdout: "inherit",
+      stderr: "inherit",
+      env: { ...env },
+      extendEnv: true,
+    }),
   );
   const exitCode = Number(yield* child.exitCode);
   if (exitCode !== 0) return yield* new CommandFailed({ command, exitCode });

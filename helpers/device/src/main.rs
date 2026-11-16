@@ -7,7 +7,11 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let mut output = io::stdout().lock();
     let result = unbuffered_stdin().and_then(|mut input| {
-        lazurio_device::serve(&mut input, &mut output, env!("CARGO_PKG_VERSION"))
+        lazurio_device::serve(
+            &mut input,
+            &mut output,
+            option_env!("LAZURIO_APP_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+        )
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,
