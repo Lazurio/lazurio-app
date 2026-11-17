@@ -1234,6 +1234,7 @@ mod tests {
     fn refused(reason: &str) -> channel_state::State {
         channel_state::State::Refused(crate::lazurio::app::device::v1::Refused {
             reason: reason.to_owned(),
+            http_status: 0,
         })
     }
 

@@ -336,16 +336,27 @@ fn checking_gateway() -> Box<Gateway> {
 impl FakeEnvironment {
     /// An Environment whose gateway checks each upgrade as contract v3 does.
     pub fn start(behaviour: impl Fn(&mut Session) + Send + Sync + 'static) -> Self {
-        Self::with_gateway(checking_gateway(), behaviour)
+        Self::with_gateway(checking_gateway(), None, behaviour)
     }
 
     /// An Environment whose gateway refuses every upgrade with `status`.
     pub fn refusing(status: u16, behaviour: impl Fn(&mut Session) + Send + Sync + 'static) -> Self {
-        Self::with_gateway(Box::new(move |_: &Request| Some(status)), behaviour)
+        Self::with_gateway(Box::new(move |_: &Request| Some(status)), None, behaviour)
+    }
+
+    /// An Environment whose gateway refuses every upgrade with `status` and `Retry-After:
+    /// retry_after`.
+    pub fn refusing_with_retry_after(status: u16, retry_after: &'static str) -> Self {
+        Self::with_gateway(
+            Box::new(move |_: &Request| Some(status)),
+            Some(retry_after),
+            |_: &mut Session| {},
+        )
     }
 
     fn with_gateway(
         gateway: Box<Gateway>,
+        retry_after: Option<&'static str>,
         behaviour: impl Fn(&mut Session) + Send + Sync + 'static,
     ) -> Self {
         let gateway: Arc<Gateway> = Arc::from(gateway);
@@ -376,6 +387,12 @@ impl FakeEnvironment {
                                 *refusal.status_mut() =
                                     tungstenite::http::StatusCode::from_u16(status)
                                         .expect("a status");
+                                if let Some(value) = retry_after {
+                                    refusal.headers_mut().insert(
+                                        "retry-after",
+                                        tungstenite::http::HeaderValue::from_static(value),
+                                    );
+                                }
                                 return Err(refusal);
                             }
                             *seen.lock().unwrap_or_else(PoisonError::into_inner) =

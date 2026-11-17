@@ -19,7 +19,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file lazurio/app/device/v1/device.proto.
  */
 export const file_lazurio_app_device_v1_device: GenFile = /*@__PURE__*/
-  fileDesc("CiJsYXp1cmlvL2FwcC9kZXZpY2UvdjEvZGV2aWNlLnByb3RvEhVsYXp1cmlvLmFwcC5kZXZpY2UudjEiQAoPQ29uZmlndXJlRGV2aWNlEhYKDmRhdGFfZGlyZWN0b3J5GAEgASgJEhUKDWNvbXB1dGVyX25hbWUYAiABKAkiJwoLRGV2aWNlUmVhZHkSGAoQY29udHJhY3RfdmVyc2lvbhgBIAEoDSLJAQoMU3RhcnRDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJEhkKEWVudmlyb25tZW50X2xhYmVsGAIgASgJEhIKCmF0dGFjaF91cmwYAyABKAkSFQoJZGV2aWNlX2lkGAQgASgJQgIYARIUCghrZXlfc2VlZBgFIAEoDEICGAESMgoFcHJveHkYBiABKAsyIy5sYXp1cmlvLmFwcC5kZXZpY2UudjEuVGFpbG5ldFByb3h5EhEKCWhhbmRfb3ZlchgHIAEoDCJOCgxUYWlsbmV0UHJveHkSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgNEhAKCHVzZXJuYW1lGAMgASgJEhAKCHBhc3N3b3JkGAQgASgJIiUKC1N0b3BDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJIgsKCVN0b3BBZ2VudCIdCg1Ib2xkRm9yVXBkYXRlEgwKBGhvbGQYASABKAgiMAoLTGlzdEhpc3RvcnkSEgoKcGFnZV90b2tlbhgBIAEoCRINCgVsaW1pdBgCIAEoDSLxAgoMQ2hhbm5lbFN0YXRlEhYKDmVudmlyb25tZW50X2lkGAEgASgJEikKA29mZhgCIAEoCzIaLmxhenVyaW8uYXBwLmRldmljZS52MS5PZmZIABI3Cgpjb25uZWN0aW5nGAMgASgLMiEubGF6dXJpby5hcHAuZGV2aWNlLnYxLkNvbm5lY3RpbmdIABI1Cgljb25uZWN0ZWQYBCABKAsyIC5sYXp1cmlvLmFwcC5kZXZpY2UudjEuQ29ubmVjdGVkSAASMQoHcmVmdXNlZBgFIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5SZWZ1c2VkSAASMQoHd29ya2luZxgGIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5Xb3JraW5nSAASPwoPbmVlZHNfaGFuZF9vdmVyGAcgASgLMiQubGF6dXJpby5hcHAuZGV2aWNlLnYxLk5lZWRzSGFuZE92ZXJIAEIHCgVzdGF0ZSIFCgNPZmYiJQoKQ29ubmVjdGluZxIXCg9mYWlsZWRfYXR0ZW1wdHMYASABKA0iCwoJQ29ubmVjdGVkIhkKB1JlZnVzZWQSDgoGcmVhc29uGAEgASgJImUKDU5lZWRzSGFuZE92ZXISDgoGcmVhc29uGAEgASgJEhcKD2ZhaWxlZF9hdHRlbXB0cxgCIAEoDRIWCg5yZXRyeV9hZnRlcl9tcxgDIAEoBBITCgtodHRwX3N0YXR1cxgEIAEoDSIsCgdXb3JraW5nEgwKBHRvb2wYASABKAkSEwoLYXBwbGljYXRpb24YAiABKAkimAEKCUxvY2tTdGF0ZRIMCgRpZGxlGAEgASgIEh0KFWhvbGRlcl9lbnZpcm9ubWVudF9pZBgCIAEoCRIgChhob2xkZXJfZW52aXJvbm1lbnRfbGFiZWwYAyABKAkSFQoNc2luY2VfdW5peF9tcxgEIAEoBBITCgt1cGRhdGVfaG9sZBgFIAEoCBIQCghzZXF1ZW5jZRgGIAEoBCIqCg1EZXZpY2VTdG9wcGVkEhkKEWFsbF9lbmdpbmVzX2VuZGVkGAEgASgIImgKDEhpc3RvcnlFbnRyeRISCgphdF91bml4X21zGAEgASgEEhYKDmVudmlyb25tZW50X2lkGAIgASgJEgwKBGtpbmQYAyABKAkSDAoEdG9vbBgEIAEoCRIQCghzZXF1ZW5jZRgFIAEoBCJcCgtIaXN0b3J5UGFnZRI0CgdlbnRyaWVzGAEgAygLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLkhpc3RvcnlFbnRyeRIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAlCU1pRZ2l0aHViLmNvbS9MYXp1cmlvL2xhenVyaW8tYXBwL2hlbHBlcnMvdGFpbG5ldC9nZW4vbGF6dXJpby9hcHAvZGV2aWNlL3YxO2RldmljZXYxYgZwcm90bzM");
+  fileDesc("CiJsYXp1cmlvL2FwcC9kZXZpY2UvdjEvZGV2aWNlLnByb3RvEhVsYXp1cmlvLmFwcC5kZXZpY2UudjEiQAoPQ29uZmlndXJlRGV2aWNlEhYKDmRhdGFfZGlyZWN0b3J5GAEgASgJEhUKDWNvbXB1dGVyX25hbWUYAiABKAkiJwoLRGV2aWNlUmVhZHkSGAoQY29udHJhY3RfdmVyc2lvbhgBIAEoDSLJAQoMU3RhcnRDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJEhkKEWVudmlyb25tZW50X2xhYmVsGAIgASgJEhIKCmF0dGFjaF91cmwYAyABKAkSFQoJZGV2aWNlX2lkGAQgASgJQgIYARIUCghrZXlfc2VlZBgFIAEoDEICGAESMgoFcHJveHkYBiABKAsyIy5sYXp1cmlvLmFwcC5kZXZpY2UudjEuVGFpbG5ldFByb3h5EhEKCWhhbmRfb3ZlchgHIAEoDCJOCgxUYWlsbmV0UHJveHkSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgNEhAKCHVzZXJuYW1lGAMgASgJEhAKCHBhc3N3b3JkGAQgASgJIiUKC1N0b3BDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJIgsKCVN0b3BBZ2VudCIdCg1Ib2xkRm9yVXBkYXRlEgwKBGhvbGQYASABKAgiMAoLTGlzdEhpc3RvcnkSEgoKcGFnZV90b2tlbhgBIAEoCRINCgVsaW1pdBgCIAEoDSLxAgoMQ2hhbm5lbFN0YXRlEhYKDmVudmlyb25tZW50X2lkGAEgASgJEikKA29mZhgCIAEoCzIaLmxhenVyaW8uYXBwLmRldmljZS52MS5PZmZIABI3Cgpjb25uZWN0aW5nGAMgASgLMiEubGF6dXJpby5hcHAuZGV2aWNlLnYxLkNvbm5lY3RpbmdIABI1Cgljb25uZWN0ZWQYBCABKAsyIC5sYXp1cmlvLmFwcC5kZXZpY2UudjEuQ29ubmVjdGVkSAASMQoHcmVmdXNlZBgFIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5SZWZ1c2VkSAASMQoHd29ya2luZxgGIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5Xb3JraW5nSAASPwoPbmVlZHNfaGFuZF9vdmVyGAcgASgLMiQubGF6dXJpby5hcHAuZGV2aWNlLnYxLk5lZWRzSGFuZE92ZXJIAEIHCgVzdGF0ZSIFCgNPZmYiJQoKQ29ubmVjdGluZxIXCg9mYWlsZWRfYXR0ZW1wdHMYASABKA0iCwoJQ29ubmVjdGVkIi4KB1JlZnVzZWQSDgoGcmVhc29uGAEgASgJEhMKC2h0dHBfc3RhdHVzGAIgASgNImUKDU5lZWRzSGFuZE92ZXISDgoGcmVhc29uGAEgASgJEhcKD2ZhaWxlZF9hdHRlbXB0cxgCIAEoDRIWCg5yZXRyeV9hZnRlcl9tcxgDIAEoBBITCgtodHRwX3N0YXR1cxgEIAEoDSIsCgdXb3JraW5nEgwKBHRvb2wYASABKAkSEwoLYXBwbGljYXRpb24YAiABKAkimAEKCUxvY2tTdGF0ZRIMCgRpZGxlGAEgASgIEh0KFWhvbGRlcl9lbnZpcm9ubWVudF9pZBgCIAEoCRIgChhob2xkZXJfZW52aXJvbm1lbnRfbGFiZWwYAyABKAkSFQoNc2luY2VfdW5peF9tcxgEIAEoBBITCgt1cGRhdGVfaG9sZBgFIAEoCBIQCghzZXF1ZW5jZRgGIAEoBCIqCg1EZXZpY2VTdG9wcGVkEhkKEWFsbF9lbmdpbmVzX2VuZGVkGAEgASgIImgKDEhpc3RvcnlFbnRyeRISCgphdF91bml4X21zGAEgASgEEhYKDmVudmlyb25tZW50X2lkGAIgASgJEgwKBGtpbmQYAyABKAkSDAoEdG9vbBgEIAEoCRIQCghzZXF1ZW5jZRgFIAEoBCJcCgtIaXN0b3J5UGFnZRI0CgdlbnRyaWVzGAEgAygLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLkhpc3RvcnlFbnRyeRIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAlCU1pRZ2l0aHViLmNvbS9MYXp1cmlvL2xhenVyaW8tYXBwL2hlbHBlcnMvdGFpbG5ldC9nZW4vbGF6dXJpby9hcHAvZGV2aWNlL3YxO2RldmljZXYxYgZwcm90bzM");
 
 /**
  * Tells the helper where it keeps its files and how the computer is named. The first request of
@@ -398,6 +398,15 @@ export const ConnectedSchema: GenMessage<Connected> = /*@__PURE__*/
  *   way.
  * - "already-attached": the Environment kept answering that it serves another session of this
  *   computer for longer than the helper waits for an earlier session of its own to end.
+ * - "hand_over_refused": the upgrade was answered with 401: the gateway helper did not accept the
+ *   hand-over (spent, expired or not for this Environment), or the Launchpad did not accept the
+ *   gateway's proof. Each new attempt would ask Lazurio Auth for a hand-over again, which is
+ *   recorded, so the helper does not retry.
+ * - "not_permitted": the upgrade was answered with 403: the computer is not an approved device of
+ *   the person the Environment is assigned to, or the upgrade carried `Origin` or `Cookie`.
+ * - "upgrade_refused": the upgrade was answered with another 4xx status but 408 and 429, which no
+ *   new attempt changes either.
+ * - "bad-token": the Launchpad refused the gateway's proof (`denied` with `bad-token`).
  * - "contract_mismatch": the Environment answered in a way contract v3 does not know: another
  *   version, another message or an unknown reason of `denied`.
  * - "invalid_attach_url": the attach address is not one the helper connects to.
@@ -409,6 +418,14 @@ export type Refused = Message<"lazurio.app.device.v1.Refused"> & {
    * @generated from field: string reason = 1;
    */
   reason: string;
+
+  /**
+   * For "hand_over_refused", "not_permitted" and "upgrade_refused": the HTTP status of the answer
+   * to the upgrade; 0 otherwise.
+   *
+   * @generated from field: uint32 http_status = 2;
+   */
+  httpStatus: number;
 };
 
 /**
@@ -425,9 +442,9 @@ export const RefusedSchema: GenMessage<Refused> = /*@__PURE__*/
  *
  * - "connection_failed": no `ready` came: no route or name, the tailnet proxy, TLS, a timeout, or
  *   the connection closed before `ready`.
- * - "upgrade_refused": the gateway or the Launchpad answered the upgrade with the HTTP status in
- *   http_status, for example 401 or 403 when the gateway helper did not accept the computer or
- *   the hand-over, or 503 when the Launchpad could not check the gateway's proof.
+ * - "upgrade_refused": the gateway or the Launchpad answered the upgrade with a status that may
+ *   pass, in http_status: 5xx (for example 503 when the Launchpad could not check the gateway's
+ *   proof), 408 or 429. A 401, 403 or other 4xx is a Refused instead.
  * - "already-attached": the Launchpad serves another session of this computer (`denied`), for
  *   example its previous session, which ends after 45 s without a word.
  * - "expired": the Launchpad ended the session or refused it because the gateway no longer
@@ -454,7 +471,8 @@ export type NeedsHandOver = Message<"lazurio.app.device.v1.NeedsHandOver"> & {
 
   /**
    * How long to wait before the next hand-over: 1 s after a session that got `ready`, doubling with
-   * each failed attempt up to 60 s.
+   * each failed attempt up to 60 s. When a 429 or 503 carries `Retry-After` in seconds, at least
+   * that long, at most one hour.
    *
    * @generated from field: uint64 retry_after_ms = 3;
    */

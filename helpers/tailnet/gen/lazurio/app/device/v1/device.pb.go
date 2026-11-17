@@ -799,12 +799,24 @@ func (*Connected) Descriptor() ([]byte, []int) {
 //     way.
 //   - "already-attached": the Environment kept answering that it serves another session of this
 //     computer for longer than the helper waits for an earlier session of its own to end.
+//   - "hand_over_refused": the upgrade was answered with 401: the gateway helper did not accept the
+//     hand-over (spent, expired or not for this Environment), or the Launchpad did not accept the
+//     gateway's proof. Each new attempt would ask Lazurio Auth for a hand-over again, which is
+//     recorded, so the helper does not retry.
+//   - "not_permitted": the upgrade was answered with 403: the computer is not an approved device of
+//     the person the Environment is assigned to, or the upgrade carried `Origin` or `Cookie`.
+//   - "upgrade_refused": the upgrade was answered with another 4xx status but 408 and 429, which no
+//     new attempt changes either.
+//   - "bad-token": the Launchpad refused the gateway's proof (`denied` with `bad-token`).
 //   - "contract_mismatch": the Environment answered in a way contract v3 does not know: another
 //     version, another message or an unknown reason of `denied`.
 //   - "invalid_attach_url": the attach address is not one the helper connects to.
 type Refused struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Reason string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	// For "hand_over_refused", "not_permitted" and "upgrade_refused": the HTTP status of the answer
+	// to the upgrade; 0 otherwise.
+	HttpStatus    uint32 `protobuf:"varint,2,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -846,15 +858,22 @@ func (x *Refused) GetReason() string {
 	return ""
 }
 
+func (x *Refused) GetHttpStatus() uint32 {
+	if x != nil {
+		return x.HttpStatus
+	}
+	return 0
+}
+
 // The channel ended and spent its hand-over; the helper never sends a hand-over twice. The main
 // process asks Lazurio Auth for a new hand-over after retry_after_ms and sends it in a new
 // StartChannel, while the person's switch stays on. The reason is a stable code:
 //
 //   - "connection_failed": no `ready` came: no route or name, the tailnet proxy, TLS, a timeout, or
 //     the connection closed before `ready`.
-//   - "upgrade_refused": the gateway or the Launchpad answered the upgrade with the HTTP status in
-//     http_status, for example 401 or 403 when the gateway helper did not accept the computer or
-//     the hand-over, or 503 when the Launchpad could not check the gateway's proof.
+//   - "upgrade_refused": the gateway or the Launchpad answered the upgrade with a status that may
+//     pass, in http_status: 5xx (for example 503 when the Launchpad could not check the gateway's
+//     proof), 408 or 429. A 401, 403 or other 4xx is a Refused instead.
 //   - "already-attached": the Launchpad serves another session of this computer (`denied`), for
 //     example its previous session, which ends after 45 s without a word.
 //   - "expired": the Launchpad ended the session or refused it because the gateway no longer
@@ -869,7 +888,8 @@ type NeedsHandOver struct {
 	// when the session got `ready`.
 	FailedAttempts uint32 `protobuf:"varint,2,opt,name=failed_attempts,json=failedAttempts,proto3" json:"failed_attempts,omitempty"`
 	// How long to wait before the next hand-over: 1 s after a session that got `ready`, doubling with
-	// each failed attempt up to 60 s.
+	// each failed attempt up to 60 s. When a 429 or 503 carries `Retry-After` in seconds, at least
+	// that long, at most one hour.
 	RetryAfterMs uint64 `protobuf:"varint,3,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"`
 	// For "upgrade_refused": the HTTP status of the answer to the upgrade; 0 otherwise.
 	HttpStatus    uint32 `protobuf:"varint,4,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`
@@ -1315,9 +1335,11 @@ const file_lazurio_app_device_v1_device_proto_rawDesc = "" +
 	"\n" +
 	"Connecting\x12'\n" +
 	"\x0ffailed_attempts\x18\x01 \x01(\rR\x0efailedAttempts\"\v\n" +
-	"\tConnected\"!\n" +
+	"\tConnected\"B\n" +
 	"\aRefused\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x97\x01\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x1f\n" +
+	"\vhttp_status\x18\x02 \x01(\rR\n" +
+	"httpStatus\"\x97\x01\n" +
 	"\rNeedsHandOver\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12'\n" +
 	"\x0ffailed_attempts\x18\x02 \x01(\rR\x0efailedAttempts\x12$\n" +

@@ -51,9 +51,13 @@ pub const EXPIRED: &str = "expired";
 /// The Launchpad failed to start the session.
 pub const INTERNAL_ERROR: &str = "internal-error";
 
-/// The reasons of `denied` of contract v3 (`attach-ws.ts` of Lazurio/LazurioPlatform#1036). Any
-/// other reason ends the session as a contract mismatch.
-pub const DENIALS: [&str; 3] = [ALREADY_ATTACHED, EXPIRED, INTERNAL_ERROR];
+/// The Launchpad refused the gateway's proof.
+pub const BAD_TOKEN: &str = "bad-token";
+
+/// The reasons of `denied` of contract v3: those `attach-ws.ts` of Lazurio/LazurioPlatform#1036
+/// sends, and `bad-token`, which the contract names for a refused proof. Any other reason ends the
+/// session as a contract mismatch.
+pub const DENIALS: [&str; 4] = [ALREADY_ATTACHED, EXPIRED, INTERNAL_ERROR, BAD_TOKEN];
 
 /// The Environment's Lazurio listens on HTTPS's port only.
 const HTTPS_PORT: u16 = 443;
@@ -74,8 +78,11 @@ pub enum WireError {
     Offline(String),
     /// The Environment's certificate did not verify, or the system trusts no root.
     Certificate(String),
-    /// The upgrade was answered with this HTTP status.
-    Http(u16),
+    /// The upgrade was answered with this HTTP status, and the `Retry-After` it gave in seconds.
+    Http {
+        status: u16,
+        retry_after: Option<Duration>,
+    },
     /// The tailnet proxy answered CONNECT with this status.
     Proxy(u16),
     /// The Launchpad refused the computer with `denied` of contract v3 and one of [`DENIALS`].
@@ -290,9 +297,6 @@ fn upgrade<S: Read + Write>(stream: &mut S, host: &str, hand_over: &[u8]) -> Res
             ));
         }
     };
-    if status != 101 {
-        return Err(WireError::Http(status));
-    }
     let header = |name: &str| {
         text.split("\r\n")
             .skip(1)
@@ -300,6 +304,16 @@ fn upgrade<S: Read + Write>(stream: &mut S, host: &str, hand_over: &[u8]) -> Res
             .find(|(field, _)| field.trim().eq_ignore_ascii_case(name))
             .map(|(_, value)| value.trim())
     };
+    if status != 101 {
+        // Only delay-seconds; an HTTP date is left to the back-off.
+        let retry_after = header("retry-after")
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_secs);
+        return Err(WireError::Http {
+            status,
+            retry_after,
+        });
+    }
     let upgraded = header("upgrade").is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
         && header("connection").is_some_and(|value| {
             value
@@ -520,7 +534,10 @@ fn io_error(error: &io::Error) -> WireError {
 fn ws_error(error: tungstenite::Error) -> WireError {
     match error {
         tungstenite::Error::Io(io) => io_error(&io),
-        tungstenite::Error::Http(response) => WireError::Http(response.status().as_u16()),
+        tungstenite::Error::Http(response) => WireError::Http {
+            status: response.status().as_u16(),
+            retry_after: None,
+        },
         tungstenite::Error::Tls(tls) => WireError::Certificate(tls.to_string()),
         other => WireError::Protocol(other.to_string()),
     }
@@ -619,9 +636,41 @@ mod tests {
         let Err(error) = result else {
             panic!("refused");
         };
-        assert_eq!(error, WireError::Http(401));
+        assert_eq!(
+            error,
+            WireError::Http {
+                status: 401,
+                retry_after: None
+            }
+        );
         let shown = format!("{error:?} {error:?}");
         assert!(!shown.contains("hX7q"), "{shown}");
+    }
+
+    #[test]
+    fn a_refused_upgrade_carries_its_retry_after_in_seconds() {
+        for (value, expected) in [
+            ("30", Some(Duration::from_secs(30))),
+            ("Wed, 21 Oct 2026 07:28:00 GMT", None),
+        ] {
+            let environment = FakeEnvironment::refusing_with_retry_after(429, value);
+            let result = connect(
+                &environment.connector(),
+                &target(HAND_OVER),
+                Duration::from_secs(10),
+                |_| true,
+            );
+            let Err(error) = result else {
+                panic!("refused");
+            };
+            assert_eq!(
+                error,
+                WireError::Http {
+                    status: 429,
+                    retry_after: expected
+                }
+            );
+        }
     }
 
     #[test]
@@ -641,7 +690,7 @@ mod tests {
             json!({"type": "ready", "v": 1}),
             json!({"type": "ready", "v": 4}),
             json!({"type": "denied", "reason": "expired"}),
-            json!({"type": "denied", "v": 3, "reason": "bad-token"}),
+            json!({"type": "denied", "v": 3, "reason": "not-a-reason"}),
             json!({"type": "denied", "v": 3}),
             json!({"type": "challenge", "v": 1, "nonce": "n"}),
             json!({"type": "renew", "v": 3}),

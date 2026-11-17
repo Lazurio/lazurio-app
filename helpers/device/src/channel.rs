@@ -51,8 +51,15 @@ pub const CONTRACT_MISMATCH: &str = "contract_mismatch";
 /// before `ready`.
 pub const CONNECTION_FAILED: &str = "connection_failed";
 
-/// The upgrade was answered with an HTTP status.
+/// The upgrade was answered with an HTTP status: a refusal for a 4xx but 401, 403, 408 and 429,
+/// a new hand-over for 5xx, 408 and 429.
 pub const UPGRADE_REFUSED: &str = "upgrade_refused";
+
+/// The upgrade was answered with 401: the hand-over, or the gateway's proof, was not accepted.
+pub const HAND_OVER_REFUSED: &str = "hand_over_refused";
+
+/// The upgrade was answered with 403: the computer may not attach.
+pub const NOT_PERMITTED: &str = "not_permitted";
 
 /// A session that got `ready` ended otherwise than with `denied`.
 pub const SESSION_ENDED: &str = "session_ended";
@@ -443,13 +450,51 @@ enum Outcome {
     Stopped,
     /// A refusal, final until the next `StartChannel`.
     Refused(&'static str),
+    /// The upgrade was answered with a status no new attempt changes: a refusal, final until the
+    /// next `StartChannel`, which comes only after the person switched off and on again.
+    UpgradeRefused {
+        reason: &'static str,
+        http_status: u16,
+    },
     /// The hand-over is spent: the channel opens again with a new one.
     NeedsHandOver {
         reason: &'static str,
         http_status: u16,
+        /// The gateway's `Retry-After`, honoured for 429 and 503.
+        retry_after: Option<Duration>,
         /// Whether the session got `ready`.
         ready: bool,
     },
+}
+
+/// The longest pause a gateway's `Retry-After` asks for that the helper passes on.
+const LONGEST_RETRY_AFTER: Duration = Duration::from_secs(3600);
+
+/// How a channel ends whose upgrade was answered with `status`: a 401, a 403 or another 4xx but
+/// 408 and 429 is a refusal, since no new hand-over changes it and each would be one more hand-over
+/// Lazurio Auth issues and records; any other status asks for a new hand-over, after the gateway's
+/// `Retry-After` when a 429 or 503 gives one.
+fn upgrade_answered(status: u16, retry_after: Option<Duration>) -> Outcome {
+    match status {
+        401 => Outcome::UpgradeRefused {
+            reason: HAND_OVER_REFUSED,
+            http_status: status,
+        },
+        403 => Outcome::UpgradeRefused {
+            reason: NOT_PERMITTED,
+            http_status: status,
+        },
+        400..=499 if status != 408 && status != 429 => Outcome::UpgradeRefused {
+            reason: UPGRADE_REFUSED,
+            http_status: status,
+        },
+        _ => Outcome::NeedsHandOver {
+            reason: UPGRADE_REFUSED,
+            http_status: status,
+            retry_after: retry_after.filter(|_| status == 429 || status == 503),
+            ready: false,
+        },
+    }
 }
 
 /// How serving a session that got `ready` ended.
@@ -525,11 +570,19 @@ impl Worker {
             Outcome::Stopped => {}
             Outcome::Refused(reason) => {
                 *self.attempts() = Attempts::default();
-                self.refuse(reason);
+                self.refuse(reason, 0);
+            }
+            Outcome::UpgradeRefused {
+                reason,
+                http_status,
+            } => {
+                *self.attempts() = Attempts::default();
+                self.refuse(reason, http_status);
             }
             Outcome::NeedsHandOver {
                 reason,
                 http_status,
+                retry_after,
                 ready,
             } => {
                 let mut attempts = self.attempts();
@@ -543,7 +596,7 @@ impl Worker {
                     if since.elapsed() >= self.channel.timing.attached_grace {
                         *attempts = Attempts::default();
                         drop(attempts);
-                        self.refuse(ALREADY_ATTACHED);
+                        self.refuse(ALREADY_ATTACHED, 0);
                         return;
                     }
                 } else {
@@ -551,7 +604,9 @@ impl Worker {
                 }
                 let failed_attempts = attempts.failed;
                 drop(attempts);
-                let pause = retry_delay(failed_attempts, &self.channel.timing);
+                let pause = retry_delay(failed_attempts, &self.channel.timing).max(
+                    retry_after.map_or(Duration::ZERO, |asked| asked.min(LONGEST_RETRY_AFTER)),
+                );
                 self.report(channel_state::State::NeedsHandOver(NeedsHandOver {
                     reason: reason.to_owned(),
                     failed_attempts,
@@ -570,10 +625,11 @@ impl Worker {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn refuse(&self, reason: &str) {
+    fn refuse(&self, reason: &str, http_status: u16) {
         self.record(history::kind::REFUSED);
         self.report(channel_state::State::Refused(Refused {
             reason: reason.to_owned(),
+            http_status: u32::from(http_status),
         }));
     }
 
@@ -603,13 +659,12 @@ impl Worker {
         let mut socket = match connected {
             Ok(socket) => socket,
             Err(WireError::Stopped) => return Outcome::Stopped,
-            Err(WireError::Http(status)) => {
+            Err(WireError::Http {
+                status,
+                retry_after,
+            }) => {
                 self.control.forget_stream();
-                return Outcome::NeedsHandOver {
-                    reason: UPGRADE_REFUSED,
-                    http_status: status,
-                    ready: false,
-                };
+                return upgrade_answered(status, retry_after);
             }
             Err(_) => return self.failed(),
         };
@@ -640,6 +695,7 @@ impl Worker {
             SessionEnd::Ended => Outcome::NeedsHandOver {
                 reason: SESSION_ENDED,
                 http_status: 0,
+                retry_after: None,
                 ready: true,
             },
             SessionEnd::Denied(reason) => denied(reason, true),
@@ -655,6 +711,7 @@ impl Worker {
             Outcome::NeedsHandOver {
                 reason: CONNECTION_FAILED,
                 http_status: 0,
+                retry_after: None,
                 ready: false,
             }
         }
@@ -979,11 +1036,16 @@ impl Worker {
     }
 }
 
-/// The Launchpad's `denied`, before or after `ready`.
+/// The Launchpad's `denied`, before or after `ready`. `bad-token` is a refused proof, which no new
+/// hand-over changes: a refusal. Every other known reason asks for a new hand-over.
 fn denied(reason: &'static str, ready: bool) -> Outcome {
+    if reason == wire::BAD_TOKEN {
+        return Outcome::Refused(reason);
+    }
     Outcome::NeedsHandOver {
         reason,
         http_status: 0,
+        retry_after: None,
         ready,
     }
 }
@@ -1194,6 +1256,14 @@ mod tests {
     fn refused(reason: &str) -> channel_state::State {
         channel_state::State::Refused(Refused {
             reason: reason.to_owned(),
+            http_status: 0,
+        })
+    }
+
+    fn refused_upgrade(reason: &str, http_status: u32) -> channel_state::State {
+        channel_state::State::Refused(Refused {
+            reason: reason.to_owned(),
+            http_status,
         })
     }
 
@@ -1369,21 +1439,107 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_upgrade_asks_for_a_new_hand_over_with_its_status() {
-        let environment = FakeEnvironment::refusing(401, |_: &mut Session| {});
-        let mut running = run(environment.connector(), quick_timing(), None);
+    fn a_401_or_403_of_the_gateway_is_a_refusal_and_never_retried() {
+        for (status, reason) in [
+            (401, HAND_OVER_REFUSED),
+            (403, NOT_PERMITTED),
+            (400, UPGRADE_REFUSED),
+            (404, UPGRADE_REFUSED),
+        ] {
+            let environment = FakeEnvironment::refusing(status, |_: &mut Session| {});
+            let attempts = SharedAttempts::default();
+            let mut running = run_after(
+                environment.connector(),
+                quick_timing(),
+                request(None),
+                &attempts,
+            );
 
-        assert_eq!(
-            running.next(),
-            channel_state::State::NeedsHandOver(NeedsHandOver {
-                reason: UPGRADE_REFUSED.to_owned(),
-                failed_attempts: 1,
-                retry_after_ms: 1,
-                http_status: 401,
-            })
-        );
-        assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+            assert_eq!(
+                running.next(),
+                refused_upgrade(reason, u32::from(status)),
+                "{status}"
+            );
+            assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+            assert_eq!(connections_and_upgrades(&environment).0, 1, "no retry");
+            assert!(running.states.try_recv().is_err(), "no NeedsHandOver");
+            assert_eq!(running.kinds(), [kind::REFUSED]);
+            assert_eq!(attempts.lock().expect("the attempts").failed(), 0);
+        }
+    }
+
+    #[test]
+    fn a_5xx_408_or_429_of_the_gateway_asks_for_a_new_hand_over_with_its_status() {
+        for status in [503, 500, 408, 429] {
+            let environment = FakeEnvironment::refusing(status, |_: &mut Session| {});
+            let mut running = run(environment.connector(), quick_timing(), None);
+
+            assert_eq!(
+                running.next(),
+                channel_state::State::NeedsHandOver(NeedsHandOver {
+                    reason: UPGRADE_REFUSED.to_owned(),
+                    failed_attempts: 1,
+                    retry_after_ms: 1,
+                    http_status: u32::from(status),
+                }),
+                "{status}"
+            );
+            assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+            assert_eq!(connections_and_upgrades(&environment).0, 1, "no retry");
+        }
+    }
+
+    #[test]
+    fn retry_after_of_a_429_or_503_sets_the_pause_within_an_hour() {
+        for (status, retry_after, pause) in [
+            (429, "7", 7_000),
+            (503, "2", 2_000),
+            // Never shorter than the back-off, never longer than an hour.
+            (429, "0", 1),
+            (429, "86400", 3_600_000),
+            // A date or anything else is ignored.
+            (429, "Wed, 21 Oct 2026 07:28:00 GMT", 1),
+            (500, "7", 1),
+        ] {
+            let environment = FakeEnvironment::refusing_with_retry_after(status, retry_after);
+            let running = run(environment.connector(), quick_timing(), None);
+            assert_eq!(
+                running.next(),
+                channel_state::State::NeedsHandOver(NeedsHandOver {
+                    reason: UPGRADE_REFUSED.to_owned(),
+                    failed_attempts: 1,
+                    retry_after_ms: pause,
+                    http_status: u32::from(status),
+                }),
+                "{status} {retry_after}"
+            );
+        }
+    }
+
+    #[test]
+    fn denied_bad_token_before_or_after_ready_is_a_refusal() {
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            session.deny("bad-token");
+        });
+        let mut before = run(environment.connector(), quick_timing(), None);
+        assert_eq!(before.next(), refused(wire::BAD_TOKEN));
+        assert!(before.supervisor.wait_ended(Instant::now() + PATIENCE));
         assert_eq!(connections_and_upgrades(&environment).0, 1, "no retry");
+
+        let (environment, orders) = scripted_environment();
+        let mut after = run(environment.connector(), quick_timing(), None);
+        assert_eq!(after.next(), connected());
+        orders
+            .send(Order::Send(
+                serde_json::json!({"type": "denied", "v": 3, "reason": "bad-token"}),
+            ))
+            .expect("the session follows orders");
+        assert_eq!(after.next(), refused(wire::BAD_TOKEN));
+        assert!(after.supervisor.wait_ended(Instant::now() + PATIENCE));
+        assert_eq!(
+            after.kinds(),
+            [kind::CONNECTED, kind::DISCONNECTED, kind::REFUSED]
+        );
     }
 
     #[test]
@@ -1476,7 +1632,7 @@ mod tests {
             serde_json::json!({"type": "ready"}),
             serde_json::json!({"type": "ready", "v": 4}),
             serde_json::json!({"type": "challenge", "v": 1, "nonce": "n", "ts": 1}),
-            serde_json::json!({"type": "denied", "v": 3, "reason": "bad-token"}),
+            serde_json::json!({"type": "denied", "v": 3, "reason": "not-a-reason"}),
         ] {
             let message = first.clone();
             let environment = FakeEnvironment::start(move |session: &mut Session| {
