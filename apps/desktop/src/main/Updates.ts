@@ -77,12 +77,25 @@ export interface Updates {
   // Installs a downloaded update: `true` when the app quits to install it, `false` when there is
   // none or the install failed.
   readonly install: Effect.Effect<boolean>;
+  // The install of a quit: as `install`, but `false` at once while the Device helper cannot be
+  // reached, so the app quits and the update stays downloaded for a later quit.
+  readonly installOnQuit: Effect.Effect<boolean>;
 }
 
 // What quitting the app does to an update (main.ts, before-quit): a ready update installs first,
-// a quit while an install waits joins that install, and anything else quits.
-export const quitDecision = (phase: UpdateState["phase"]): "install" | "wait" | "quit" =>
-  phase === "ready" ? "install" : phase === "installing" ? "wait" : "quit";
+// a quit while an install waits joins that install, and anything else quits. While the Device
+// helper cannot be reached nothing could install, so the quit goes through.
+export const quitDecision = (
+  phase: UpdateState["phase"],
+  deviceReachable = true,
+): "install" | "wait" | "quit" =>
+  !deviceReachable
+    ? "quit"
+    : phase === "ready"
+      ? "install"
+      : phase === "installing"
+        ? "wait"
+        : "quit";
 
 // electron-updater's UpdateInfo, of which the updater reads only the version.
 const decodeVersion = Schema.decodeUnknownOption(Schema.Struct({ version: Schema.String }));
@@ -296,6 +309,15 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
     check,
     setChannel,
     install,
+    installOnQuit: activity.reachable.pipe(
+      Effect.flatMap((reachable) =>
+        reachable
+          ? install
+          : Effect.logWarning(
+              "the app quits without installing the update: the Device helper cannot be reached",
+            ).pipe(Effect.as(false)),
+      ),
+    ),
   };
   return updates;
 });

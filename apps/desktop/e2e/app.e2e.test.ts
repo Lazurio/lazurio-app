@@ -183,6 +183,8 @@ describe("Lazurio App GEN4", () => {
     await problem.waitFor();
     assert.match(await problem.innerText(), /not known whether|nevíme, jestli/iu);
     assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
+    // The updates' section knows that an install would wait for the helper.
+    await shell.locator('[data-updates-device="unreachable"]').waitFor();
     const state = await shell.evaluate(() => window.lazurio.device.getState());
     assert.deepStrictEqual(state, { state: "lost", environments: [], agent: "unknown" });
     // Stop answers at once instead of waiting for a helper that cannot be reached.

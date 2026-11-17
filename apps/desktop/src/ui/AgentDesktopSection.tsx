@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { DeviceStatus } from "../shared/bridge.ts";
 import { channelLabel } from "./deviceLabel.ts";
@@ -7,17 +7,15 @@ import type { DeviceText } from "./messages.ts";
 // Agent Desktop in the app's local window (docs/adr/0006, point 5): the Environments the Device
 // helper reports, Stop while an agent works, and where pairing comes from. Only this native window
 // has these controls; no remote page has the bridge.
-export function AgentDesktopSection({ text }: { readonly text: DeviceText }) {
-  const [status, setStatus] = useState<DeviceStatus | null>(null);
+export function AgentDesktopSection({
+  status,
+  text,
+}: {
+  readonly status: DeviceStatus | null;
+  readonly text: DeviceText;
+}) {
   const [stopping, setStopping] = useState(false);
   const [stopFailed, setStopFailed] = useState(false);
-  // Every later change comes from the main process; reading the state once more after subscribing
-  // covers a change between the two.
-  useEffect(() => {
-    const stop = window.lazurio.device.subscribe(setStatus);
-    void window.lazurio.device.getState().then(setStatus);
-    return stop;
-  }, []);
   if (status === null || status.state === "absent") return null;
   const stopAgent = () => {
     setStopping(true);

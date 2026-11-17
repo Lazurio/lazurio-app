@@ -18,9 +18,20 @@ export const updateLabel = (
   updates: UpdatesStatus,
   appVersion: string,
   text: UpdatesText,
+  // The app lost its connection to the Device helper: no install can go on until it restarts.
+  deviceUnreachable = false,
 ): UpdateLabel => {
   const floor = updates.channel === "latest" && NIGHTLY.test(appVersion);
   const state = updates.state;
+  if (deviceUnreachable && (state.phase === "ready" || state.phase === "installing")) {
+    const template =
+      state.phase === "ready" ? text.readyWaitsForDevice : text.installingWaitsForDevice;
+    return {
+      text: withVersion(template, state.version),
+      canInstall: state.phase === "ready",
+      floor,
+    };
+  }
   switch (state.phase) {
     case "off":
       return { text: text[state.reason], canInstall: false, floor: false };

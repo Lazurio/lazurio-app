@@ -70,6 +70,9 @@ export interface UpdatesText {
   readonly ready: string;
   readonly install: string;
   readonly installing: string;
+  // While the app cannot reach the Device helper (its connection was lost).
+  readonly readyWaitsForDevice: string;
+  readonly installingWaitsForDevice: string;
   readonly restarting: string;
   readonly failed: string;
   readonly channelNotSaved: string;
@@ -122,6 +125,10 @@ const cs: Text = {
     install: "Restartovat a aktualizovat",
     installing:
       "Instaluje verzi {version}. Pokud na počítači zrovna pracuje agent, počká, až skončí.",
+    readyWaitsForDevice:
+      "Verze {version} je připravená. Spojení s Agent Desktop se přerušilo, proto se nainstaluje až po novém spuštění Lazurio App.",
+    installingWaitsForDevice:
+      "Instalace verze {version} čeká na Agent Desktop, se kterým se přerušilo spojení. Ukončete Lazurio App a spusťte ji znovu; aktualizace se nainstaluje později.",
     restarting: "Restartuje se do verze {version}…",
     failed: "Aktualizace se nepovedla. Lazurio App to zkusí znovu za hodinu.",
     channelNotSaved:
@@ -199,6 +206,10 @@ const en: Text = {
     install: "Restart and update",
     installing:
       "Installing version {version}. If an agent is working on the computer, it waits until the agent is done.",
+    readyWaitsForDevice:
+      "Version {version} is ready. The connection to Agent Desktop was lost, so it installs only after Lazurio App starts again.",
+    installingWaitsForDevice:
+      "Installing version {version} waits for Agent Desktop, whose connection was lost. Quit Lazurio App and start it again; the update installs later.",
     restarting: "Restarting into version {version}…",
     failed: "The update did not work. Lazurio App tries again in an hour.",
     channelNotSaved:

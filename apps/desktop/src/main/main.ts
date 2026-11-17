@@ -333,13 +333,16 @@ const program = Effect.gen(function* () {
     Effect.sync(() => {
       const beforeQuit = (event: Electron.Event) => {
         quitting = true;
-        const decision = Updates.quitDecision(updates.current().state.phase);
+        const decision = Updates.quitDecision(
+          updates.current().state.phase,
+          Effect.runSyncWith(services)(deviceActivity.reachable),
+        );
         if (decision === "quit") return;
         event.preventDefault();
         // An install that does not start (the channel changed meanwhile) lets the quit through.
         if (decision === "install") {
           Effect.runForkWith(services)(
-            updates.install.pipe(
+            updates.installOnQuit.pipe(
               Effect.flatMap((installed) =>
                 installed ? Effect.void : Effect.sync(() => Electron.app.quit()),
               ),
@@ -366,7 +369,7 @@ const program = Effect.gen(function* () {
   );
   // A downloaded update installs when the app ends, or the install a quit started finishes first.
   quitting = true;
-  yield* updates.install;
+  yield* updates.installOnQuit;
 });
 
 NodeRuntime.runMain(

@@ -323,6 +323,7 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
     idleChanges: Stream.fromPubSub(idleChanges),
     holdForUpdate,
     confirmStopped,
+    reachable: Effect.sync(() => !lost),
   };
 
   const environments = (): ReadonlyArray<DeviceEnvironmentStatus> =>

@@ -18,6 +18,9 @@ export interface DeviceActivityShape {
   // still granted by the helper's last word on the lock, the Device helper said DeviceStopped with
   // every engine ended, and it exited within two seconds. On `false` nothing installs.
   readonly confirmStopped: Effect.Effect<boolean>;
+  // `false` once the app lost its connection to the Device helper: unlike a busy computer, this
+  // never changes until the app starts its helpers again, so a quit must not wait for it.
+  readonly reachable: Effect.Effect<boolean>;
 }
 
 const alwaysIdle: DeviceActivityShape = {
@@ -25,6 +28,7 @@ const alwaysIdle: DeviceActivityShape = {
   idleChanges: Stream.empty,
   holdForUpdate: Effect.succeed(true),
   confirmStopped: Effect.succeed(true),
+  reachable: Effect.succeed(true),
 };
 
 export const DeviceActivity = Context.Reference<DeviceActivityShape>(

@@ -450,6 +450,7 @@ describe("DeviceService after the connection to the helper was lost", () => {
         assert.include(refused.message, "cannot be reached");
         assert.isFalse(helper.requests.some((kind) => kind.case === "stopAgent"));
         assert.isFalse(yield* activity.isIdle);
+        assert.isFalse(yield* activity.reachable);
       }).pipe(Effect.scoped),
   );
 
@@ -518,6 +519,7 @@ describe("DeviceService after the connection to the helper was lost", () => {
       assert.isFalse(yield* activityOf(service).confirmStopped);
       assert.strictEqual(service.current().state, "ready");
       assert.strictEqual(helper.ended.count, 0);
+      assert.isTrue(yield* activityOf(service).reachable);
     }).pipe(Effect.scoped),
   );
 });
