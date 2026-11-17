@@ -28,6 +28,7 @@ import * as MainWindow from "./MainWindow.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
 import * as Tailnet from "./Tailnet.ts";
+import * as ReleaseFeed from "./ReleaseFeed.ts";
 import * as TailnetDirectory from "./TailnetDirectory.ts";
 import * as TailnetPolicy from "./TailnetPolicy.ts";
 import * as Updates from "./Updates.ts";
@@ -307,6 +308,22 @@ const program = Effect.gen(function* () {
   // Set once the person quits or closes the last window: a failed install then lets the app end
   // instead of starting it again.
   let quitting = false;
+  // The update feed's GitHub repository, from the packaged app's own app-update.yml; none in
+  // development or with a trial build's local feed, whose failures then stay failures.
+  const feedRepository = Electron.app.isPackaged
+    ? yield* fileSystem.readFileString(path.join(process.resourcesPath, "app-update.yml")).pipe(
+        Effect.map(ReleaseFeed.repositoryOfUpdateConfig),
+        Effect.orElseSucceed(() => Option.none()),
+      )
+    : Option.none();
+  const githubGet = (url: string) =>
+    Effect.tryPromise({
+      try: async () => {
+        const response = await Electron.net.fetch(url);
+        return { status: response.status, url: response.url, text: await response.text() };
+      },
+      catch: (cause) => new ReleaseFeed.ReleaseFeedError({ cause }),
+    });
   const updates = yield* Updates.make({
     appVersion: Electron.app.getVersion(),
     packaged: Electron.app.isPackaged,
@@ -319,6 +336,10 @@ const program = Effect.gen(function* () {
       if (!quitting) Electron.app.relaunch();
       Electron.app.exit(0);
     }),
+    channelHasRelease: (channel) =>
+      Option.isSome(feedRepository)
+        ? ReleaseFeed.channelHasRelease(feedRepository.value, channel, githubGet)
+        : Effect.succeedNone,
   }).pipe(
     Effect.provide(ElectronUpdater.layer),
     Effect.provideService(DeviceActivity, deviceActivity),
