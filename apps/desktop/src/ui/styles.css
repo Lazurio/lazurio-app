@@ -91,11 +91,11 @@ body {
   font-size: 14px;
 }
 
-.shell__helpers li[data-state="ready"] span:last-child {
+.shell__helpers li[data-state="ready"] .shell__state {
   color: var(--ok);
 }
 
-.shell__helpers li[data-state="failed"] span:last-child {
+.shell__helpers li[data-state="failed"] .shell__state {
   color: var(--problem);
 }
 

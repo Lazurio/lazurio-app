@@ -217,6 +217,23 @@ describe("Lazurio App GEN4 with a remote page", () => {
         title: title === null ? 0 : lineCount(title),
         titleText: title?.textContent ?? "",
         names: names.map((name) => [name.textContent ?? "", lineCount(name)] as const),
+        colors: (() => {
+          // A ready helper's state takes the colour for "ok", its version stays muted.
+          const probe = document.createElement("span");
+          probe.style.color = "var(--ok)";
+          document.body.append(probe);
+          const ok = getComputedStyle(probe).color;
+          probe.remove();
+          const row = document.querySelector('[data-helper="lazurio-tailnet"]');
+          const colorOf = (selector: string) => {
+            const element = row?.querySelector(selector);
+            return element === null || element === undefined ? "" : getComputedStyle(element).color;
+          };
+          return {
+            stateIsOk: colorOf(".shell__state") === ok,
+            versionIsOk: colorOf(".shell__detail") === ok,
+          };
+        })(),
       };
     });
     assert.deepStrictEqual(lines, {
@@ -227,6 +244,7 @@ describe("Lazurio App GEN4 with a remote page", () => {
         ["lazurio-device", 1],
         ["lazurioexampleorganization", 1],
       ],
+      colors: { stateIsOk: true, versionIsOk: false },
     });
   });
 });

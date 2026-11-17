@@ -47,7 +47,9 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
           {current.helpers.map((helper) => (
             <li key={helper.name} data-helper={helper.name} data-state={helper.state}>
               <span>{helper.name}</span>
-              <span>{helper.state === "ready" ? text.ready : text.failed}</span>
+              <span className="shell__state">
+                {helper.state === "ready" ? text.ready : text.failed}
+              </span>
               {helper.state === "ready" ? (
                 <span className="shell__detail">{helper.version}</span>
               ) : null}
