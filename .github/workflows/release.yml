@@ -294,5 +294,5 @@ jobs:
           latest=(--latest=false)
           if [[ "$CHANNEL" == "nightly" ]]; then prerelease=(--prerelease); else latest=(--latest); fi
           gh release create "$TAG" release-assets/* --draft --target "$GITHUB_SHA" \
-            --title "Lazurio App ${TAG#v}" --generate-notes "${prerelease[@]}"
+            --title "Lazurio App (Alpha) ${TAG#v}" --generate-notes "${prerelease[@]}"
           gh release edit "$TAG" --draft=false "${latest[@]}"

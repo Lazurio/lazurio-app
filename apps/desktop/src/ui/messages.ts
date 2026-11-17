@@ -1,6 +1,8 @@
 // Every text a person sees in the app's local windows, in Czech and English. Components never
 // carry text of their own.
 
+import { APP_NAME } from "../shared/appName.ts";
+
 // What to do about a node that did not start (ADR 0003): the lead before the files it names, and
 // what follows.
 interface Advice {
@@ -90,20 +92,19 @@ const cs: Text = {
   "needs-login": "Čeká na přihlášení",
   running: "Připojeno",
   stopped: "Zastaveno",
-  noKeystore:
-    "Úložiště klíčů systému není dostupné, a proto se tailnet nespustil. Odemkněte ho (na Macu Klíčenku) a Lazurio App spusťte znovu.",
+  noKeystore: `Úložiště klíčů systému není dostupné, a proto se tailnet nespustil. Odemkněte ho (na Macu Klíčenku) a ${APP_NAME} spusťte znovu.`,
   keyInaccessible: {
-    lead: "Lazurio App nemůže přečíst klíč tohoto tailnetu, a proto se tailnet nespustil. Nic nemažte: zkontrolujte, že soubor patří vám, že ho jde číst a že disk funguje, a Lazurio App spusťte znovu. Jde o tento soubor:",
+    lead: `${APP_NAME} nemůže přečíst klíč tohoto tailnetu, a proto se tailnet nespustil. Nic nemažte: zkontrolujte, že soubor patří vám, že ho jde číst a že disk funguje, a ${APP_NAME} spusťte znovu. Jde o tento soubor:`,
   },
   keyNotSaved: {
-    lead: "Lazurio App nemůže uložit nový klíč tohoto tailnetu, a proto se tailnet nespustil. Zkontrolujte, že do jeho složky jde zapisovat a že je na disku místo, a Lazurio App spusťte znovu. Klíč patří do tohoto souboru:",
+    lead: `${APP_NAME} nemůže uložit nový klíč tohoto tailnetu, a proto se tailnet nespustil. Zkontrolujte, že do jeho složky jde zapisovat a že je na disku místo, a ${APP_NAME} spusťte znovu. Klíč patří do tohoto souboru:`,
   },
   keyUnreadable: {
-    lead: "Úložiště klíčů systému neotevře klíč tohoto tailnetu, a proto se tailnet nespustil. Pokud systém žádal o odemčení úložiště klíčů, povolte ho a Lazurio App spusťte znovu. Když se klíč neotevře ani potom, ukončete Lazurio App, smažte tento soubor a tuto složku a aplikaci spusťte znovu:",
+    lead: `Úložiště klíčů systému neotevře klíč tohoto tailnetu, a proto se tailnet nespustil. Pokud systém žádal o odemčení úložiště klíčů, povolte ho a ${APP_NAME} spusťte znovu. Když se klíč neotevře ani potom, ukončete ${APP_NAME}, smažte tento soubor a tuto složku a aplikaci spusťte znovu:`,
     after: "Počítač se pak do tailnetu přihlásí znovu a jako nové zařízení čeká na schválení.",
   },
   stateUnreadable: {
-    lead: "Uložený stav tohoto tailnetu nejde otevřít jeho klíčem, a proto se tailnet nespustil. Ukončete Lazurio App, smažte tento soubor a tuto složku a aplikaci spusťte znovu:",
+    lead: `Uložený stav tohoto tailnetu nejde otevřít jeho klíčem, a proto se tailnet nespustil. Ukončete ${APP_NAME}, smažte tento soubor a tuto složku a aplikaci spusťte znovu:`,
     after: "Počítač se pak do tailnetu přihlásí znovu a jako nové zařízení čeká na schválení.",
   },
   updates: {
@@ -111,37 +112,30 @@ const cs: Text = {
     channel: "Kanál",
     latest: "Stabilní",
     nightly: "Noční (zkušební)",
-    floor:
-      "Na stabilní verzi přejdete, až vyjde stabilní verze novější než ta, kterou máte. Starší verzi Lazurio App neinstaluje.",
+    floor: `Na stabilní verzi přejdete, až vyjde stabilní verze novější než ta, kterou máte. Starší verzi ${APP_NAME} neinstaluje.`,
     unpackaged: "Vývojová verze se sama neaktualizuje.",
-    "macos-unsigned":
-      "Na Macu se Lazurio App začne aktualizovat sama, až bude podepsaná certifikátem Apple. Do té doby novou verzi nainstalujte ručně.",
+    "macos-unsigned": `Na Macu se ${APP_NAME} začne aktualizovat sama, až bude podepsaná certifikátem Apple. Do té doby novou verzi nainstalujte ručně.`,
     "linux-not-appimage": "Na Linuxu se sama aktualizuje jen verze AppImage.",
     idle: "Novější verze zatím není.",
     checking: "Hledá novou verzi…",
     downloading: "Stahuje verzi {version}…",
-    ready:
-      "Verze {version} je připravená. Nainstaluje se, až Lazurio App zavřete, nebo hned tlačítkem.",
+    ready: `Verze {version} je připravená. Nainstaluje se, až ${APP_NAME} zavřete, nebo hned tlačítkem.`,
     install: "Restartovat a aktualizovat",
     installing:
       "Instaluje verzi {version}. Pokud na počítači zrovna pracuje agent, počká, až skončí.",
-    readyWaitsForDevice:
-      "Verze {version} je připravená. Spojení s Agent Desktop se přerušilo, proto se nainstaluje až po novém spuštění Lazurio App.",
-    installingWaitsForDevice:
-      "Instalace verze {version} čeká na Agent Desktop, se kterým se přerušilo spojení. Ukončete Lazurio App a spusťte ji znovu; aktualizace se nainstaluje později.",
+    readyWaitsForDevice: `Verze {version} je připravená. Spojení s Agent Desktop se přerušilo, proto se nainstaluje až po novém spuštění ${APP_NAME}.`,
+    installingWaitsForDevice: `Instalace verze {version} čeká na Agent Desktop, se kterým se přerušilo spojení. Ukončete ${APP_NAME} a spusťte ji znovu; aktualizace se nainstaluje později.`,
     restarting: "Restartuje se do verze {version}…",
-    failed: "Aktualizace se nepovedla. Lazurio App to zkusí znovu za hodinu.",
-    channelNotSaved:
-      "Kanál se nepodařilo změnit. Zkontrolujte, že do složky dat Lazurio App jde zapisovat, a zkuste to znovu.",
+    failed: `Aktualizace se nepovedla. ${APP_NAME} to zkusí znovu za hodinu.`,
+    channelNotSaved: `Kanál se nepodařilo změnit. Zkontrolujte, že do složky dat ${APP_NAME} jde zapisovat, a zkuste to znovu.`,
   },
   device: {
     title: "Agent Desktop",
     pairingLater: "Spárování s Prostředím přijde s přihlášením Lazurio.",
     starting: "Spouští se…",
-    failed: "Agent Desktop se nespustil. Spusťte Lazurio App znovu.",
-    lost: "Spojení s Agent Desktop se přerušilo. Nevíme, jestli na tomto počítači ještě pracuje agent. Aktualizace se do té doby neinstaluje. Ukončete Lazurio App a spusťte ji znovu.",
-    lostConfirmed:
-      "Spojení s Agent Desktop se přerušilo. Předtím potvrdil, že práce každého agenta skončila. Aktualizace se neinstaluje, dokud Lazurio App neukončíte a nespustíte znovu.",
+    failed: `Agent Desktop se nespustil. Spusťte ${APP_NAME} znovu.`,
+    lost: `Spojení s Agent Desktop se přerušilo. Nevíme, jestli na tomto počítači ještě pracuje agent. Aktualizace se do té doby neinstaluje. Ukončete ${APP_NAME} a spusťte ji znovu.`,
+    lostConfirmed: `Spojení s Agent Desktop se přerušilo. Předtím potvrdil, že práce každého agenta skončila. Aktualizace se neinstaluje, dokud ${APP_NAME} neukončíte a nespustíte znovu.`,
     unknown: "Stav agenta neznámý",
     environments: "Prostředí",
     noEnvironments: "Zatím žádné Prostředí.",
@@ -169,21 +163,20 @@ const en: Text = {
   "needs-login": "Waiting for sign-in",
   running: "Connected",
   stopped: "Stopped",
-  noKeystore:
-    "The system's keystore is not available, so the tailnet did not start. Unlock it (the Keychain on a Mac) and start Lazurio App again.",
+  noKeystore: `The system's keystore is not available, so the tailnet did not start. Unlock it (the Keychain on a Mac) and start ${APP_NAME} again.`,
   keyInaccessible: {
-    lead: "Lazurio App cannot read the key of this tailnet, so the tailnet did not start. Delete nothing: check that the file is yours, that it can be read and that the disk works, then start Lazurio App again. This is the file:",
+    lead: `${APP_NAME} cannot read the key of this tailnet, so the tailnet did not start. Delete nothing: check that the file is yours, that it can be read and that the disk works, then start ${APP_NAME} again. This is the file:`,
   },
   keyNotSaved: {
-    lead: "Lazurio App cannot save a new key for this tailnet, so the tailnet did not start. Check that its folder can be written and that the disk has space, then start Lazurio App again. The key belongs in this file:",
+    lead: `${APP_NAME} cannot save a new key for this tailnet, so the tailnet did not start. Check that its folder can be written and that the disk has space, then start ${APP_NAME} again. The key belongs in this file:`,
   },
   keyUnreadable: {
-    lead: "The system's keystore does not open the key of this tailnet, so the tailnet did not start. If the system asked to unlock its keystore, allow it and start Lazurio App again. If the key still does not open, quit Lazurio App, delete this file and this folder, and start the app again:",
+    lead: `The system's keystore does not open the key of this tailnet, so the tailnet did not start. If the system asked to unlock its keystore, allow it and start ${APP_NAME} again. If the key still does not open, quit ${APP_NAME}, delete this file and this folder, and start the app again:`,
     after:
       "The computer then signs in to the tailnet again and waits for approval as a new device.",
   },
   stateUnreadable: {
-    lead: "The saved state of this tailnet does not open with its key, so the tailnet did not start. Quit Lazurio App, delete this file and this folder, and start the app again:",
+    lead: `The saved state of this tailnet does not open with its key, so the tailnet did not start. Quit ${APP_NAME}, delete this file and this folder, and start the app again:`,
     after:
       "The computer then signs in to the tailnet again and waits for approval as a new device.",
   },
@@ -192,37 +185,30 @@ const en: Text = {
     channel: "Channel",
     latest: "Stable",
     nightly: "Nightly (preview)",
-    floor:
-      "You move to the stable channel once a stable version newer than yours is out. Lazurio App never installs an older version.",
+    floor: `You move to the stable channel once a stable version newer than yours is out. ${APP_NAME} never installs an older version.`,
     unpackaged: "A development build does not update itself.",
-    "macos-unsigned":
-      "On a Mac, Lazurio App starts updating itself once it is signed with an Apple certificate. Until then, install a new version by hand.",
+    "macos-unsigned": `On a Mac, ${APP_NAME} starts updating itself once it is signed with an Apple certificate. Until then, install a new version by hand.`,
     "linux-not-appimage": "On Linux, only the AppImage updates itself.",
     idle: "No newer version yet.",
     checking: "Looking for a new version…",
     downloading: "Downloading version {version}…",
-    ready:
-      "Version {version} is ready. It installs when you quit Lazurio App, or now with the button.",
+    ready: `Version {version} is ready. It installs when you quit ${APP_NAME}, or now with the button.`,
     install: "Restart and update",
     installing:
       "Installing version {version}. If an agent is working on the computer, it waits until the agent is done.",
-    readyWaitsForDevice:
-      "Version {version} is ready. The connection to Agent Desktop was lost, so it installs only after Lazurio App starts again.",
-    installingWaitsForDevice:
-      "Installing version {version} waits for Agent Desktop, whose connection was lost. Quit Lazurio App and start it again; the update installs later.",
+    readyWaitsForDevice: `Version {version} is ready. The connection to Agent Desktop was lost, so it installs only after ${APP_NAME} starts again.`,
+    installingWaitsForDevice: `Installing version {version} waits for Agent Desktop, whose connection was lost. Quit ${APP_NAME} and start it again; the update installs later.`,
     restarting: "Restarting into version {version}…",
-    failed: "The update did not work. Lazurio App tries again in an hour.",
-    channelNotSaved:
-      "The channel could not be changed. Check that Lazurio App's data folder can be written, and try again.",
+    failed: `The update did not work. ${APP_NAME} tries again in an hour.`,
+    channelNotSaved: `The channel could not be changed. Check that the data folder of ${APP_NAME} can be written, and try again.`,
   },
   device: {
     title: "Agent Desktop",
     pairingLater: "Pairing with an Environment comes with the Lazurio sign-in.",
     starting: "Starting…",
-    failed: "Agent Desktop did not start. Start Lazurio App again.",
-    lost: "The connection to Agent Desktop was lost. It is not known whether an agent is still working on this computer. Updates do not install until then. Quit Lazurio App and start it again.",
-    lostConfirmed:
-      "The connection to Agent Desktop was lost. Before that it confirmed that every agent's work had ended. Updates do not install until you quit Lazurio App and start it again.",
+    failed: `Agent Desktop did not start. Start ${APP_NAME} again.`,
+    lost: `The connection to Agent Desktop was lost. It is not known whether an agent is still working on this computer. Updates do not install until then. Quit ${APP_NAME} and start it again.`,
+    lostConfirmed: `The connection to Agent Desktop was lost. Before that it confirmed that every agent's work had ended. Updates do not install until you quit ${APP_NAME} and start it again.`,
     unknown: "Agent's state unknown",
     environments: "Environments",
     noEnvironments: "No Environment yet.",

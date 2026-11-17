@@ -87,7 +87,7 @@ describe("tailnetLabel", () => {
         { tailnet: "example", state: "running", addresses: ["100.64.0.9"] },
         messages.en,
       ),
-      { state: "Connected · 100.64.0.9" },
+      { state: "Connected", addresses: ["100.64.0.9"] },
     );
     assert.deepStrictEqual(
       tailnetLabel({ tailnet: "example", state: "needs-login" }, messages.cs),

@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import { channelLabel } from "./deviceLabel.ts";
 import { messages } from "./messages.ts";
+import { APP_NAME } from "../shared/appName.ts";
 
 describe("channelLabel", () => {
   it("names each state of a channel, in either language", () => {
@@ -41,9 +42,15 @@ describe("channelLabel", () => {
 
   it("says after a lost connection that nobody knows whether an agent works, and what to do", () => {
     assert.match(messages.cs.device.lost, /nevíme, jestli/iu);
-    assert.match(messages.cs.device.lost, /ukončete Lazurio App a spusťte ji znovu/iu);
+    assert.include(
+      messages.cs.device.lost.toLowerCase(),
+      `ukončete ${APP_NAME.toLowerCase()} a spusťte ji znovu`,
+    );
     assert.match(messages.en.device.lost, /not known whether/iu);
-    assert.match(messages.en.device.lost, /quit Lazurio App and start it again/iu);
+    assert.include(
+      messages.en.device.lost.toLowerCase(),
+      `quit ${APP_NAME.toLowerCase()} and start it again`,
+    );
     for (const text of [messages.cs.device.lost, messages.en.device.lost]) {
       assert.notMatch(text, /skončil|ended|neběží|not running/iu);
     }

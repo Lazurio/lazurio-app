@@ -12,13 +12,15 @@ interface TailnetDetail {
 
 export interface TailnetLabel {
   readonly state: string;
+  // A running node's addresses, each on its own line below the row, so the name keeps its width.
+  readonly addresses?: ReadonlyArray<string>;
   readonly detail?: TailnetDetail;
 }
 
 export const tailnetLabel = (status: TailnetStatus, text: Text): TailnetLabel => {
   switch (status.state) {
     case "running":
-      return { state: `${text.running} · ${status.addresses.join(", ")}` };
+      return { state: text.running, addresses: status.addresses };
     case "stopped": {
       const files = status.files;
       if (status.reason === "no-keystore") {
