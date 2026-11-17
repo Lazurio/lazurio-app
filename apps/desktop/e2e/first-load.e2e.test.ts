@@ -91,10 +91,10 @@ afterAll(async () => {
 
 // Resolves once the main window's remote view exists.
 const remoteViewExists = (): Promise<void> =>
-  app.evaluate(async ({ app: electronApp, BrowserWindow }) => {
+  app.evaluate(async ({ app: electronApp, BaseWindow }) => {
     const exists = () =>
-      BrowserWindow.getAllWindows()
-        .flatMap((window) => window.contentView.children)
+      BaseWindow.getAllWindows()
+        .flatMap((window) => window.contentView.children.slice(1))
         .some((child) => "webContents" in child);
     if (exists()) return;
     await new Promise<void>((resolve) => electronApp.once("web-contents-created", () => resolve()));
@@ -104,9 +104,9 @@ const remoteViewExists = (): Promise<void> =>
 // it runs after the task that created the view, in which the view would have started to load if
 // it did not wait for its tailnet.
 const remoteViewState = (): Promise<{ readonly url: string; readonly loading: boolean }> =>
-  app.evaluate(({ BrowserWindow }) => {
-    const contents = BrowserWindow.getAllWindows()
-      .flatMap((window) => window.contentView.children)
+  app.evaluate(({ BaseWindow }) => {
+    const contents = BaseWindow.getAllWindows()
+      .flatMap((window) => window.contentView.children.slice(1))
       .find((child): child is Electron.WebContentsView => "webContents" in child)?.webContents;
     return { url: contents?.getURL() ?? "", loading: contents?.isLoading() ?? false };
   });
@@ -115,9 +115,9 @@ const remoteViewState = (): Promise<{ readonly url: string; readonly loading: bo
 // address, and has stopped loading.
 const remoteShows = (url: string, title: string): Promise<string> =>
   app.evaluate(
-    async ({ BrowserWindow }, expected) => {
-      const view = BrowserWindow.getAllWindows()
-        .flatMap((window) => window.contentView.children)
+    async ({ BaseWindow }, expected) => {
+      const view = BaseWindow.getAllWindows()
+        .flatMap((window) => window.contentView.children.slice(1))
         .find((child): child is Electron.WebContentsView => "webContents" in child);
       if (view === undefined) throw new Error("no remote view");
       const contents = view.webContents;

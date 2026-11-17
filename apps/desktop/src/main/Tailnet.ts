@@ -219,6 +219,14 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
       pacScript: pacDataUrl(pacScript(domains, proxy)),
     }),
   );
+  // Which proxy the remote views' session takes for each tailnet's domain, for the log: a PAC
+  // script that did not take sends that name directly and the page fails.
+  for (const domain of domains) {
+    const chosen = yield* Effect.promise(() =>
+      options.session.resolveProxy(`https://${normalizeDomain(domain)}/`),
+    );
+    yield* Effect.logInfo("tailnet proxy", { domain, chosen });
+  }
 
   let board = startingBoard(options.tailnets.map((tailnet) => tailnet.tailnet));
   const listeners = new Set<() => void>();

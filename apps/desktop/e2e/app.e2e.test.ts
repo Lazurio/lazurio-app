@@ -163,9 +163,9 @@ describe("Lazurio App GEN4", () => {
       updates: { channel: "latest", state: { phase: "off", reason: "unpackaged" } },
     };
     await app.evaluate(
-      ({ BrowserWindow }, { channel, status }) => {
-        for (const window of BrowserWindow.getAllWindows())
-          window.webContents.send(channel, status);
+      ({ webContents }, { channel, status }) => {
+        for (const contents of webContents.getAllWebContents())
+          if (contents.getURL().startsWith("lazurio-app:")) contents.send(channel, status);
       },
       { channel: STATUS_CHANGED_CHANNEL, status: changed },
     );

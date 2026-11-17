@@ -172,9 +172,9 @@ const mark = () => output.join("").length;
 
 // The main window's remote view, once it shows the address (origin and path) and stopped loading.
 const remoteShows = (url: string): Promise<{ readonly url: string; readonly history: number }> =>
-  app.evaluate(async ({ BrowserWindow }, expected) => {
-    const view = BrowserWindow.getAllWindows()
-      .flatMap((window) => window.contentView.children)
+  app.evaluate(async ({ BaseWindow }, expected) => {
+    const view = BaseWindow.getAllWindows()
+      .flatMap((window) => window.contentView.children.slice(1))
       .find((child): child is Electron.WebContentsView => "webContents" in child);
     if (view === undefined) throw new Error("no remote view");
     const contents = view.webContents;
@@ -199,9 +199,9 @@ const remoteShows = (url: string): Promise<{ readonly url: string; readonly hist
 
 // Runs a script in the remote view's page, from the main process.
 const inRemotePage = (script: string): Promise<unknown> =>
-  app.evaluate(async ({ BrowserWindow }, code) => {
-    const view = BrowserWindow.getAllWindows()
-      .flatMap((window) => window.contentView.children)
+  app.evaluate(async ({ BaseWindow }, code) => {
+    const view = BaseWindow.getAllWindows()
+      .flatMap((window) => window.contentView.children.slice(1))
       .find((child): child is Electron.WebContentsView => "webContents" in child);
     if (view === undefined) throw new Error("no remote view");
     return view.webContents.executeJavaScript(code, true);
@@ -209,9 +209,9 @@ const inRemotePage = (script: string): Promise<unknown> =>
 
 // Waits until the remote view has stopped loading, for a navigation that shows no page.
 const remoteSettles = (): Promise<void> =>
-  app.evaluate(async ({ BrowserWindow }) => {
-    const view = BrowserWindow.getAllWindows()
-      .flatMap((window) => window.contentView.children)
+  app.evaluate(async ({ BaseWindow }) => {
+    const view = BaseWindow.getAllWindows()
+      .flatMap((window) => window.contentView.children.slice(1))
       .find((child): child is Electron.WebContentsView => "webContents" in child);
     if (view === undefined) throw new Error("no remote view");
     const contents = view.webContents;
@@ -223,9 +223,9 @@ const remoteSettles = (): Promise<void> =>
 // window.stop() does not cancel a navigation the browser already runs, and Electron's
 // executeJavaScript waits while the main frame loads.
 const stopRemote = (): Promise<void> =>
-  app.evaluate(async ({ BrowserWindow }) => {
-    const view = BrowserWindow.getAllWindows()
-      .flatMap((window) => window.contentView.children)
+  app.evaluate(async ({ BaseWindow }) => {
+    const view = BaseWindow.getAllWindows()
+      .flatMap((window) => window.contentView.children.slice(1))
       .find((child): child is Electron.WebContentsView => "webContents" in child);
     if (view === undefined) throw new Error("no remote view");
     const contents = view.webContents;

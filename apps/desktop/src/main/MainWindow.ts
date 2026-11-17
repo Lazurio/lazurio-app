@@ -9,14 +9,15 @@ import { hardenSession, registerView } from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
 import { destinationOf } from "./Navigation.ts";
 
-// The main window: a local window with the preload bridge in a column on the left, and beside it
-// at most one remote view for a page of the web Lazurio, which gets no preload and its own session.
-// The column keeps the tailnets' status, their advice and the update controls in sight while a
-// page is open (until the GEN4 window replaces this layout).
+// The main window: the local view with the preload bridge in a column, and beside it at most one
+// remote view for a page of the web Lazurio, without preload and in its own session. The two views
+// of a BaseWindow never overlap, so neither page is laid out under the other.
 
 // The session of every remote view; the tailnet gives it its PAC script (Tailnet.ts).
 export const REMOTE_PARTITION = "persist:lazurio-remote";
 const LOCAL_COLUMN_WIDTH = 360;
+// The local page's background, shown before a page paints instead of white.
+const WINDOW_BACKGROUND = "#111318";
 
 export interface MainWindowOptions {
   readonly preloadPath: string;
@@ -63,35 +64,40 @@ const serveStatus = (status: () => AppStatus) =>
     () => Effect.sync(() => Electron.ipcMain.removeHandler(STATUS_CHANNEL)),
   );
 
-const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
-  window: Electron.BrowserWindow,
+// What the remote page's renderer sees, for the log. A page is hidden to it while the system's
+// display is off, and the window then stays blank (the trial of 2026-11-17), so the log also gives
+// the seconds since the last input, which a long idle time points to.
+const PAGE_STATE = `({ visibility: document.visibilityState, width: innerWidth, height: innerHeight })`;
+
+const viewOptions = (
+  preferences: Electron.WebPreferences,
+): Electron.WebContentsViewConstructorOptions => ({
+  webPreferences: {
+    ...preferences,
+    sandbox: true,
+    contextIsolation: true,
+    nodeIntegration: false,
+    webSecurity: true,
+    spellcheck: false,
+  },
+});
+
+// A view and its page live as long as the scope; a closed window does not close a view's page.
+const acquireView = (options: Electron.WebContentsViewConstructorOptions) =>
+  Effect.acquireRelease(
+    Effect.sync(() => new Electron.WebContentsView(options)),
+    (view) =>
+      Effect.sync(() => {
+        if (!view.webContents.isDestroyed()) view.webContents.close();
+      }),
+  );
+
+const loadRemote = Effect.fn("MainWindow.loadRemote")(function* (
+  window: Electron.BaseWindow,
+  view: Electron.WebContentsView,
   url: string,
   whenReachable: (url: string) => Effect.Effect<void>,
 ) {
-  const view = new Electron.WebContentsView({
-    webPreferences: {
-      partition: REMOTE_PARTITION,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: true,
-      spellcheck: false,
-    },
-  });
-  registerView(view.webContents, "Lazurio");
-  yield* hardenSession(view.webContents.session);
-  window.contentView.addChildView(view);
-  const layout = () => {
-    const [width = 0, height = 0] = window.getContentSize();
-    view.setBounds({
-      x: LOCAL_COLUMN_WIDTH,
-      y: 0,
-      width: Math.max(0, width - LOCAL_COLUMN_WIDTH),
-      height,
-    });
-  };
-  layout();
-  window.on("resize", layout);
   // The page loads only once its tailnet runs, so the first load does not fail while the node
   // starts.
   yield* whenReachable(url).pipe(
@@ -104,6 +110,17 @@ const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
     Effect.retry({ times: 2, while: (failure) => RETRIED_FAILURES.has(failure.code) }),
     Effect.ignore,
   );
+  const page = yield* Effect.tryPromise({
+    try: () => view.webContents.executeJavaScript(PAGE_STATE) as Promise<unknown>,
+    catch: (failure) => new RemoteLoadError({ code: codeOf(failure) }),
+  }).pipe(Effect.orElseSucceed(() => "unknown"));
+  yield* Effect.logInfo("remote view", {
+    windowVisible: window.isVisible(),
+    viewVisible: view.getVisible(),
+    bounds: view.getBounds(),
+    page,
+    idleSeconds: Electron.powerMonitor.getSystemIdleTime(),
+  });
 });
 
 export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowOptions) {
@@ -111,19 +128,12 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   const window = yield* Effect.acquireRelease(
     Effect.sync(
       () =>
-        new Electron.BrowserWindow({
+        new Electron.BaseWindow({
           width: 1280,
           height: 800,
           show: false,
           title: "Lazurio App",
-          webPreferences: {
-            preload: options.preloadPath,
-            sandbox: true,
-            contextIsolation: true,
-            nodeIntegration: false,
-            webSecurity: true,
-            spellcheck: false,
-          },
+          backgroundColor: WINDOW_BACKGROUND,
         }),
     ),
     (window) =>
@@ -131,11 +141,40 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
         if (!window.isDestroyed()) window.destroy();
       }),
   );
-  registerView(window.webContents, "Local");
-  window.once("ready-to-show", () => window.show());
-  yield* Effect.promise(() => window.loadURL(LOCAL_ENTRY));
+  const local = yield* acquireView(viewOptions({ preload: options.preloadPath }));
+  local.setBackgroundColor(WINDOW_BACKGROUND);
+  registerView(local.webContents, "Local");
+  window.contentView.addChildView(local);
+
+  let remote: Electron.WebContentsView | undefined;
   if (Option.isSome(options.remoteUrl)) {
-    yield* attachRemoteView(window, options.remoteUrl.value, options.whenReachable);
+    remote = yield* acquireView(viewOptions({ partition: REMOTE_PARTITION }));
+    registerView(remote.webContents, "Lazurio");
+    yield* hardenSession(remote.webContents.session);
+    window.contentView.addChildView(remote);
+  }
+  // The column and the page side by side; without a page the local view takes the window.
+  const layout = () => {
+    // The content view's own size: on Linux the menu bar takes part of the content size.
+    const { width, height } = window.contentView.getBounds();
+    const column = remote === undefined ? width : Math.min(LOCAL_COLUMN_WIDTH, width);
+    local.setBounds({ x: 0, y: 0, width: column, height });
+    remote?.setBounds({ x: column, y: 0, width: Math.max(0, width - column), height });
+  };
+  layout();
+  // The content view changes size with the window and, on Linux, when the menu bar appears.
+  window.contentView.on("bounds-changed", layout);
+  // A BaseWindow does not close its views' pages; they close with the scope that ends here.
+  window.on("closed", () => {
+    for (const view of [local, remote]) {
+      if (view !== undefined && !view.webContents.isDestroyed()) view.webContents.close();
+    }
+  });
+
+  yield* Effect.promise(() => local.webContents.loadURL(LOCAL_ENTRY));
+  window.show();
+  if (remote !== undefined && Option.isSome(options.remoteUrl)) {
+    yield* loadRemote(window, remote, options.remoteUrl.value, options.whenReachable);
   }
   return window;
 });
