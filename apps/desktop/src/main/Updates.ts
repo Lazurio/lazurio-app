@@ -168,10 +168,18 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
   });
 
   // A failed check: no release when the channel's feed confirms it has none, a failure otherwise.
+  // The failure shows at once; the feed's answer turns it into no release only while that same
+  // failure is still the status: a newer state or another channel since then discards the answer.
   const failed = (problem: string) =>
-    (options.channelHasRelease?.(latest.channel) ?? Effect.succeedNone).pipe(
-      Effect.flatMap((hasRelease) => setState(failureState(hasRelease, problem))),
-    );
+    Effect.suspend(() => {
+      const failure: UpdatesStatus = { ...latest, state: { phase: "failed", problem } };
+      return setStatus(failure).pipe(
+        Effect.andThen(options.channelHasRelease?.(failure.channel) ?? Effect.succeedNone),
+        Effect.flatMap((hasRelease) =>
+          latest === failure ? setState(failureState(hasRelease, problem)) : Effect.void,
+        ),
+      );
+    });
 
   const check = Effect.suspend(() => {
     const phase = latest.state.phase;

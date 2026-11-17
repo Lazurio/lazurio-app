@@ -221,6 +221,63 @@ describe("Updates", () => {
     );
   });
 
+  it.effect("drops the feed's late answer once the channel or the check has moved on", () => {
+    const updater = fakeUpdater();
+    // Each lookup waits until the test answers it.
+    const pending: Array<Deferred.Deferred<Option.Option<boolean>>> = [];
+    const channelHasRelease = () =>
+      Effect.suspend(() => {
+        const answer = Deferred.makeUnsafe<Option.Option<boolean>>();
+        pending.push(answer);
+        return Deferred.await(answer);
+      });
+    // The failure's fiber resumes after the answer and finishes before these yields return.
+    const answer = (index: number) => {
+      const lookup = pending[index];
+      if (lookup === undefined) return Effect.die(`no lookup ${index}`);
+      return Deferred.succeed(lookup, Option.some(false)).pipe(
+        Effect.andThen(Effect.repeat(Effect.yieldNow, { times: 20 })),
+      );
+    };
+    return withUpdates({ updater, options: { channelHasRelease } }, (updates) =>
+      Effect.gen(function* () {
+        // A switch to Nightly before Stable's answer: the answer is Stable's, and is dropped.
+        yield* updater.emit("error", new Error("feed failed"));
+        yield* waitFor(updates, "failed");
+        yield* updates.setChannel("nightly");
+        const nightly = updates.current();
+        yield* answer(0);
+        assert.deepStrictEqual(updates.current(), nightly);
+
+        // A newer check finds an update before the old answer comes: the download stays.
+        yield* updater.emit("error", new Error("feed failed"));
+        yield* waitFor(updates, "failed");
+        yield* updates.check;
+        yield* updater.emit("update-available", { version: "0.2.0-nightly.20261118.1", files: [] });
+        yield* waitFor(updates, "downloading");
+        yield* answer(1);
+        assert.strictEqual(updates.current().state.phase, "downloading");
+        assert.strictEqual(pending.length, 2);
+      }),
+    );
+  });
+
+  it.effect("shows no release when the feed's late answer finds the same failure", () => {
+    const updater = fakeUpdater();
+    const gate = Deferred.makeUnsafe<Option.Option<boolean>>();
+    return withUpdates(
+      { updater, options: { channelHasRelease: () => Deferred.await(gate) } },
+      (updates) =>
+        Effect.gen(function* () {
+          yield* updater.emit("error", new Error("feed failed"));
+          yield* waitFor(updates, "failed");
+          yield* Deferred.succeed(gate, Option.some(false));
+          const none = yield* waitFor(updates, "no-release");
+          assert.strictEqual(none._tag, "Some");
+        }),
+    );
+  });
+
   it("leaves no release only when the feed confirms none", () => {
     assert.deepStrictEqual(failureState(Option.some(false), "x"), { phase: "no-release" });
     assert.deepStrictEqual(failureState(Option.some(true), "x"), { phase: "failed", problem: "x" });

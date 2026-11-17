@@ -82,20 +82,38 @@ describe("channelHasRelease", () => {
           urls.push(url);
           return { status: 200, url, text };
         });
+      const feed = (entries: string) =>
+        `<?xml version="1.0" encoding="UTF-8"?>\n<feed xml:lang="en-US" xmlns="http://www.w3.org/2005/Atom">${entries}</feed>`;
+      const NIGHTLY = `<link rel="alternate" href="${RELEASES}/tag/v0.1.0-nightly.20261117.8"/>`;
       assert.deepStrictEqual(
-        yield* channelHasRelease(REPOSITORY, "nightly", atom("<feed></feed>")),
+        yield* channelHasRelease(REPOSITORY, "nightly", atom(feed(""))),
         Option.some(false),
       );
       assert.deepStrictEqual(
-        yield* channelHasRelease(
-          REPOSITORY,
-          "nightly",
-          atom('<a href="/Lazurio/lazurio-app/releases/tag/v0.1.0-nightly.20261117.8"/>'),
-        ),
+        yield* channelHasRelease(REPOSITORY, "nightly", atom(feed(NIGHTLY))),
         Option.some(true),
       );
-      assert.isTrue(Option.isNone(yield* channelHasRelease(REPOSITORY, "nightly", answering(404))));
       assert.deepStrictEqual(urls, [`${RELEASES}.atom`, `${RELEASES}.atom`]);
+    }),
+  );
+
+  it.effect("answers nothing about a nightly unless the feed itself answered", () =>
+    Effect.gen(function* () {
+      const unknown = (status: number, url: string, text: string) =>
+        channelHasRelease(REPOSITORY, "nightly", answering(status, url, text)).pipe(
+          Effect.map(Option.isNone),
+        );
+      const EMPTY_FEED = '<feed xmlns="http://www.w3.org/2005/Atom"></feed>';
+      // Not found, or GitHub sent the request on to a sign-in page or elsewhere.
+      assert.isTrue(yield* unknown(404, `${RELEASES}.atom`, EMPTY_FEED));
+      assert.isTrue(yield* unknown(200, "https://github.com/login", EMPTY_FEED));
+      assert.isTrue(yield* unknown(200, RELEASES, EMPTY_FEED));
+      // The feed's address answered with a page, an empty body or a feed of another kind.
+      assert.isTrue(
+        yield* unknown(200, `${RELEASES}.atom`, "<!doctype html><title>Sign in</title>"),
+      );
+      assert.isTrue(yield* unknown(200, `${RELEASES}.atom`, ""));
+      assert.isTrue(yield* unknown(200, `${RELEASES}.atom`, "<feed></feed>"));
     }),
   );
 });
