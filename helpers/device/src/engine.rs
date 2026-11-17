@@ -436,6 +436,9 @@ mod tests {
 
     #[test]
     fn a_missing_engine_does_not_start() {
+        // Even a start that fails creates a child for a moment, which shares this process's
+        // descriptors, device locks of other tests included (#29).
+        let _forks = crate::testkit::spawning();
         let spec = EngineSpec {
             program: crate::testkit::scratch("no-engine").join("agent-desktop"),
             args: vec!["mcp".to_owned()],

@@ -1191,17 +1191,18 @@ mod tests {
 
     #[test]
     fn answered_pings_keep_the_session() {
-        const PINGS: usize = 100;
+        const PINGS: usize = 400;
         let environment = FakeEnvironment::start(|session: &mut Session| {
             if session.authenticate() {
                 session.count_pings_until_closed(PINGS);
             }
         });
-        // A hundred pings take longer than the silence that would end the session, so only the
-        // Environment's pongs keep it.
+        // The pings take at least twice the silence that would end the session, so only the
+        // Environment's pongs keep it. The silence is long enough that a busy machine's pause
+        // between two pongs does not end the session.
         let timing = Timing {
             ping_every: Duration::from_millis(5),
-            silent_after: Duration::from_millis(400),
+            silent_after: Duration::from_secs(1),
             ..quick_timing()
         };
         let running = run(environment.connector(), timing, None);
@@ -1953,7 +1954,40 @@ mod tests {
     }
 
     #[test]
+    fn an_unconfirmed_tree_revokes_the_updaters_hold() {
+        let _forks = spawning();
+        let lock = a_lock();
+        let tapped =
+            Tapped::start_ending("env-a", "Environment A", &lock, quick_timing(), unconfirmed);
+        // The engine is idle: the updater gets the computer.
+        assert!(lock.with(|lock| lock.hold_for_update(true, Instant::now())));
+
+        // The session ends, and with it the engine, whose tree cannot be confirmed gone.
+        tapped
+            .orders
+            .send(Order::Close)
+            .expect("the session closes");
+        let state = tapped
+            .running
+            .lock_states
+            .recv_timeout(PATIENCE)
+            .expect("the helper reports who holds the computer");
+        assert!(
+            !state.idle && !state.update_hold,
+            "the updater's hold is revoked and the computer is not idle: {state:?}"
+        );
+        assert!(
+            !lock.with(|lock| lock.hold_for_update(true, Instant::now())),
+            "the updater is refused from now on"
+        );
+        tapped.running.supervisor.stop();
+    }
+
+    #[test]
     fn a_missing_engine_falls_back_to_the_stub() {
+        // Even a start that fails creates a child for a moment, which shares this process's
+        // descriptors, device locks of other tests included (#29).
+        let _forks = spawning();
         let (environment, orders) = scripted_environment();
         let running = run_with(
             environment.connector(),

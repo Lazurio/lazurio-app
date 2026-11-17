@@ -230,17 +230,16 @@ impl DeviceLock {
     }
 
     /// The updater's gate (ADR 0006 point 7): granted only while no agent holds the computer.
-    /// While granted, every new tool call is refused with [`Busy::Updating`]. Returns whether the
-    /// hold is granted now.
+    /// While granted, every new tool call is refused with [`Busy::Updating`]. Never granted once
+    /// a tree could not be confirmed gone, and [`DeviceLock::hold_unconfirmed`] revokes a granted
+    /// one. Returns whether the hold is granted now.
     pub fn hold_for_update(&mut self, hold: bool, now: Instant) -> bool {
         self.expire(now);
-        if !hold {
+        if !hold || self.unconfirmed {
             self.update_hold = false;
             return false;
         }
-        // While a tool may still run, the app is not idle: the updater waits, and the restart
-        // of the app ends the helper anyway.
-        if self.hold.is_none() && !self.unconfirmed {
+        if self.hold.is_none() {
             self.update_hold = true;
         }
         self.update_hold
@@ -275,7 +274,9 @@ impl DeviceLock {
     /// An engine's process tree of `environment_id` could not be confirmed gone, so a tool may
     /// still run: from now until the helper ends, the hold stays and every tool call is refused
     /// with [`Busy::Unconfirmed`]. Without a hold, it takes one for `environment_id`, which takes
-    /// the device lock, if no other process holds it. Returns whether this is new.
+    /// the device lock, if no other process holds it. A granted update hold is revoked, and the
+    /// updater is refused from then on: while a tool may still run, the app is not idle (ADR
+    /// 0006 point 7). Returns whether this is new.
     pub fn hold_unconfirmed(
         &mut self,
         environment_id: &str,
@@ -302,6 +303,7 @@ impl DeviceLock {
             });
         }
         self.unconfirmed = true;
+        self.update_hold = false;
         true
     }
 
@@ -628,6 +630,24 @@ mod tests {
             Err(Busy::OtherApplication),
             "the device lock stays taken"
         );
+    }
+
+    #[test]
+    fn an_unconfirmed_tree_revokes_a_granted_update_hold() {
+        let _forks = in_process();
+        let directory = scratch("revoked");
+        let mut lock = lock_in(&directory);
+        let start = Instant::now();
+        assert!(lock.hold_for_update(true, start), "granted while idle");
+        assert!(lock.hold_unconfirmed("a", "A", start, 1));
+        let state = lock.state(start);
+        assert!(
+            !state.idle && !state.update_hold,
+            "revoked, and not idle: {state:?}"
+        );
+        assert!(!lock.update_hold());
+        assert!(!lock.hold_for_update(true, start), "never granted again");
+        assert!(!lock.state(start).update_hold);
     }
 
     #[test]
