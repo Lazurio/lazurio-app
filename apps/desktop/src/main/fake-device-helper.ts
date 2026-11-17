@@ -1,6 +1,6 @@
 // Tests only (Helpers.test.ts runs it through Node, by path): lazurio-device's handshake. After
 // Shutdown, "stop" sends DeviceStopped and exits, "linger" sends it and never exits; "crash" exits
-// at its first request after Ping without an answer.
+// at its first request after Ping without an answer; "mute" closes its output after Pong and runs on.
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { decodeFrames, encodeFrame } from "@lazurio/app-contracts/framing";
 import { AppMessageSchema, HelperMessageSchema } from "@lazurio/app-contracts/helper/v1";
@@ -36,6 +36,11 @@ for await (const message of decodeFrames(AppMessageSchema, process.stdin)) {
       requestId: message.requestId,
       kind: { case: "pong", value: { nonce: message.kind.value.nonce } },
     });
+    if (afterShutdown === "mute") {
+      process.stdout.end();
+      // @effect-diagnostics-next-line globalTimers:off - A fixture outside Effect, as small as it can be.
+      setInterval(() => {}, 1000);
+    }
   } else if (message.kind.case === "shutdown") {
     stopped();
     break;

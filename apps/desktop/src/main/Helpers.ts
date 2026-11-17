@@ -60,6 +60,10 @@ export interface HelperConnection {
   readonly stopped: Effect.Effect<boolean>;
   // Whether the app began to stop the helper; an end of its output before that is unexpected.
   readonly stopping: Effect.Effect<boolean>;
+  // Ends the helper's process by the PID the app started, never by its name: SIGTERM, which the
+  // helper answers by ending what it started, and SIGKILL after two seconds (on Windows, Effect's
+  // spawner runs `taskkill /T /F`). Waits until it exited; a process already gone is no failure.
+  readonly end: Effect.Effect<void>;
 }
 
 const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -177,6 +181,7 @@ const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
     stopped: Deferred.await(stopped),
     stopping: Deferred.isDone(stopping),
     pid: child.pid,
+    end: child.kill({ killSignal: "SIGTERM", forceKillAfter: STOP_WITHIN }).pipe(Effect.ignore),
   };
   return connection;
 });

@@ -123,8 +123,8 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   // DeviceStopped, the helper's last message, and whether its events ended after it.
   let allEnginesEnded: Option.Option<boolean> = Option.none();
   const drained = yield* Deferred.make<void>();
-  // The helper's output ended while the app was not stopping it: the helper died or its output
-  // failed. Its channels and its agent are gone with it.
+  // The helper's output ended while the app was not stopping it: the helper died, or its output
+  // failed while it may run on. The app cannot reach it any more.
   let lost = false;
 
   const listeners = new Set<() => void>();
@@ -176,18 +176,22 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
         return Effect.void;
     }
   };
-  // Runs only when the events end, not when the service's scope interrupts their reader.
+  // Runs only when the events end, not when the scope interrupts their reader. The helper may run
+  // on with a failed output, so the app ends it by its PID. On Windows the engine's job object kills
+  // on close and Windows ends the tree unobserved; on macOS and Linux the engine's process group can
+  // outlive a helper that died or got SIGKILL. So without DeviceStopped the agent's state is unknown.
   const afterEnd = Effect.gen(function* () {
     if (yield* connection.stopping) return;
     const wasIdle = idleNow();
     lost = true;
-    channels.clear();
-    state = "ended";
-    yield* Effect.logWarning("the Device helper ended without being stopped", {
-      deviceStopped: Option.getOrElse(allEnginesEnded, () => "missing"),
-    });
+    state = "lost";
     changed();
     if (wasIdle) yield* PubSub.publish(idleChanges, false);
+    yield* Effect.logWarning("the connection to the Device helper was lost; ending it by its PID", {
+      pid: connection.pid,
+      deviceStopped: Option.getOrElse(allEnginesEnded, () => "missing"),
+    });
+    yield* connection.end;
   });
   yield* connection.events.pipe(
     Stream.runForEach(apply),
@@ -199,7 +203,9 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   const ask = (request: string, kind: Parameters<HelperConnection["request"]>[0]) =>
     Effect.suspend(() =>
       lost
-        ? Effect.fail(new DeviceRequestError({ request, problem: "the helper is not running" }))
+        ? Effect.fail(
+            new DeviceRequestError({ request, problem: "the helper cannot be reached any more" }),
+          )
         : connection
             .request(kind)
             .pipe(
@@ -337,11 +343,22 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
       : { environmentId: working[0], label: labels.get(working[0]) ?? working[0] };
   };
 
+  // After a lost connection only a DeviceStopped with every engine ended says no agent works.
+  const lostStatus = (): DeviceStatus => {
+    const confirmed = Option.getOrElse(allEnginesEnded, () => false);
+    return {
+      state: "lost",
+      environments: [...channels.keys()].map((environmentId) => ({
+        environmentId,
+        label: labels.get(environmentId) ?? environmentId,
+        channel: confirmed ? { state: "off" } : { state: "unknown" },
+      })),
+      agent: confirmed ? null : "unknown",
+    };
+  };
+
   const service: DeviceService = {
-    current: () =>
-      lost
-        ? { state, environments: [], agent: null }
-        : { state, environments: environments(), agent: agent() },
+    current: () => (lost ? lostStatus() : { state, environments: environments(), agent: agent() }),
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

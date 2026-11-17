@@ -31,12 +31,22 @@ export function AgentDesktopSection({ text }: { readonly text: DeviceText }) {
     <section aria-label={text.title} className="shell__device" data-device-state={status.state}>
       <h2>{text.title}</h2>
       {status.state === "starting" ? <p className="shell__state">{text.starting}</p> : null}
-      {status.state === "failed" || status.state === "ended" ? (
-        <p className="shell__problem" role="alert" data-device-problem={status.state}>
-          {status.state === "failed" ? text.failed : text.ended}
+      {status.state === "failed" ? (
+        <p className="shell__problem" role="alert" data-device-problem="failed">
+          {text.failed}
         </p>
       ) : null}
-      {status.agent === null ? null : (
+      {/* The helper cannot be reached: no Stop, only what is known and what to do. */}
+      {status.state === "lost" ? (
+        <p
+          className="shell__problem"
+          role="alert"
+          data-device-problem={status.agent === "unknown" ? "lost" : "lost-confirmed"}
+        >
+          {status.agent === "unknown" ? text.lost : text.lostConfirmed}
+        </p>
+      ) : null}
+      {status.agent === null || status.agent === "unknown" ? null : (
         <div className="shell__agent" data-device-agent={status.agent.environmentId}>
           <p>{text.agentWorking.replace("{label}", status.agent.label)}</p>
           <button type="button" data-action="device-stop" disabled={stopping} onClick={stopAgent}>

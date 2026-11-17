@@ -27,4 +27,25 @@ describe("channelLabel", () => {
       "An agent is working: screenshot",
     );
   });
+
+  it("claims nothing about a channel once the connection to the helper was lost", () => {
+    assert.strictEqual(
+      channelLabel({ state: "unknown" }, messages.cs.device),
+      "Stav agenta neznámý",
+    );
+    assert.strictEqual(
+      channelLabel({ state: "unknown" }, messages.en.device),
+      "Agent's state unknown",
+    );
+  });
+
+  it("says after a lost connection that nobody knows whether an agent works, and what to do", () => {
+    assert.match(messages.cs.device.lost, /nevíme, jestli/iu);
+    assert.match(messages.cs.device.lost, /ukončete Lazurio App a spusťte ji znovu/iu);
+    assert.match(messages.en.device.lost, /not known whether/iu);
+    assert.match(messages.en.device.lost, /quit Lazurio App and start it again/iu);
+    for (const text of [messages.cs.device.lost, messages.en.device.lost]) {
+      assert.notMatch(text, /skončil|ended|neběží|not running/iu);
+    }
+  });
 });

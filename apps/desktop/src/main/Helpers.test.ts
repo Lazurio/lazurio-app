@@ -84,4 +84,33 @@ describe("Helpers", () => {
         assert.isFalse(yield* connection.stopping);
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  it.live("ends by its PID a helper whose output ended while its process runs on", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const fake = path.join(import.meta.dirname, "fake-device-helper.ts");
+      const [helper] = yield* startAll([
+        { name: "lazurio-device", path: process.execPath, args: [fake, "mute"] },
+      ]);
+      if (helper === undefined || Option.isNone(helper.connection)) {
+        return assert.fail(`the fake helper did not start: ${JSON.stringify(helper?.status)}`);
+      }
+      const connection = helper.connection.value;
+      yield* connection.events.pipe(Stream.runDrain);
+      assert.isFalse(yield* connection.stopping);
+      assert.isTrue(isAlive(connection.pid));
+      yield* connection.end;
+      assert.isFalse(isAlive(connection.pid));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });
+
+// Signal 0 checks that the process exists and ends nothing.
+const isAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};

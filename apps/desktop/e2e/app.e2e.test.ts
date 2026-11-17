@@ -173,17 +173,19 @@ describe("Lazurio App GEN4", () => {
   });
 
   // After the tests of Agent Desktop's other states: it ends the Device helper.
-  it("says in its local window when the Device helper ends on its own", async () => {
+  it("says in its local window that the agent's state is unknown once the Device helper is gone", async () => {
     const pid: unknown = await app.evaluate(() =>
       Reflect.get(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}, "lazurio-device"),
     );
     if (typeof pid !== "number") return assert.fail("the app named no PID of its Device helper");
     process.kill(pid, "SIGKILL");
-    await shell.locator('[data-device-state="ended"] [data-device-problem="ended"]').waitFor();
+    const problem = shell.locator('[data-device-state="lost"] [data-device-problem="lost"]');
+    await problem.waitFor();
+    assert.match(await problem.innerText(), /not known whether|nevíme, jestli/iu);
     assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
     const state = await shell.evaluate(() => window.lazurio.device.getState());
-    assert.deepStrictEqual(state, { state: "ended", environments: [], agent: null });
-    // Stop answers at once instead of waiting for a helper that is gone.
+    assert.deepStrictEqual(state, { state: "lost", environments: [], agent: "unknown" });
+    // Stop answers at once instead of waiting for a helper that cannot be reached.
     const stopped = await shell.evaluate(() =>
       window.lazurio.device.stop().then(
         () => "answered",

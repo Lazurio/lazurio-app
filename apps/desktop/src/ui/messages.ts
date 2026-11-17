@@ -36,7 +36,11 @@ export interface DeviceText {
   readonly pairingLater: string;
   readonly starting: string;
   readonly failed: string;
-  readonly ended: string;
+  // The connection to the helper was lost: whether an agent works is unknown, or the helper had
+  // confirmed that every agent's work ended.
+  readonly lost: string;
+  readonly lostConfirmed: string;
+  readonly unknown: string;
   readonly environments: string;
   readonly noEnvironments: string;
   readonly off: string;
@@ -128,8 +132,10 @@ const cs: Text = {
     pairingLater: "Spárování s Prostředím přijde s přihlášením Lazurio.",
     starting: "Spouští se…",
     failed: "Agent Desktop se nespustil. Spusťte Lazurio App znovu.",
-    ended:
-      "Agent Desktop neběží: jeho proces skončil. Spusťte Lazurio App znovu. Do té doby agenti na tomto počítači nepracují a aktualizace se neinstaluje.",
+    lost: "Spojení s Agent Desktop se přerušilo. Nevíme, jestli na tomto počítači ještě pracuje agent. Aktualizace se do té doby neinstaluje. Ukončete Lazurio App a spusťte ji znovu.",
+    lostConfirmed:
+      "Spojení s Agent Desktop se přerušilo. Předtím potvrdil, že práce každého agenta skončila. Aktualizace se neinstaluje, dokud Lazurio App neukončíte a nespustíte znovu.",
+    unknown: "Stav agenta neznámý",
     environments: "Prostředí",
     noEnvironments: "Zatím žádné Prostředí.",
     off: "Vypnuto",
@@ -203,8 +209,10 @@ const en: Text = {
     pairingLater: "Pairing with an Environment comes with the Lazurio sign-in.",
     starting: "Starting…",
     failed: "Agent Desktop did not start. Start Lazurio App again.",
-    ended:
-      "Agent Desktop is not running: its process ended. Start Lazurio App again. Until then no agent works on this computer and no update installs.",
+    lost: "The connection to Agent Desktop was lost. It is not known whether an agent is still working on this computer. Updates do not install until then. Quit Lazurio App and start it again.",
+    lostConfirmed:
+      "The connection to Agent Desktop was lost. Before that it confirmed that every agent's work had ended. Updates do not install until you quit Lazurio App and start it again.",
+    unknown: "Agent's state unknown",
     environments: "Environments",
     noEnvironments: "No Environment yet.",
     off: "Off",

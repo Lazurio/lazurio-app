@@ -73,7 +73,9 @@ export type DeviceChannelState =
   // The Environment refused the computer, with the helper's code for why.
   | { readonly state: "refused"; readonly reason: string }
   // An agent works through it: the tool's name and the application, when the engine names one.
-  | { readonly state: "working"; readonly tool: string; readonly application: string };
+  | { readonly state: "working"; readonly tool: string; readonly application: string }
+  // The connection to the helper was lost: nobody knows the channel's state any more.
+  | { readonly state: "unknown" };
 
 export interface DeviceEnvironmentStatus {
   readonly environmentId: string;
@@ -82,13 +84,14 @@ export interface DeviceEnvironmentStatus {
 }
 
 // Agent Desktop on this computer (docs/adr/0006). "absent": this build runs no Device helper;
-// "failed": the helper did not start or refused its configuration; "ended": it ran and ended
-// without the app stopping it.
+// "failed": the helper did not start or refused its configuration; "lost": the app lost its
+// connection to the helper without stopping it, and cannot reach it any more.
 export interface DeviceStatus {
-  readonly state: "absent" | "starting" | "ready" | "failed" | "ended";
+  readonly state: "absent" | "starting" | "ready" | "failed" | "lost";
   readonly environments: ReadonlyArray<DeviceEnvironmentStatus>;
-  // The Environment whose agent works on the computer now, if one does.
-  readonly agent: { readonly environmentId: string; readonly label: string } | null;
+  // The Environment whose agent works on the computer now, if one does; "unknown" once the
+  // connection was lost and nothing confirmed that every agent's work ended.
+  readonly agent: { readonly environmentId: string; readonly label: string } | null | "unknown";
 }
 
 export interface AppStatus {

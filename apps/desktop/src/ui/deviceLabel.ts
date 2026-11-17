@@ -10,6 +10,8 @@ export const channelLabel = (channel: DeviceChannelState, text: DeviceText): str
       return text.connecting;
     case "connected":
       return text.connected;
+    case "unknown":
+      return text.unknown;
     case "refused":
       return text.refused.replace("{reason}", channel.reason);
     case "working":

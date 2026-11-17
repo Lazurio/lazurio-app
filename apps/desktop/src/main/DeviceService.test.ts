@@ -43,6 +43,9 @@ const fakeHelper = Effect.gen(function* () {
   const stopped = yield* Deferred.make<boolean>();
   const stopping = yield* Deferred.make<void>();
   const requests: Array<RequestKind> = [];
+  // How often the service ended the helper's process, and when it first did.
+  const ended = { count: 0 };
+  const endedOnce = yield* Deferred.make<void>();
   const answers: Array<(kind: RequestKind) => Reply | undefined> = [];
   const answerFor = (kind: RequestKind): Reply => {
     for (const answer of answers) {
@@ -66,6 +69,9 @@ const fakeHelper = Effect.gen(function* () {
     stopped: Deferred.await(stopped),
     stopping: Deferred.isDone(stopping),
     pid: 4242,
+    end: Effect.sync(() => {
+      ended.count += 1;
+    }).pipe(Effect.andThen(Deferred.succeed(endedOnce, undefined)), Effect.asVoid),
   };
   const send = (kind: Reply) =>
     Queue.offer(events, create(HelperMessageSchema, { requestId: 0n, kind }));
@@ -77,7 +83,7 @@ const fakeHelper = Effect.gen(function* () {
     );
   // The helper dies on its own: its output ends while the app did not stop it.
   const die = Queue.end(events);
-  return { connection, requests, answers, send, exit, die };
+  return { connection, requests, answers, send, exit, die, ended, endedOnce };
 });
 
 const start = (helper: Effect.Success<typeof fakeHelper>, proxyHosts: ReadonlyArray<string> = []) =>
@@ -411,9 +417,9 @@ describe("DeviceService's confirmation that the helper stopped", () => {
   );
 });
 
-describe("DeviceService after the helper ended on its own", () => {
+describe("DeviceService after the connection to the helper was lost", () => {
   it.effect(
-    "says Agent Desktop no longer runs, forgets channels and agent, and answers Stop at once",
+    "says the agent's state is unknown, ends the helper's process and offers no Stop that cannot work",
     () =>
       Effect.gen(function* () {
         const helper = yield* fakeHelper;
@@ -428,18 +434,67 @@ describe("DeviceService after the helper ended on its own", () => {
         });
         yield* helper.send(lock(1, { idle: false, holder: "env-a" }));
         yield* stateWhere(service, (status) => status.agent !== null);
+        // The helper's output ends; its process may still run.
         yield* helper.die;
-        const status = yield* stateWhere(service, (status) => status.state === "ended");
-        assert.deepStrictEqual(status, { state: "ended", environments: [], agent: null });
+        const status = yield* stateWhere(service, (status) => status.state === "lost");
+        assert.deepStrictEqual(status, {
+          state: "lost",
+          environments: [
+            { environmentId: "env-a", label: "Label of env-a", channel: { state: "unknown" } },
+          ],
+          agent: "unknown",
+        });
+        yield* Deferred.await(helper.endedOnce);
+        assert.strictEqual(helper.ended.count, 1);
         const refused = yield* service.stop.pipe(Effect.flip);
-        assert.include(refused.message, "not running");
+        assert.include(refused.message, "cannot be reached");
         assert.isFalse(helper.requests.some((kind) => kind.case === "stopAgent"));
-        // Without DeviceStopped nobody confirmed that the engine's tree ended: no update holds
-        // the computer until the app starts its helpers again.
         assert.isFalse(yield* activity.isIdle);
-        assert.isFalse(yield* Effect.scoped(activity.holdForUpdate));
-        assert.isFalse(yield* activity.confirmStopped);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses the updater after a crash without DeviceStopped, also a granted hold", () =>
+    Effect.gen(function* () {
+      const helper = yield* fakeHelper;
+      helper.answers.push((kind) =>
+        kind.case === "holdForUpdate" && kind.value.hold
+          ? lock(1, { updateHold: true })
+          : undefined,
+      );
+      const service = yield* start(helper);
+      const activity = activityOf(service);
+      assert.isTrue(yield* activity.holdForUpdate);
+      yield* helper.die;
+      yield* stateWhere(service, (status) => status.state === "lost");
+      // Nobody confirmed that the engine's process tree ended: the computer counts as busy and
+      // no update installs until the app starts its helpers again.
+      assert.isFalse(yield* activity.isIdle);
+      assert.isFalse(yield* Effect.scoped(activity.holdForUpdate));
+      assert.isFalse(yield* activity.confirmStopped);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("says no agent works only when the helper confirmed that every engine ended", () =>
+    Effect.gen(function* () {
+      const helper = yield* fakeHelper;
+      const service = yield* start(helper);
+      const activity = activityOf(service);
+      yield* helper.send({
+        case: "channelState",
+        value: { environmentId: "env-a", state: { case: "connected", value: {} } },
+      });
+      yield* helper.send({ case: "deviceStopped", value: { allEnginesEnded: true } });
+      yield* helper.die;
+      const status = yield* stateWhere(service, (status) => status.state === "lost");
+      assert.deepStrictEqual(status, {
+        state: "lost",
+        environments: [{ environmentId: "env-a", label: "env-a", channel: { state: "off" } }],
+        agent: null,
+      });
+      // The updater still waits for the app's restart: the helper cannot be reached.
+      assert.isFalse(yield* Effect.scoped(activity.holdForUpdate));
+      assert.isFalse(yield* activity.confirmStopped);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("tells the updater the computer is no longer idle", () =>
@@ -454,7 +509,7 @@ describe("DeviceService after the helper ended on its own", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("stays ready when the app itself stops the helper", () =>
+  it.effect("stays ready and ends nothing itself when the app stops the helper", () =>
     Effect.gen(function* () {
       const helper = yield* fakeHelper;
       const service = yield* start(helper);
@@ -462,6 +517,7 @@ describe("DeviceService after the helper ended on its own", () => {
       // The confirmation waits until the service read the helper's last event.
       assert.isFalse(yield* activityOf(service).confirmStopped);
       assert.strictEqual(service.current().state, "ready");
+      assert.strictEqual(helper.ended.count, 0);
     }).pipe(Effect.scoped),
   );
 });
