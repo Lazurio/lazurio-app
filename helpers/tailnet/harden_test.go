@@ -129,7 +129,50 @@ func startTestNode(t *testing.T, controlURL, hostname string, before func(*tsnet
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitForHomeDERP(ctx, t, server)
 	return server, status.TailscaleIPs[0]
+}
+
+// waitForHomeDERP blocks until the node has chosen its home DERP region and received a frame from
+// it, as tsnet's own tests do: until then the relay drops a peer's first disco frames for the node,
+// and a dial right after Up can time out.
+func waitForHomeDERP(ctx context.Context, t *testing.T, server *tsnet.Server) {
+	t.Helper()
+	health := server.Sys().HealthTracker.Get()
+	magicsock := server.Sys().MagicSock.Get()
+	for {
+		if report := magicsock.GetLastNetcheckReport(ctx); report != nil &&
+			report.PreferredDERP != 0 &&
+			!health.GetDERPRegionReceivedTime(report.PreferredDERP).IsZero() {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s has no home DERP: %v", server.Hostname, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// pingUntilAnswered pings the address over disco until it answers, so a path between the two nodes
+// exists before the test dials; disco runs below the packet filter, so shields up does not stop it.
+func pingUntilAnswered(ctx context.Context, t *testing.T, from *tsnet.Server, to netip.Addr) {
+	t.Helper()
+	client, err := from.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, err := client.Ping(attempt, to, tailcfg.PingDisco)
+		cancel()
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("%s gets no disco answer from %s: %v", from.Hostname, to, err)
+		}
+	}
 }
 
 // echo answers each connection with what it reads.
@@ -189,6 +232,9 @@ func TestShieldsUpRefusesTheTailnetAndKeepsTheNodesOwnConnections(t *testing.T) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	// A path in both directions first, so the dials below test the packet filter, not the path.
+	pingUntilAnswered(ctx, t, app, environmentIP)
+	pingUntilAnswered(ctx, t, environment, appIP)
 	if err := roundTrip(ctx, app, net.JoinHostPort(environmentIP.String(), "8080")); err != nil {
 		t.Fatalf("the app's node cannot reach the Environment: %v", err)
 	}
