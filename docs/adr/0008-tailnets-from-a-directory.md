@@ -44,6 +44,7 @@ What exists:
      - The app reads it through the system's own `reg.exe` (the 64-bit view of the registry) when it starts.
      - Where a policy exists it replaces the built-in directory. A policy that does not decode joins no tailnet rather than the built-in one.
      - The same check of Lazurio's domains applies. The exception ends with task 644.
+     - How IT deploys it: [Tailnets of Lazurio App set by IT](../it/tailnet-policy.md).
 
 ## Consequences
 
