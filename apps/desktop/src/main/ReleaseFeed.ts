@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Sax from "sax";
 
 import type { UpdateChannel } from "./UpdateChannel.ts";
 
@@ -23,12 +24,48 @@ export const repositoryOfUpdateConfig = (
     : Option.none();
 };
 
-const NIGHTLY_TAG = /\/releases\/tag\/v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+["<]/u;
-// An Atom feed's root element, which GitHub's releases.atom has and a sign-in or error page has not.
-const ATOM_FEED = /<feed\b[^>]*\bxmlns="http:\/\/www\.w3\.org\/2005\/Atom"/u;
+const ATOM = "http://www.w3.org/2005/Atom";
+const NIGHTLY_TAG = /\/releases\/tag\/v\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/u;
 
-// Whether the releases' Atom feed lists a nightly.
-export const atomHasNightly = (xml: string): boolean => NIGHTLY_TAG.test(xml);
+// The addresses an Atom feed's entries link to, when the text is one complete, well-formed Atom
+// feed; none for anything else, such as a sign-in page or a feed cut off on the way.
+const entryLinks = (text: string): Option.Option<ReadonlyArray<string>> => {
+  const parser = Sax.parser(true, { xmlns: true });
+  const open: Array<Sax.QualifiedTag> = [];
+  const links: Array<string> = [];
+  let roots = 0;
+  let atom = false;
+  parser.onerror = (error) => {
+    throw error;
+  };
+  // With xmlns on, sax gives every tag its namespace.
+  parser.onopentag = (raw) => {
+    const tag = raw as Sax.QualifiedTag;
+    if (open.length === 0) {
+      roots += 1;
+      atom = tag.local === "feed" && tag.uri === ATOM;
+    }
+    const parent = open.at(-1);
+    const href = tag.attributes["href"]?.value;
+    if (tag.local === "link" && tag.uri === ATOM && parent?.local === "entry" && href) {
+      links.push(href);
+    }
+    open.push(tag);
+  };
+  parser.onclosetag = () => {
+    open.pop();
+  };
+  try {
+    parser.write(text).close();
+  } catch {
+    return Option.none();
+  }
+  return roots === 1 && atom ? Option.some(links) : Option.none();
+};
+
+// Whether the releases' Atom feed lists a nightly; none when the text is not a complete Atom feed.
+export const atomHasNightly = (xml: string): Option.Option<boolean> =>
+  Option.map(entryLinks(xml), (links) => links.some((href) => NIGHTLY_TAG.test(href)));
 
 // GitHub did not answer the question.
 export class ReleaseFeedError extends Schema.TaggedError<ReleaseFeedError>()("ReleaseFeedError", {
@@ -62,7 +99,5 @@ export const channelHasRelease = Effect.fn("ReleaseFeed.channelHasRelease")(func
     return url === base || url === `${base}/` ? Option.some(false) : Option.none<boolean>();
   }
   // Only the feed itself answers: not a page GitHub sent the request on to, nor anything else.
-  return status === 200 && url === `${base}.atom` && ATOM_FEED.test(text)
-    ? Option.some(atomHasNightly(text))
-    : Option.none<boolean>();
+  return status === 200 && url === `${base}.atom` ? atomHasNightly(text) : Option.none<boolean>();
 });

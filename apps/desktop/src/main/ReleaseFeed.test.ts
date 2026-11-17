@@ -25,13 +25,47 @@ describe("repositoryOfUpdateConfig", () => {
   });
 });
 
+// The shape of GitHub's releases.atom on 2026-11-17, with one entry per release.
+const FEED_START = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:lang="en-US">
+  <link type="text/html" rel="alternate" href="https://github.com/Lazurio/lazurio-app/releases"/>`;
+const entry = (tag: string) =>
+  `<entry><link rel="alternate" type="text/html" href="https://github.com/Lazurio/lazurio-app/releases/tag/${tag}"/><title>${tag}</title></entry>`;
+const feed = (...entries: ReadonlyArray<string>) => `${FEED_START}${entries.join("")}</feed>\n`;
+
 describe("atomHasNightly", () => {
   it("finds a nightly's tag among the releases' entries", () => {
-    const entry = (tag: string) =>
-      `<entry><link rel="alternate" type="text/html" href="https://github.com/Lazurio/lazurio-app/releases/tag/${tag}"/></entry>`;
-    assert.isTrue(atomHasNightly(`<feed>${entry("v0.1.0-nightly.20261117.8")}</feed>`));
-    assert.isFalse(atomHasNightly(`<feed>${entry("v0.1.0")}</feed>`));
-    assert.isFalse(atomHasNightly("<feed></feed>"));
+    assert.deepStrictEqual(
+      atomHasNightly(feed(entry("v0.1.0"), entry("v0.1.0-nightly.20261117.8"))),
+      Option.some(true),
+    );
+    assert.deepStrictEqual(atomHasNightly(feed(entry("v0.1.0"))), Option.some(false));
+    assert.deepStrictEqual(atomHasNightly(feed()), Option.some(false));
+  });
+
+  it("reads nothing from a text that is not one complete Atom feed", () => {
+    const nightly = entry("v0.1.0-nightly.20261117.8");
+    for (const text of [
+      // Cut off on the way: before the entries, inside one, and before the feed closes.
+      FEED_START,
+      `${FEED_START}<entry>`,
+      `${FEED_START}${nightly}`,
+      // Not well formed, or not alone.
+      `${FEED_START}<entry></feed>`,
+      `${feed()}<feed xmlns="http://www.w3.org/2005/Atom"/>`,
+      `${feed()}trailing`,
+      // Another kind of document.
+      "<!doctype html><html><title>Sign in</title></html>",
+      `<feed>${nightly}</feed>`,
+      "",
+    ]) {
+      assert.isTrue(Option.isNone(atomHasNightly(text)), text);
+    }
+  });
+
+  it("counts only an entry's own link", () => {
+    const outside = `<link rel="alternate" href="https://github.com/Lazurio/lazurio-app/releases/tag/v0.1.0-nightly.20261117.8"/>`;
+    assert.deepStrictEqual(atomHasNightly(feed(outside)), Option.some(false));
   });
 });
 
@@ -82,15 +116,16 @@ describe("channelHasRelease", () => {
           urls.push(url);
           return { status: 200, url, text };
         });
-      const feed = (entries: string) =>
-        `<?xml version="1.0" encoding="UTF-8"?>\n<feed xml:lang="en-US" xmlns="http://www.w3.org/2005/Atom">${entries}</feed>`;
-      const NIGHTLY = `<link rel="alternate" href="${RELEASES}/tag/v0.1.0-nightly.20261117.8"/>`;
       assert.deepStrictEqual(
-        yield* channelHasRelease(REPOSITORY, "nightly", atom(feed(""))),
+        yield* channelHasRelease(REPOSITORY, "nightly", atom(feed())),
         Option.some(false),
       );
       assert.deepStrictEqual(
-        yield* channelHasRelease(REPOSITORY, "nightly", atom(feed(NIGHTLY))),
+        yield* channelHasRelease(
+          REPOSITORY,
+          "nightly",
+          atom(feed(entry("v0.1.0-nightly.20261117.8"))),
+        ),
         Option.some(true),
       );
       assert.deepStrictEqual(urls, [`${RELEASES}.atom`, `${RELEASES}.atom`]);
@@ -103,7 +138,7 @@ describe("channelHasRelease", () => {
         channelHasRelease(REPOSITORY, "nightly", answering(status, url, text)).pipe(
           Effect.map(Option.isNone),
         );
-      const EMPTY_FEED = '<feed xmlns="http://www.w3.org/2005/Atom"></feed>';
+      const EMPTY_FEED = feed();
       // Not found, or GitHub sent the request on to a sign-in page or elsewhere.
       assert.isTrue(yield* unknown(404, `${RELEASES}.atom`, EMPTY_FEED));
       assert.isTrue(yield* unknown(200, "https://github.com/login", EMPTY_FEED));
@@ -114,6 +149,8 @@ describe("channelHasRelease", () => {
       );
       assert.isTrue(yield* unknown(200, `${RELEASES}.atom`, ""));
       assert.isTrue(yield* unknown(200, `${RELEASES}.atom`, "<feed></feed>"));
+      // The feed's own answer, cut off before it closes.
+      assert.isTrue(yield* unknown(200, `${RELEASES}.atom`, `${FEED_START}<entry>`));
     }),
   );
 });
