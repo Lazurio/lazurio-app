@@ -2175,7 +2175,9 @@ mod tests {
             Event::Paused
         );
         // The computer can no longer send; it still reads, and the paused Environment is quiet.
-        tapped
+        // Windows answers WSAENOTCONN when the socket's send side is already gone, which leaves the
+        // computer unable to send just the same.
+        let shut = tapped
             .running
             .supervisor
             .control
@@ -2183,8 +2185,14 @@ mod tests {
             .stream
             .as_ref()
             .expect("the session's stream")
-            .shutdown(std::net::Shutdown::Write)
-            .expect("shut down for writing");
+            .shutdown(std::net::Shutdown::Write);
+        if let Err(error) = shut {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::NotConnected,
+                "shut down for writing: {error:?}"
+            );
+        }
 
         tapped.engines.release(1);
         assert_eq!(
