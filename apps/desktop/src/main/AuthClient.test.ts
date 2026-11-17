@@ -3,6 +3,7 @@ import * as NodeHttp from "node:http";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -12,6 +13,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -28,6 +30,7 @@ import {
   type InvalidIssuerError,
   SignedOutError,
   SignInError,
+  SignOutError,
   type AuthClientOptions,
   type AuthClientShape,
   type HandOver,
@@ -37,6 +40,7 @@ import type { Keystore } from "./NodeKeys.ts";
 const isSignInError = Schema.is(SignInError);
 const isSignedOut = Schema.is(SignedOutError);
 const isUnreachable = Schema.is(AuthUnreachableError);
+const isSignOutError = Schema.is(SignOutError);
 // A sign-in's failure as its reason, or the tag of another error.
 const signInReason = (error: { readonly _tag: string }): string =>
   isSignInError(error) ? error.reason : error._tag;
@@ -99,7 +103,15 @@ interface FakeAuth {
     // The state the redirect carries back, when it should differ from the request's.
     returnState: string | undefined;
     idTokenNonce: string | undefined;
+    // The ID token of a sign-in: a valid one, none, an expired one, one issued later than now,
+    // or one whose authorized party is another client.
+    idToken: "valid" | "missing" | "expired" | "issued-later" | "other-party";
     denyAuthorization: boolean;
+    // The fake's clock in milliseconds, the test's own clock.
+    now: () => number;
+    // Called when a code reaches the token endpoint; the answer waits for the gate.
+    onExchange: () => void;
+    exchangeGate: Promise<void> | undefined;
   };
 }
 
@@ -137,8 +149,26 @@ const fakeAuth = Effect.acquireRelease(
         handOverStatus: 200,
         returnState: undefined,
         idTokenNonce: undefined,
+        idToken: "valid",
         denyAuthorization: false,
+        now: () => 0,
+        onExchange: () => {},
+        exchangeGate: undefined,
       },
+    };
+    const idToken = (nonce: string) => {
+      const now = Math.floor(fake.settings.now() / 1000);
+      const kind = fake.settings.idToken;
+      const issuedAt = kind === "expired" ? now - 600 : kind === "issued-later" ? now + 600 : now;
+      return unsignedJwt({
+        iss: fake.issuer,
+        aud: kind === "other-party" ? [CLIENT_ID, "another-client"] : CLIENT_ID,
+        ...(kind === "other-party" ? { azp: "another-client" } : {}),
+        sub: "person-1",
+        nonce: fake.settings.idTokenNonce ?? nonce,
+        iat: issuedAt,
+        exp: issuedAt + 300,
+      });
     };
     const tokens = (scope: string, nonce: string | undefined) => {
       const accessToken = next("access");
@@ -153,16 +183,9 @@ const fakeAuth = Effect.acquireRelease(
         refresh_token: refreshToken,
         refresh_expires_in: 1800,
         scope,
-        ...(nonce === undefined
+        ...(nonce === undefined || fake.settings.idToken === "missing"
           ? {}
-          : {
-              id_token: unsignedJwt({
-                iss: fake.issuer,
-                aud: CLIENT_ID,
-                sub: "person-1",
-                nonce: fake.settings.idTokenNonce ?? nonce,
-              }),
-            }),
+          : { id_token: idToken(nonce) }),
       };
     };
     const handle = async (request: NodeHttp.IncomingMessage, response: NodeHttp.ServerResponse) => {
@@ -211,6 +234,8 @@ const fakeAuth = Effect.acquireRelease(
           return json(response, 401, { error: "invalid_client" });
         }
         if (grant === "authorization_code") {
+          fake.settings.onExchange();
+          if (fake.settings.exchangeGate !== undefined) await fake.settings.exchangeGate;
           const code = form.get("code") ?? "";
           const verifier = form.get("code_verifier") ?? "";
           fake.verifiers.push(verifier);
@@ -244,6 +269,7 @@ const fakeAuth = Effect.acquireRelease(
       if (request.method === "POST" && path === "/protocol/revoke") {
         const form = new URLSearchParams(await readBody(request));
         fake.revoked.push(form.get("token") ?? "");
+        refreshTokens.delete(form.get("token") ?? "");
         response.writeHead(200);
         return response.end();
       }
@@ -319,6 +345,14 @@ const browseOutside = async (address: string) => {
   return { callback, status: page.status, headers: page.headers, text: await page.text() };
 };
 const browse = (address: string) => Effect.promise(() => browseOutside(address));
+// The browser's return once the app may have closed its loopback address.
+const browseOrRefused = (address: string) =>
+  Effect.promise(() =>
+    browseOutside(address).then(
+      (page) => page.text,
+      () => "refused" as const,
+    ),
+  );
 
 // Whether anything still listens at the address.
 const probe = (address: string): Promise<number | "refused"> =>
@@ -336,6 +370,8 @@ interface Harness {
   readonly logs: Array<string>;
   readonly client: (
     overrides?: Partial<AuthClientOptions>,
+    // The session's file cannot be removed, as on a read-only or failing disk.
+    removeFails?: boolean,
   ) => Effect.Effect<AuthClientShape, InvalidIssuerError>;
 }
 
@@ -344,6 +380,8 @@ const withHarness = <A, E>(
 ) =>
   Effect.gen(function* () {
     const fake = yield* fakeAuth;
+    const clock = yield* Clock.Clock;
+    fake.settings.now = () => clock.currentTimeMillisUnsafe();
     const opened = yield* Queue.unbounded<string>();
     const fileSystem = yield* FileSystem.FileSystem;
     const directory = yield* fileSystem.makeTempDirectoryScoped();
@@ -353,7 +391,21 @@ const withHarness = <A, E>(
       logs.push(line);
     });
     const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
-    const client = (overrides: Partial<AuthClientOptions> = {}) =>
+    const failingRemove = FileSystem.FileSystem.of({
+      ...fileSystem,
+      remove: (path, options) =>
+        path === sessionPath
+          ? Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "remove",
+                pathOrDescriptor: path,
+              }),
+            )
+          : fileSystem.remove(path, options),
+    });
+    const client = (overrides: Partial<AuthClientOptions> = {}, removeFails = false) =>
       Effect.service(AuthClient).pipe(
         Effect.provide(
           layer({
@@ -366,6 +418,7 @@ const withHarness = <A, E>(
             ...overrides,
           }).pipe(Layer.provide(FetchHttpClient.layer)),
         ),
+        Effect.provideService(FileSystem.FileSystem, removeFails ? failingRemove : fileSystem),
         Effect.provide(context),
         Effect.provide(Logger.layer([capture])),
         Effect.provideService(References.MinimumLogLevel, "All"),
@@ -530,9 +583,167 @@ describe("AuthClient.signIn", () => {
       }),
     ),
   );
+  it.effect("requires an ID token", () =>
+    withHarness(({ fake, opened, sessionPath, client }) =>
+      Effect.gen(function* () {
+        fake.settings.idToken = "missing";
+        const auth = yield* client();
+        const signingIn = yield* Effect.forkChild(Effect.flip(auth.signIn));
+        const page = yield* browse(yield* Queue.take(opened));
+        assert.strictEqual(signInReason(yield* Fiber.join(signingIn)), "invalid-id-token");
+        assert.include(page.text, "Sign-in did not finish");
+        assert.strictEqual(yield* auth.state, "signedOut");
+        assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(sessionPath));
+      }),
+    ),
+  );
+
+  it.effect("refuses an expired ID token, one issued later, and one for another party", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        const reasons: Array<string> = [];
+        for (const kind of ["expired", "issued-later", "other-party"] as const) {
+          fake.settings.idToken = kind;
+          const signingIn = yield* Effect.forkChild(Effect.flip(auth.signIn));
+          yield* browse(yield* Queue.take(opened));
+          reasons.push(signInReason(yield* Fiber.join(signingIn)));
+        }
+        assert.deepStrictEqual(reasons, Array(3).fill("invalid-id-token"));
+        assert.strictEqual(yield* auth.state, "signedOut");
+      }),
+    ),
+  );
+
+  it.effect("limits the whole sign-in, a code exchange that never answers included", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const exchanging = yield* Deferred.make<void>();
+        fake.settings.onExchange = () => Deferred.doneUnsafe(exchanging, Effect.void);
+        fake.settings.exchangeGate = new Promise(() => {});
+        const auth = yield* client({ signInTimeout: Duration.minutes(5) });
+        const signingIn = yield* Effect.forkChild(Effect.flip(auth.signIn));
+        const address = yield* Queue.take(opened);
+        const redirectUri = new URL(address).searchParams.get("redirect_uri") ?? "";
+        const browsing = yield* Effect.forkChild(browseOrRefused(address));
+        yield* Deferred.await(exchanging);
+        yield* TestClock.adjust(Duration.minutes(5));
+        assert.strictEqual(signInReason(yield* Fiber.join(signingIn)), "timed-out");
+        assert.include(yield* Fiber.join(browsing), "Sign-in did not finish");
+        assert.strictEqual(yield* answers(redirectUri), "refused");
+        // The next sign-in starts: the stuck one no longer counts as running.
+        const again = yield* Effect.forkChild(auth.signIn);
+        yield* Queue.take(opened);
+        yield* Fiber.interrupt(again);
+      }),
+    ),
+  );
+
+  it.effect("limits a sign-in whose browser never opens", () =>
+    withHarness(({ opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client({
+          signInTimeout: Duration.minutes(5),
+          openBrowser: (address) => Queue.offer(opened, address).pipe(Effect.andThen(Effect.never)),
+        });
+        const signingIn = yield* Effect.forkChild(Effect.flip(auth.signIn));
+        const address = yield* Queue.take(opened);
+        const redirectUri = new URL(address).searchParams.get("redirect_uri") ?? "";
+        yield* TestClock.adjust(Duration.minutes(5));
+        assert.strictEqual(signInReason(yield* Fiber.join(signingIn)), "timed-out");
+        assert.strictEqual(yield* answers(redirectUri), "refused");
+      }),
+    ),
+  );
+
+  it.effect("ends a sign-in still waiting for the browser when the app signs out", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        const signingIn = yield* Effect.forkChild(Effect.flip(auth.signIn));
+        const address = yield* Queue.take(opened);
+        yield* auth.signOut;
+        assert.strictEqual(signInReason(yield* Fiber.join(signingIn)), "cancelled");
+        assert.strictEqual(yield* browseOrRefused(address), "refused");
+        assert.deepStrictEqual(fake.grants, []);
+        assert.strictEqual(yield* auth.state, "signedOut");
+      }),
+    ),
+  );
+
+  it.effect("lets a sign-out win over a sign-in whose code is being exchanged", () =>
+    withHarness(({ fake, opened, sessionPath, client }) =>
+      Effect.gen(function* () {
+        const exchanging = yield* Deferred.make<void>();
+        let release = () => {};
+        fake.settings.onExchange = () => Deferred.doneUnsafe(exchanging, Effect.void);
+        fake.settings.exchangeGate = new Promise((resolve) => {
+          release = resolve;
+        });
+        const auth = yield* client();
+        const states: Array<string> = [];
+        const subscribed = yield* Deferred.make<void>();
+        yield* auth.changes.pipe(
+          Stream.tap((state) =>
+            Effect.sync(() => states.push(state)).pipe(
+              Effect.andThen(Deferred.succeed(subscribed, undefined)),
+            ),
+          ),
+          Stream.runDrain,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(subscribed);
+        const signingIn = yield* Effect.forkChild(Effect.flip(auth.signIn));
+        const browsing = yield* Effect.forkChild(browseOrRefused(yield* Queue.take(opened)));
+        yield* Deferred.await(exchanging);
+        yield* auth.signOut;
+        release();
+        assert.strictEqual(signInReason(yield* Fiber.join(signingIn)), "cancelled");
+        assert.include(yield* Fiber.join(browsing), "Sign-in did not finish");
+        assert.strictEqual(yield* auth.state, "signedOut");
+        assert.deepStrictEqual(states, ["signedOut"]);
+        assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(sessionPath));
+        assert.isTrue(isSignedOut(yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN))));
+      }),
+    ),
+  );
 });
 
 describe("AuthClient session", () => {
+  it.effect("revokes the refresh token at a sign-out right after a restart", () =>
+    withHarness(({ fake, opened, sessionPath, client }) =>
+      Effect.gen(function* () {
+        yield* signInThroughBrowser(yield* client(), opened);
+        const later = yield* client();
+        assert.strictEqual(yield* later.state, "signedIn");
+        yield* later.signOut;
+        assert.strictEqual(fake.revoked.length, 1);
+        assert.isTrue(fake.revoked[0]?.startsWith("refresh-SECRET-"));
+        assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(sessionPath));
+        assert.strictEqual(yield* (yield* client()).state, "signedOut");
+      }),
+    ),
+  );
+
+  it.effect("says that a sign-out does not last when the session's file stays", () =>
+    withHarness(({ fake, opened, sessionPath, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client({}, true);
+        yield* signInThroughBrowser(auth, opened);
+        const error = yield* Effect.flip(auth.signOut);
+        assert.isTrue(isSignOutError(error));
+        assert.strictEqual(isSignOutError(error) ? error.reason : "", "session-not-removed");
+        assert.notInclude(error.message, "SECRET");
+        assert.isTrue(yield* (yield* FileSystem.FileSystem).exists(sessionPath));
+        // Lazurio Auth revoked the token, so the session the next start opens ends at once.
+        assert.strictEqual(fake.revoked.length, 1);
+        const later = yield* client();
+        assert.isTrue(isSignedOut(yield* Effect.flip(later.handOver(ENVIRONMENT_ORIGIN))));
+        assert.strictEqual(yield* later.state, "signedOut");
+      }),
+    ),
+  );
+
   it.effect("refreshes the access token silently once it expired", () =>
     withHarness(({ fake, opened, client }) =>
       Effect.gen(function* () {
