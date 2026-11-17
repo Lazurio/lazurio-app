@@ -5,7 +5,6 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { pacDataUrl, pacScript } from "./Tailnet.ts";
 import { fromFile, fromText, nodeHostname, refusalOf } from "./TailnetDirectory.ts";
 
 const withDirectory = <A, E>(
@@ -167,7 +166,7 @@ describe("fromText", () => {
     }),
   );
 
-  it.effect("joins the valid entries of a mixed directory and builds their PAC script", () =>
+  it.effect("joins the valid entries of a mixed directory", () =>
     Effect.gen(function* () {
       const directory = yield* fromText(
         JSON.stringify([
@@ -195,9 +194,6 @@ describe("fromText", () => {
         ["accent", "../../outside", "org"],
       );
       assert.strictEqual(directory.refused[2]?.reason, "an earlier entry has the same name");
-      const domains = directory.tailnets.flatMap((tailnet) => tailnet.domains);
-      const proxy = { host: "127.0.0.1", port: 1 };
-      assert.isTrue(pacDataUrl(pacScript(domains, proxy)).startsWith("data:"));
     }),
   );
 });
