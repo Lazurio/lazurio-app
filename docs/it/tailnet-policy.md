@@ -22,14 +22,8 @@ Each tailnet has three fields:
 - `controlUrl`: the tailnet's control server, an `https://` address without a port;
 - `domains`: the DNS suffixes of the Organization's Environments.
 
-```json
-[
-  {
-    "tailnet": "<organization>",
-    "controlUrl": "https://headscale.<organization>.lazurio.io",
-    "domains": ["<organization>.lazurio.io"]
-  }
-]
+```text
+[{"tailnet":"<organization>","controlUrl":"https://headscale.<organization>.lazurio.io","domains":["<organization>.lazurio.io"]}]
 ```
 
 Lazurio gives the Organization the exact values. Lazurio App takes only control servers and suffixes below `lazurio.io` or `lazurio.ai`. It refuses any other entry and writes the reason to its log.
