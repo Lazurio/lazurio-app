@@ -2,8 +2,10 @@
 //! protocol of `proto/lazurio/app/helper/v1` with it over standard input and output, and the
 //! Device's work of `proto/lazurio/app/device/v1` (ADR 0006): the attach channel of each
 //! Environment (`channel`), the lock of one agent (`lock`) and the history without content
-//! (`history`). The engine that operates the computer's applications (`Lazurio/agent-desktop`)
-//! joins in a later step; until then the channel serves no tools (`mcp_stub`).
+//! (`history`). Each session passes MCP to the engine that operates the computer's applications
+//! (`Lazurio/agent-desktop`, `engine`), through the tap that holds the lock around every tool
+//! call (`tap`); without the engine, the channel serves no tools (`mcp_stub`). Packaging the
+//! engine next to the helper is a later step (ADR 0006 step 4).
 
 use std::io::{self, Read, Write};
 use std::sync::{Arc, mpsc};
@@ -37,10 +39,12 @@ pub mod lazurio {
 
 pub mod channel;
 pub mod device;
+pub mod engine;
 pub mod history;
 pub mod lock;
 pub mod mcp_stub;
 pub mod secret_start;
+pub mod tap;
 #[cfg(test)]
 mod testkit;
 pub mod wire;
@@ -370,11 +374,26 @@ mod tests {
         testkit::Replies,
         std::thread::JoinHandle<io::Result<()>>,
     ) {
+        serve_with_engine(connector, timing, None)
+    }
+
+    fn serve_with_engine(
+        connector: wire::Connector,
+        timing: channel::Timing,
+        engine: Option<engine::EngineSpec>,
+    ) -> (
+        std::sync::mpsc::Sender<Vec<u8>>,
+        testkit::Replies,
+        std::thread::JoinHandle<io::Result<()>>,
+    ) {
         let (input, mut reader) = testkit::pipe();
         let (mut tap, replies) = testkit::output();
-        let device =
+        let mut device =
             device::Device::with_lock_path(Some(testkit::scratch("lock").join("agent.lock")))
                 .with_channels(connector, timing);
+        if let Some(engine) = engine {
+            device = device.with_engine(engine);
+        }
         let thread = std::thread::spawn(move || serve_with(&mut reader, &mut tap, "1.2.3", device));
         (input, replies, thread)
     }
@@ -544,6 +563,47 @@ mod tests {
             testkit::Event::Closed
         );
         assert_eq!(mute.next(), testkit::Event::Closed);
+    }
+
+    #[test]
+    fn shutdown_ends_the_engine_within_two_seconds() {
+        let _forks = testkit::spawning();
+        let environment = testkit::FakeEnvironment::start(|session: &mut testkit::Session| {
+            if session.authenticate() {
+                session.until_closed();
+            }
+        });
+        let engines = testkit::FakeEngines::start();
+        let (input, mut replies, thread) = serve_with_engine(
+            environment.connector(),
+            channel::Timing::default(),
+            Some(engines.spec()),
+        );
+        input
+            .send(frames(&[configure(1), start_channel(2, "env-a", None)]))
+            .expect("reads");
+        for _ in 0..4 {
+            replies.next();
+        }
+        assert_eq!(engines.next(), testkit::EngineEvent::Started(1));
+
+        let started = std::time::Instant::now();
+        input
+            .send(frames(&[AppMessage {
+                request_id: 3,
+                kind: Some(app_message::Kind::Shutdown(Shutdown {})),
+            }]))
+            .expect("reads");
+        thread.join().expect("serve ends").expect("cleanly");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "the helper and its engine stopped within two seconds, took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            engines.until(|event| matches!(event, testkit::EngineEvent::Ended(_))),
+            testkit::EngineEvent::Ended(1)
+        );
     }
 
     #[test]

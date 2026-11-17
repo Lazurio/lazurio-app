@@ -347,22 +347,10 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
 
+    // Tests that start a child must not overlap tests that hold a device lock (testkit).
+    use crate::testkit::{in_process, spawning};
+
     const LINGER: Duration = Duration::from_secs(20);
-
-    /// A child process started in one test thread inherits every descriptor of this process
-    /// until its `exec`, and `flock` belongs to the open file, so for that moment the child also
-    /// holds any device lock another test thread has taken (Lazurio/lazurio-app#29). Tests that
-    /// start a child take this exclusively; tests that take a device lock in this process take it
-    /// shared, so no child is ever started while they hold one.
-    static FORKS: std::sync::RwLock<()> = std::sync::RwLock::new(());
-
-    fn in_process() -> std::sync::RwLockReadGuard<'static, ()> {
-        FORKS.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn spawning() -> std::sync::RwLockWriteGuard<'static, ()> {
-        FORKS.write().unwrap_or_else(PoisonError::into_inner)
-    }
 
     fn lock_in(directory: &Path) -> DeviceLock {
         DeviceLock::with_linger(directory.join("agent.lock"), LINGER)

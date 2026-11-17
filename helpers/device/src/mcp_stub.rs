@@ -15,6 +15,15 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const NOT_INSTALLED: &str = "Agent Desktop není v této verzi Lazurio App nainstalovaný. \
      (Agent Desktop is not installed in this build of Lazurio App.)";
 
+/// The key under which the app announces itself in `initialize`'s `_meta`. The pilot application
+/// uses `io.lazurio/agent-desktop`.
+pub const APP_META_KEY: &str = "io.lazurio/app";
+
+/// The version of the device lock this helper takes before every tool call (ADR 0006 point 4):
+/// one exclusive lock on `io.lazurio.device/agent.lock` by `File::try_lock`. The Environment ends
+/// a session that does not announce it (LZD-0018 task 854).
+pub const DEVICE_LOCK_VERSION: u32 = 1;
+
 /// JSON-RPC's code for a method the server does not serve.
 const METHOD_NOT_FOUND: i64 = -32601;
 

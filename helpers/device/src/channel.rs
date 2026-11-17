@@ -3,7 +3,8 @@
 //! A [`Supervisor`] runs on its own thread from `StartChannel` until `StopChannel`, `Shutdown` or
 //! a refusal. It owns the request's secrets, which wipe themselves when it ends. It keeps one
 //! session open: connect ([`wire::connect`]), answer the challenge, then serve MCP one message
-//! per text frame ([`mcp_stub`] until the engine joins). It pings every 15 s and ends a session
+//! per text frame: through the [`tap`] with the session's own engine ([`engine`]), or with
+//! [`mcp_stub`] when the engine is missing or does not start. It pings every 15 s and ends a session
 //! after 45 s without a frame. While started, it reconnects after 1 s, doubling to at most 60 s,
 //! and starts again from 1 s after a session that got `ready`. A refusal is final until the next
 //! `StartChannel`.
@@ -20,12 +21,15 @@ use std::time::{Duration, Instant};
 use tungstenite::Message;
 use zeroize::Zeroizing;
 
+use crate::engine::{self, Engine, EngineSpec};
 use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
-    ChannelState, Connected, Connecting, Off, Refused, channel_state,
+    ChannelState, Connected, Connecting, Off, Refused, Working, channel_state,
 };
+use crate::lock::SharedLock;
 use crate::mcp_stub;
 use crate::secret_start::StartRequest;
+use crate::tap::{self, FromEngine, FromEnvironment, OpenCall, Tap};
 use crate::wire::{self, Connector, Socket, Target, WireError};
 
 /// The durations of contract v1; tests shorten them.
@@ -89,6 +93,11 @@ pub struct Channel {
     pub report: Report,
     /// The helper's version, for the MCP server's name.
     pub helper_version: String,
+    /// The engine each session starts after `ready`; without one, or when it does not start, the
+    /// session serves [`mcp_stub`].
+    pub engine: Option<EngineSpec>,
+    /// The lock of one agent, shared by every channel of the helper.
+    pub lock: Arc<SharedLock>,
 }
 
 /// One Environment's channel thread. Dropping it stops the channel without waiting.
@@ -130,6 +139,14 @@ impl Supervisor {
         self.control.wait_ended(deadline)
     }
 
+    /// Stop of the agent released this Environment's hold: the session ends its engine, so a
+    /// running tool stops, and starts a new one. Tool calls that began before this are not ended
+    /// on the lock again, since the release ended them. Call it inside [`SharedLock::with`],
+    /// together with the release, so a tool call is either before both or after both.
+    pub fn end_engine(&self) {
+        self.control.lock().stop_epoch += 1;
+    }
+
     /// Whether the thread has ended, for example after a refusal.
     #[must_use]
     pub fn ended(&self) -> bool {
@@ -156,6 +173,8 @@ struct ControlState {
     ended: bool,
     /// A clone of the current session's TCP stream, to shut it down on stop.
     stream: Option<TcpStream>,
+    /// How many times Stop of the agent released this Environment ([`Supervisor::end_engine`]).
+    stop_epoch: u64,
 }
 
 impl Control {
@@ -196,6 +215,10 @@ impl Control {
 
     fn forget_stream(&self) {
         self.lock().stream = None;
+    }
+
+    fn stop_epoch(&self) -> u64 {
+        self.lock().stop_epoch
     }
 
     /// Reports `state` unless the channel was stopped. The lock is held while reporting, so a
@@ -260,6 +283,24 @@ impl Drop for EndedOnDrop {
     fn drop(&mut self) {
         self.0.mark_ended();
     }
+}
+
+/// How long the engine's output waits at most while the session reads the Environment.
+const ENGINE_POLL: Duration = Duration::from_millis(20);
+
+/// The session ends: its connection failed, or its engine ended by itself.
+struct SessionEnded;
+
+fn send(socket: &mut Socket, text: String) -> Result<(), SessionEnded> {
+    socket.send(Message::text(text)).map_err(|_| SessionEnded)
+}
+
+/// What one session serves with.
+struct Served {
+    engine: Option<Engine>,
+    tap: Tap,
+    /// The count of Stops this session has handled.
+    epoch: u64,
 }
 
 /// How a session ended.
@@ -428,13 +469,46 @@ impl Worker {
         }
     }
 
-    /// Serves the Environment after `ready` until the session ends: answers each MCP message,
-    /// pings, and ends after a silence.
+    /// Serves the Environment after `ready` until the session ends: passes each MCP message to
+    /// the engine through the tap (or answers it with [`mcp_stub`] without an engine), pings, and
+    /// ends after a silence. The engine ends with the session, and its open tool calls end on
+    /// the lock.
     fn serve(&self, socket: &mut Socket) {
+        let mut served = Served {
+            engine: self.start_engine(),
+            tap: Tap::default(),
+            epoch: self.control.stop_epoch(),
+        };
+        self.serve_messages(socket, &mut served);
+        drop(served.engine.take());
+        for call in served.tap.take_open() {
+            self.end_call(&call);
+        }
+    }
+
+    fn start_engine(&self) -> Option<Engine> {
+        // Without the engine the session still serves, with the stub.
+        self.channel
+            .engine
+            .as_ref()
+            .and_then(|spec| Engine::start(spec).ok())
+    }
+
+    fn serve_messages(&self, socket: &mut Socket, served: &mut Served) {
         let timing = self.channel.timing;
         let mut last_heard = Instant::now();
         let mut next_ping = last_heard + timing.ping_every;
         while !self.control.stopped() {
+            let epoch = self.control.stop_epoch();
+            if epoch != served.epoch {
+                served.epoch = epoch;
+                if self.restart_engine(socket, served).is_err() {
+                    return;
+                }
+            }
+            if self.pass_engine_output(socket, served).is_err() {
+                return;
+            }
             let now = Instant::now();
             let silent_at = last_heard + timing.silent_after;
             if now >= silent_at {
@@ -447,11 +521,16 @@ impl Worker {
                 next_ping = now + timing.ping_every;
                 continue;
             }
-            let wait = (next_ping.min(silent_at) - now).max(Duration::from_millis(1));
+            let mut wait = next_ping.min(silent_at) - now;
+            if served.engine.is_some() {
+                // The socket is read on this thread only, so the engine's output waits for the
+                // next turn: at most this long.
+                wait = wait.min(ENGINE_POLL);
+            }
             if socket
                 .get_ref()
                 .get_ref()
-                .set_read_timeout(Some(wait))
+                .set_read_timeout(Some(wait.max(Duration::from_millis(1))))
                 .is_err()
             {
                 return;
@@ -459,9 +538,7 @@ impl Worker {
             match socket.read() {
                 Ok(Message::Text(text)) => {
                     last_heard = Instant::now();
-                    if let Some(answer) = mcp_stub::answer(&text, &self.channel.helper_version)
-                        && socket.send(Message::text(answer)).is_err()
-                    {
+                    if self.environment_said(socket, served, &text).is_err() {
                         return;
                     }
                 }
@@ -471,6 +548,131 @@ impl Worker {
                 Err(_) => return,
             }
         }
+    }
+
+    /// One MCP message from the Environment.
+    fn environment_said(
+        &self,
+        socket: &mut Socket,
+        served: &mut Served,
+        text: &str,
+    ) -> Result<(), SessionEnded> {
+        let Some(engine) = &served.engine else {
+            return match mcp_stub::answer(text, &self.channel.helper_version) {
+                Some(answer) => send(socket, answer),
+                None => Ok(()),
+            };
+        };
+        match served.tap.sort_environment(text) {
+            FromEnvironment::Forward(line) => engine.send(line),
+            FromEnvironment::Answer(answer) => send(socket, answer)?,
+            FromEnvironment::Drop => {}
+            FromEnvironment::ToolCall { id, tool, line } => {
+                let request = &self.channel.request;
+                // The epoch is read inside the lock, as Stop bumps it inside the lock.
+                let begun = self.channel.lock.with(|lock| {
+                    let epoch = self.control.stop_epoch();
+                    lock.try_begin(
+                        &request.environment_id,
+                        &request.environment_label,
+                        Instant::now(),
+                        history::now_unix_ms(),
+                    )
+                    .map(|()| epoch)
+                });
+                match begun {
+                    Ok(epoch) => {
+                        served.tap.call_started(id, tool.clone(), epoch);
+                        engine.send(line);
+                        self.report(channel_state::State::Working(Working {
+                            tool,
+                            application: String::new(),
+                        }));
+                    }
+                    Err(busy) => {
+                        send(socket, tap::tool_error(&id, &busy.message()))?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Everything the engine said since the last turn. An engine that ended by itself ends the
+    /// session, so the Environment starts it again by reconnecting.
+    fn pass_engine_output(
+        &self,
+        socket: &mut Socket,
+        served: &mut Served,
+    ) -> Result<(), SessionEnded> {
+        let Some(engine) = &served.engine else {
+            return Ok(());
+        };
+        while let Some(output) = engine.try_next() {
+            let line = match output {
+                engine::Output::Line(line) => line,
+                engine::Output::Ended => return Err(SessionEnded),
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            match served.tap.sort_engine(&line, &self.channel.helper_version) {
+                FromEngine::Forward(line) => send(socket, line)?,
+                FromEngine::Swallow => {}
+                FromEngine::Finished { line, call } => {
+                    send(socket, line)?;
+                    self.end_call(&call);
+                    // The history is a record for the person; a failed write never stops the
+                    // channel. Only the tool's name, never its arguments or result.
+                    let _ = self.channel.history.record(
+                        history::now_unix_ms(),
+                        &self.channel.request.environment_id,
+                        history::kind::TOOL,
+                        Some(&call.tool),
+                    );
+                    if !served.tap.calls_open() {
+                        self.report(channel_state::State::Connected(Connected {}));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Stop released this Environment's hold: the engine ends, so a running tool stops, its open
+    /// calls are answered as stopped, and a new engine starts right away and gets the
+    /// Environment's `initialize` again. Starting it now rather than at the next tool call keeps
+    /// the engine's start in one place, after `ready` or after Stop.
+    fn restart_engine(&self, socket: &mut Socket, served: &mut Served) -> Result<(), SessionEnded> {
+        if served.engine.is_none() {
+            return Ok(());
+        }
+        drop(served.engine.take());
+        let open = served.tap.take_open();
+        for call in &open {
+            self.end_call(call);
+            send(socket, tap::tool_error(&call.id, tap::STOPPED))?;
+        }
+        if !open.is_empty() {
+            self.report(channel_state::State::Connected(Connected {}));
+        }
+        served.engine = self.start_engine();
+        if let Some(engine) = &served.engine {
+            for line in served.tap.replay() {
+                engine.send(line);
+            }
+        }
+        Ok(())
+    }
+
+    /// Ends `call` on the lock, unless Stop released the hold it began in: the release ended it.
+    fn end_call(&self, call: &OpenCall) {
+        let environment_id = &self.channel.request.environment_id;
+        self.channel.lock.with(|lock| {
+            if call.epoch == self.control.stop_epoch() {
+                lock.end_call(environment_id, Instant::now());
+            }
+        });
     }
 
     /// Closes the session, briefly: a stopped or dead connection fails at once.
@@ -504,17 +706,22 @@ mod tests {
 
     use super::*;
     use crate::history::kind;
-    use crate::lazurio::app::device::v1::{Connected, Connecting, Refused, channel_state};
+    use crate::lazurio::app::device::v1::{Connected, Connecting, Refused, Working, channel_state};
+    use crate::lock::{Busy, DeviceLock, Holder};
     use crate::secret_start::ProxyRequest;
     use crate::testkit::{
-        ATTACH_URL, DEVICE_ID, Event, FakeEnvironment, FakeProxy, PATIENCE, SEED, Session,
-        quick_timing, scratch,
+        ATTACH_URL, DEVICE_ID, EngineEvent, Event, FakeEngines, FakeEnvironment, FakeProxy, Order,
+        PATIENCE, SEED, Session, quick_timing, scratch, scripted_environment, spawning,
     };
 
     fn request(proxy: Option<ProxyRequest>) -> StartRequest {
+        request_of("env-a", "Environment A", proxy)
+    }
+
+    fn request_of(id: &str, label: &str, proxy: Option<ProxyRequest>) -> StartRequest {
         StartRequest {
-            environment_id: "env-a".to_owned(),
-            environment_label: "Environment A".to_owned(),
+            environment_id: id.to_owned(),
+            environment_label: label.to_owned(),
             attach_url: ATTACH_URL.to_owned(),
             device_id: DEVICE_ID.to_owned(),
             key_seed: Zeroizing::new(SEED.to_vec()),
@@ -526,6 +733,7 @@ mod tests {
         supervisor: Supervisor,
         states: Receiver<channel_state::State>,
         history: Arc<History>,
+        history_directory: std::path::PathBuf,
     }
 
     impl Running {
@@ -543,28 +751,52 @@ mod tests {
     }
 
     fn run(connector: Connector, timing: Timing, proxy: Option<ProxyRequest>) -> Running {
+        run_with(
+            connector,
+            timing,
+            request(proxy),
+            None,
+            &Arc::new(SharedLock::new(
+                DeviceLock::new(scratch("lock").join("agent.lock")),
+                |_| {},
+            )),
+        )
+    }
+
+    fn run_with(
+        connector: Connector,
+        timing: Timing,
+        request: StartRequest,
+        engine: Option<EngineSpec>,
+        lock: &Arc<SharedLock>,
+    ) -> Running {
         let (sender, states) = mpsc::channel();
         let sender = std::sync::Mutex::new(sender);
-        let history = Arc::new(History::new(&scratch("history")));
+        let history_directory = scratch("history");
+        let history = Arc::new(History::new(&history_directory));
+        let environment_id = request.environment_id.clone();
         let supervisor = Supervisor::spawn(Channel {
-            request: request(proxy),
+            request,
             connector: Arc::new(connector),
             timing,
             history: Arc::clone(&history),
             report: Arc::new(move |state: ChannelState| {
-                assert_eq!(state.environment_id, "env-a");
+                assert_eq!(state.environment_id, environment_id);
                 let _ = sender
                     .lock()
                     .expect("the test's sender")
                     .send(state.state.expect("a state"));
             }),
             helper_version: "1.2.3".to_owned(),
+            engine,
+            lock: Arc::clone(lock),
         })
         .expect("a thread");
         Running {
             supervisor,
             states,
             history,
+            history_directory,
         }
     }
 
@@ -950,6 +1182,337 @@ mod tests {
                 .wait_ended(std::time::Instant::now() + PATIENCE)
         );
         assert!(running.states.try_recv().is_err());
+    }
+
+    fn initialize(id: &str) -> serde_json::Value {
+        json!({"jsonrpc": "2.0", "id": id, "method": "initialize",
+               "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                          "clientInfo": {"name": "lazurio-computer-attach", "version": "1"}}})
+    }
+
+    fn tool_call(id: i64, tool: &str) -> serde_json::Value {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+               "params": {"name": tool, "arguments": {"text": "secret words"}}})
+    }
+
+    fn tool_text(answer: &serde_json::Value) -> (&str, bool) {
+        (
+            answer["result"]["content"][0]["text"]
+                .as_str()
+                .expect("a tool's text"),
+            answer["result"]["isError"]
+                .as_bool()
+                .expect("a tool's isError"),
+        )
+    }
+
+    fn a_lock() -> Arc<SharedLock> {
+        Arc::new(SharedLock::new(
+            DeviceLock::new(scratch("lock").join("agent.lock")),
+            |_| {},
+        ))
+    }
+
+    /// One Environment's channel with a fake engine, connected, its engine started and the
+    /// session initialized.
+    struct Tapped {
+        running: Running,
+        environment: FakeEnvironment,
+        orders: std::sync::mpsc::Sender<Order>,
+        engines: FakeEngines,
+    }
+
+    impl Tapped {
+        fn start(id: &str, label: &str, lock: &Arc<SharedLock>) -> Self {
+            let (environment, orders) = scripted_environment();
+            let engines = FakeEngines::start();
+            let running = run_with(
+                environment.connector(),
+                quick_timing(),
+                request_of(id, label, None),
+                Some(engines.spec()),
+                lock,
+            );
+            let tapped = Self {
+                running,
+                environment,
+                orders,
+                engines,
+            };
+            assert_eq!(tapped.running.next(), connected());
+            tapped.send(initialize("i0"));
+            let (answer, _) = tapped.environment.answer(&json!("i0"));
+            assert_eq!(answer["result"]["serverInfo"]["name"], "fake-engine");
+            tapped.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+            tapped
+        }
+
+        fn send(&self, message: serde_json::Value) {
+            self.orders
+                .send(Order::Send(message))
+                .expect("the session follows orders");
+        }
+
+        /// Sends a ping and returns every method the engine got until the ping reached it.
+        fn methods_until_ping(&self, id: &str) -> Vec<(String, String)> {
+            self.send(json!({"jsonrpc": "2.0", "id": id, "method": "ping"}));
+            let mut got = Vec::new();
+            loop {
+                if let EngineEvent::Got { method, tool, .. } = self.engines.next() {
+                    if method == "ping" {
+                        break;
+                    }
+                    got.push((method, tool));
+                }
+            }
+            assert_eq!(self.environment.answer(&json!(id)).0["result"], json!({}));
+            got
+        }
+    }
+
+    #[test]
+    fn initialize_carries_the_engines_meta_and_the_apps() {
+        let _forks = spawning();
+        let (environment, orders) = scripted_environment();
+        let engines = FakeEngines::start();
+        let mut running = run_with(
+            environment.connector(),
+            quick_timing(),
+            request(None),
+            Some(engines.spec()),
+            &a_lock(),
+        );
+        assert_eq!(running.next(), connected());
+        orders
+            .send(Order::Send(initialize("b0")))
+            .expect("the session follows orders");
+
+        let (answer, _) = environment.answer(&json!("b0"));
+        assert_eq!(
+            answer["result"]["_meta"],
+            json!({
+                "io.example/engine": {"build": "test"},
+                "io.lazurio/app": {"version": "1.2.3", "deviceLock": 1},
+            }),
+            "the engine's own _meta and the app's announcement of the device lock"
+        );
+        assert_eq!(answer["result"]["serverInfo"]["name"], "fake-engine");
+        assert_eq!(engines.next(), EngineEvent::Started(1));
+        assert_eq!(
+            engines.next(),
+            EngineEvent::Got {
+                engine: 1,
+                method: "initialize".to_owned(),
+                tool: "-".to_owned()
+            }
+        );
+        running.supervisor.stop();
+        assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+    }
+
+    #[test]
+    fn a_tool_call_reaches_the_engine_reports_working_and_is_recorded_without_its_arguments() {
+        let _forks = spawning();
+        let lock = a_lock();
+        let mut tapped = Tapped::start("env-a", "Environment A", &lock);
+
+        tapped.send(tool_call(7, "desktop_click"));
+        let (answer, _) = tapped.environment.answer(&json!(7));
+        assert_eq!(tool_text(&answer), ("desktop_click", false));
+        assert_eq!(
+            tapped.engines.until(
+                |event| matches!(event, EngineEvent::Got { method, .. } if method == "tools/call")
+            ),
+            EngineEvent::Got {
+                engine: 1,
+                method: "tools/call".to_owned(),
+                tool: "desktop_click".to_owned()
+            }
+        );
+        assert_eq!(
+            tapped.running.next(),
+            channel_state::State::Working(Working {
+                tool: "desktop_click".to_owned(),
+                application: String::new(),
+            })
+        );
+        assert_eq!(tapped.running.next(), connected());
+        assert_eq!(tapped.running.kinds(), [kind::CONNECTED, kind::TOOL]);
+        let entry = &tapped.running.history.page("", 1).entries[0];
+        assert_eq!(entry.tool, "desktop_click");
+        assert_eq!(entry.environment_id, "env-a");
+        assert!(
+            lock.with(|lock| lock.deadline()).is_some(),
+            "the hold lingers after the call, not while it runs"
+        );
+
+        tapped.running.supervisor.stop();
+        assert!(
+            tapped
+                .running
+                .supervisor
+                .wait_ended(Instant::now() + PATIENCE)
+        );
+        for file in std::fs::read_dir(&tapped.running.history_directory).expect("the history") {
+            let bytes = std::fs::read(file.expect("a file").path()).expect("its bytes");
+            assert!(
+                !bytes.windows(12).any(|window| window == b"secret words"),
+                "no arguments in the history"
+            );
+        }
+    }
+
+    #[test]
+    fn another_environments_call_is_refused_while_the_first_holds_the_computer() {
+        let _forks = spawning();
+        let lock = a_lock();
+        let a = Tapped::start("env-a", "Environment A", &lock);
+        let b = Tapped::start("env-b", "Environment B", &lock);
+
+        a.send(tool_call(1, "desktop_wait"));
+        a.engines.until(
+            |event| matches!(event, EngineEvent::Got { tool, .. } if tool == "desktop_wait"),
+        );
+        b.send(tool_call(2, "desktop_click"));
+        let (refused, _) = b.environment.answer(&json!(2));
+        let busy = Busy::Environment(Holder {
+            environment_id: "env-a".to_owned(),
+            environment_label: "Environment A".to_owned(),
+            since_unix_ms: 0,
+        });
+        assert_eq!(tool_text(&refused), (busy.message().as_str(), true));
+        assert!(
+            !b.methods_until_ping("p1")
+                .iter()
+                .any(|(method, _)| method == "tools/call"),
+            "the refused call never reached B's engine"
+        );
+
+        a.engines.release(1);
+        let (answer, _) = a.environment.answer(&json!(1));
+        assert_eq!(tool_text(&answer), ("desktop_wait", false));
+        for tapped in [a, b] {
+            tapped.running.supervisor.stop();
+        }
+    }
+
+    #[test]
+    fn the_updaters_hold_refuses_calls_with_the_updating_message() {
+        let _forks = spawning();
+        let lock = a_lock();
+        let tapped = Tapped::start("env-a", "Environment A", &lock);
+        assert!(lock.with(|lock| lock.hold_for_update(true, Instant::now())));
+
+        tapped.send(tool_call(3, "desktop_click"));
+        let (refused, _) = tapped.environment.answer(&json!(3));
+        assert_eq!(
+            tool_text(&refused),
+            (Busy::Updating.message().as_str(), true)
+        );
+        assert!(
+            !tapped
+                .methods_until_ping("p1")
+                .iter()
+                .any(|(method, _)| method == "tools/call"),
+            "the refused call never reached the engine"
+        );
+        assert_eq!(tapped.running.kinds(), [kind::CONNECTED]);
+        tapped.running.supervisor.stop();
+    }
+
+    #[test]
+    fn a_session_that_ends_with_a_call_open_ends_it_on_the_lock() {
+        let _forks = spawning();
+        let lock = a_lock();
+        let tapped = Tapped::start("env-a", "Environment A", &lock);
+        tapped.send(tool_call(4, "desktop_wait"));
+        tapped.engines.until(
+            |event| matches!(event, EngineEvent::Got { tool, .. } if tool == "desktop_wait"),
+        );
+        assert_eq!(lock.with(|lock| lock.deadline()), None, "the call runs");
+
+        tapped
+            .orders
+            .send(Order::Close)
+            .expect("the session closes");
+        assert_eq!(
+            tapped
+                .engines
+                .until(|event| matches!(event, EngineEvent::Ended(_))),
+            EngineEvent::Ended(1)
+        );
+        loop {
+            match tapped.running.next() {
+                channel_state::State::Connecting(_) => break,
+                channel_state::State::Working(_) => {}
+                other => panic!("the session ended, not {other:?}"),
+            }
+        }
+        assert!(
+            lock.with(|lock| lock.deadline()).is_some(),
+            "the open call ended on the lock, so the hold lingers and then expires"
+        );
+        assert_eq!(
+            tapped.running.kinds(),
+            [kind::CONNECTED, kind::DISCONNECTED],
+            "no history entry for the unanswered call"
+        );
+        tapped.running.supervisor.stop();
+    }
+
+    #[test]
+    fn a_missing_engine_falls_back_to_the_stub() {
+        let (environment, orders) = scripted_environment();
+        let running = run_with(
+            environment.connector(),
+            quick_timing(),
+            request(None),
+            Some(EngineSpec {
+                program: scratch("no-engine").join("agent-desktop"),
+                args: vec!["mcp".to_owned()],
+                env: Vec::new(),
+            }),
+            &a_lock(),
+        );
+        assert_eq!(running.next(), connected());
+        orders
+            .send(Order::Send(initialize("b0")))
+            .expect("the session follows orders");
+        let (answer, _) = environment.answer(&json!("b0"));
+        assert_eq!(answer["result"]["serverInfo"]["name"], "lazurio-device");
+        orders
+            .send(Order::Send(tool_call(5, "desktop_click")))
+            .expect("the session follows orders");
+        let (answer, _) = environment.answer(&json!(5));
+        assert_eq!(tool_text(&answer), (mcp_stub::NOT_INSTALLED, true));
+        running.supervisor.stop();
+    }
+
+    #[test]
+    fn stop_channel_ends_the_engine_within_two_seconds() {
+        let _forks = spawning();
+        let lock = a_lock();
+        let mut tapped = Tapped::start("env-a", "Environment A", &lock);
+        tapped.send(tool_call(6, "desktop_wait"));
+        tapped.engines.until(
+            |event| matches!(event, EngineEvent::Got { tool, .. } if tool == "desktop_wait"),
+        );
+
+        let started = Instant::now();
+        tapped.running.supervisor.stop();
+        assert!(
+            tapped
+                .running
+                .supervisor
+                .wait_ended(started + Duration::from_secs(2)),
+            "the channel and its engine ended within two seconds"
+        );
+        assert_eq!(
+            tapped
+                .engines
+                .until(|event| matches!(event, EngineEvent::Ended(_))),
+            EngineEvent::Ended(1)
+        );
     }
 
     fn closed_port() -> std::net::SocketAddr {

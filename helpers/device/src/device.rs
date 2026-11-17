@@ -4,8 +4,10 @@
 //! device lock around it (`lock`), the history without content (`history`) and the attach channel
 //! of each Environment (`channel`) are in place. `StartChannel` arrives decoded apart with its
 //! secrets in self-wiping types (`secret_start`); after its checks its secrets move into the
-//! channel's thread. Until the engine joins, the channel serves no tools (`mcp_stub`), so no
-//! agent can yet hold the computer through this helper.
+//! channel's thread. Each session passes the Environment's MCP messages to the engine next to the
+//! helper's binary (`engine`, `tap`), and a tool call reaches it only while this Environment holds
+//! the computer. Without the engine, the channel serves no tools (`mcp_stub`). Stop releases the
+//! computer and ends the holder's engine, so a running tool stops.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,6 +15,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::channel::{self, Channel, Report, Supervisor, Timing};
+use crate::engine::EngineSpec;
 use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
     ChannelState, ConfigureDevice, Connecting, DeviceReady, HoldForUpdate, ListHistory, LockState,
@@ -32,7 +35,7 @@ const KEY_SEED_BYTES: usize = 32;
 /// What the helper holds after `ConfigureDevice`.
 struct Runtime {
     history: Arc<History>,
-    lock: SharedLock,
+    lock: Arc<SharedLock>,
 }
 
 /// The Device's state in the helper.
@@ -50,6 +53,8 @@ struct Channels {
     timing: Timing,
     report: Report,
     helper_version: String,
+    /// The engine each session starts.
+    engine: Option<EngineSpec>,
     /// The started channels, by environment id.
     running: HashMap<String, Supervisor>,
     /// Stopped channels whose threads may still be ending; Shutdown waits for them too.
@@ -87,6 +92,7 @@ impl Device {
                 timing: Timing::default(),
                 report: Arc::new(|_| {}),
                 helper_version: String::new(),
+                engine: EngineSpec::bundled(),
                 running: HashMap::new(),
                 stopping: Vec::new(),
                 prepared: None,
@@ -103,12 +109,22 @@ impl Device {
         self
     }
 
-    /// Channels that dial `connector` with `timing`, for tests against a fake Environment.
+    /// Channels that dial `connector` with `timing` and start no engine, for tests against a
+    /// fake Environment.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_channels(mut self, connector: Connector, timing: Timing) -> Self {
         self.channels.connector = Arc::new(connector);
         self.channels.timing = timing;
+        self.channels.engine = None;
+        self
+    }
+
+    /// Sessions that start `engine`, for tests with a fake engine.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_engine(mut self, engine: EngineSpec) -> Self {
+        self.channels.engine = Some(engine);
         self
     }
 
@@ -147,7 +163,7 @@ impl Device {
             history: Arc::new(History::new(Path::new(&request.data_directory))),
             // The hold ends on its own at its deadline; telling the main process about it
             // comes with the channel, which owns the helper's output.
-            lock: SharedLock::new(DeviceLock::new(lock_path), |_| {}),
+            lock: Arc::new(SharedLock::new(DeviceLock::new(lock_path), |_| {})),
         });
         Ok(helper_message::Kind::DeviceReady(DeviceReady {
             contract_version: CONTRACT_VERSION,
@@ -185,6 +201,8 @@ impl Device {
             history: Arc::clone(&runtime.history),
             report: Arc::clone(&self.channels.report),
             helper_version: self.channels.helper_version.clone(),
+            engine: self.channels.engine.clone(),
+            lock: Arc::clone(&runtime.lock),
         });
         match spawned {
             Ok(supervisor) => {
@@ -242,11 +260,19 @@ impl Device {
     }
 
     fn stop_agent(&mut self) -> Result<helper_message::Kind, Failure> {
-        let runtime = self.runtime_mut()?;
+        let running = &self.channels.running;
+        let runtime = self.runtime.as_mut().ok_or_else(not_configured)?;
         let now = Instant::now();
         let stopped = runtime.lock.with(|lock| {
             let holder = lock.holder(now);
             lock.release_any();
+            // With the release, inside the lock: the holder's running tool stops with its engine.
+            if let Some(supervisor) = holder
+                .as_ref()
+                .and_then(|holder| running.get(&holder.environment_id))
+            {
+                supervisor.end_engine();
+            }
             holder
         });
         if let Some(holder) = stopped {
@@ -656,6 +682,132 @@ mod tests {
         };
         assert_eq!(page.entries.len(), 1);
         assert_eq!(page.entries[0].tool, "desktop_click");
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story, from the start through Stop and on"
+    )]
+    fn stop_agent_ends_the_running_calls_engine_and_the_channel_goes_on() {
+        use crate::lazurio::app::device::v1::{Connected, Working};
+        use crate::testkit::{
+            EngineEvent, FakeEngines, Order, PATIENCE, quick_timing, scripted_environment, spawning,
+        };
+        use serde_json::json;
+
+        let _forks = spawning();
+        let (environment, orders) = scripted_environment();
+        let engines = FakeEngines::start();
+        let (sender, states) = std::sync::mpsc::channel();
+        let sender = std::sync::Mutex::new(sender);
+        let directory = scratch("stop-agent");
+        let mut device = test_device()
+            .with_channels(environment.connector(), quick_timing())
+            .with_engine(engines.spec())
+            .with_channel_report(
+                std::sync::Arc::new(move |state: ChannelState| {
+                    let _ = sender
+                        .lock()
+                        .expect("the test's sender")
+                        .send(state.state.expect("a state"));
+                }),
+                "1.2.3",
+            );
+        device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
+            data_directory: directory.to_string_lossy().into_owned(),
+            computer_name: "Work laptop".to_owned(),
+        }));
+        let mut request = start(
+            crate::testkit::ATTACH_URL,
+            crate::testkit::SEED.to_vec(),
+            None,
+        );
+        request.device_id = crate::testkit::DEVICE_ID.to_owned();
+        device.start_channel(request);
+        device.start_prepared();
+        let next_state = || states.recv_timeout(PATIENCE).expect("a state");
+        assert_eq!(next_state(), channel_state::State::Connected(Connected {}));
+        let send = |message| {
+            orders
+                .send(Order::Send(message))
+                .expect("the session follows orders");
+        };
+        send(json!({"jsonrpc": "2.0", "id": "i0", "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}));
+        environment.answer(&json!("i0"));
+        send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+        send(json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                    "params": {"name": "desktop_wait", "arguments": {}}}));
+        engines.until(
+            |event| matches!(event, EngineEvent::Got { tool, .. } if tool == "desktop_wait"),
+        );
+        assert_eq!(
+            next_state(),
+            channel_state::State::Working(Working {
+                tool: "desktop_wait".to_owned(),
+                application: String::new(),
+            })
+        );
+
+        let answer = device.answer(&app_message::Kind::StopAgent(StopAgent {}));
+        assert!(
+            matches!(answer, Some(helper_message::Kind::LockState(ref state)) if state.idle),
+            "Stop releases the computer: {answer:?}"
+        );
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(_))),
+            EngineEvent::Ended(1),
+            "the running tool's engine ended"
+        );
+        let (stopped, _) = environment.answer(&json!(5));
+        assert_eq!(
+            stopped["result"],
+            json!({"content": [{"type": "text", "text": crate::tap::STOPPED}], "isError": true})
+        );
+        assert_eq!(next_state(), channel_state::State::Connected(Connected {}));
+        // A new engine, initialized the way the Environment initialized the first one.
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Started(_))),
+            EngineEvent::Started(2)
+        );
+        for method in ["initialize", "notifications/initialized"] {
+            assert_eq!(
+                engines.next(),
+                EngineEvent::Got {
+                    engine: 2,
+                    method: method.to_owned(),
+                    tool: "-".to_owned()
+                }
+            );
+        }
+        send(json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+                    "params": {"name": "desktop_click", "arguments": {}}}));
+        let (answer, before) = environment.answer(&json!(6));
+        assert_eq!(answer["result"]["content"][0]["text"], "desktop_click");
+        assert!(
+            before.iter().all(|message| message.get("id").is_none()),
+            "the new engine's initialize answer stays in the helper: {before:?}"
+        );
+
+        assert!(device.shutdown(Instant::now() + PATIENCE));
+        let kinds: Vec<String> = History::new(&directory)
+            .page("", 10)
+            .entries
+            .into_iter()
+            .rev()
+            .map(|entry| entry.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                history::kind::CONNECTED,
+                history::kind::STOPPED,
+                history::kind::TOOL,
+                history::kind::DISCONNECTED
+            ],
+            "the stopped call is no tool entry"
+        );
     }
 
     #[test]

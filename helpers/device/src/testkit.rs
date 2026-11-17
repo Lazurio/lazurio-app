@@ -212,6 +212,77 @@ impl Session {
     }
 }
 
+/// What a test tells a scripted session of the fake Environment to do.
+#[derive(Debug)]
+pub enum Order {
+    /// Send this MCP message to the computer.
+    Send(Value),
+    /// Close the session.
+    Close,
+}
+
+impl Session {
+    /// Carries out `orders` while reporting every text frame of the computer, until the
+    /// computer's side ends or the test orders the session closed, then reports `Closed`.
+    pub fn follow(&mut self, orders: &Receiver<Order>) {
+        let tcp = self.socket.get_ref().get_ref();
+        tcp.set_read_timeout(Some(Duration::from_millis(5)))
+            .expect("a read timeout");
+        loop {
+            loop {
+                match orders.try_recv() {
+                    Ok(Order::Send(message)) => {
+                        self.send(&message);
+                    }
+                    Ok(Order::Close) => {
+                        let _ = self.socket.close(None);
+                        let _ = self.socket.flush();
+                        let _ = self.socket.get_ref().get_ref().shutdown(Shutdown::Both);
+                        let _ = self.events.send(Event::Closed);
+                        return;
+                    }
+                    Err(_) => break,
+                }
+            }
+            match self.socket.read() {
+                Ok(Message::Text(text)) => {
+                    let _ = self.events.send(Event::Text(
+                        serde_json::from_str(&text).unwrap_or(Value::Null),
+                    ));
+                }
+                Ok(Message::Close(_)) => break,
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(error))
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) => {}
+                Err(_) => break,
+            }
+        }
+        let _ = self.events.send(Event::Closed);
+    }
+}
+
+/// A fake Environment whose first session follows the test's orders and whose later sessions
+/// wait until closed.
+#[must_use]
+pub fn scripted_environment() -> (FakeEnvironment, Sender<Order>) {
+    let (orders, inbox) = mpsc::channel();
+    let inbox = Mutex::new(Some(inbox));
+    let environment = FakeEnvironment::start(move |session: &mut Session| {
+        if !session.authenticate() {
+            return;
+        }
+        let first = inbox.lock().unwrap_or_else(PoisonError::into_inner).take();
+        match first {
+            Some(orders) => session.follow(&orders),
+            None => session.until_closed(),
+        }
+    });
+    (environment, orders)
+}
+
 /// Checks an `auth` answer the way the Environment does: type, version, device, and a base64url
 /// Ed25519 signature of 86 characters over the contract's bytes with the test seed's key.
 #[must_use]
@@ -322,6 +393,19 @@ impl FakeEnvironment {
             let event = self.next();
             if wanted(&event) {
                 return event;
+            }
+        }
+    }
+
+    /// The computer's answer to the request `id`, and every other text frame before it.
+    pub fn answer(&self, id: &Value) -> (Value, Vec<Value>) {
+        let mut before = Vec::new();
+        loop {
+            match self.next() {
+                Event::Text(message) if message.get("id") == Some(id) => return (message, before),
+                Event::Text(message) => before.push(message),
+                Event::Closed => panic!("the session closed before the answer to {id}"),
+                _ => {}
             }
         }
     }
@@ -557,4 +641,132 @@ pub fn output() -> (OutputTap, Replies) {
             all: Vec::new(),
         },
     )
+}
+
+/// A child process started in one test thread inherits every descriptor of this process until
+/// its `exec`, and `flock` belongs to the open file, so for that moment the child also holds any
+/// device lock another test thread has taken (Lazurio/lazurio-app#29). Tests that start a child
+/// take this exclusively; tests that take a device lock in this process take it shared, so no
+/// child is ever started while they hold one.
+static FORKS: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// For a test that takes device locks in this process and starts no child.
+pub fn in_process() -> std::sync::RwLockReadGuard<'static, ()> {
+    FORKS.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// For a test that starts a child process.
+pub fn spawning() -> std::sync::RwLockWriteGuard<'static, ()> {
+    FORKS.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The variable that tells the test binary to act as the fake engine, and where its control
+/// connection goes (`engine::tests::fake_engine`).
+pub const FAKE_ENGINE_CONTROL: &str = "LAZURIO_FAKE_ENGINE_CONTROL";
+
+/// What a fake engine did; engines are numbered from 1 in the order they started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineEvent {
+    Started(usize),
+    /// A message reached the engine: its method and, for a tool call, the tool (`-` for none).
+    Got {
+        engine: usize,
+        method: String,
+        tool: String,
+    },
+    /// The engine's process ended.
+    Ended(usize),
+}
+
+/// The control side of the fake engines one test starts: each engine connects here when it
+/// starts, reports what it gets, and its connection closes when its process ends.
+pub struct FakeEngines {
+    address: SocketAddr,
+    pub events: Receiver<EngineEvent>,
+    controls: Arc<Mutex<std::collections::HashMap<usize, TcpStream>>>,
+}
+
+impl FakeEngines {
+    #[must_use]
+    pub fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let address = listener.local_addr().expect("its address");
+        let (sender, events) = mpsc::channel();
+        let controls = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let registry = Arc::clone(&controls);
+        thread::spawn(move || {
+            for (index, stream) in listener.incoming().enumerate() {
+                let Ok(stream) = stream else { continue };
+                let engine = index + 1;
+                let reader = stream.try_clone().expect("a second handle");
+                registry
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(engine, stream);
+                let sender = sender.clone();
+                thread::spawn(move || {
+                    for line in io::BufRead::lines(io::BufReader::new(reader)) {
+                        let Ok(line) = line else { break };
+                        let event = match line.split('\t').collect::<Vec<_>>()[..] {
+                            ["started"] => EngineEvent::Started(engine),
+                            ["got", method, tool] => EngineEvent::Got {
+                                engine,
+                                method: method.to_owned(),
+                                tool: tool.to_owned(),
+                            },
+                            _ => panic!("the fake engine said {line:?}"),
+                        };
+                        let _ = sender.send(event);
+                    }
+                    let _ = sender.send(EngineEvent::Ended(engine));
+                });
+            }
+        });
+        Self {
+            address,
+            events,
+            controls,
+        }
+    }
+
+    /// How a channel starts one of these engines: the test binary itself, as the fake engine.
+    #[must_use]
+    pub fn spec(&self) -> crate::engine::EngineSpec {
+        crate::engine::EngineSpec {
+            program: std::env::current_exe().expect("the test binary"),
+            args: [
+                "--exact",
+                "engine::tests::fake_engine",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            env: vec![(FAKE_ENGINE_CONTROL.to_owned(), self.address.to_string())],
+        }
+    }
+
+    pub fn next(&self) -> EngineEvent {
+        self.events
+            .recv_timeout(PATIENCE)
+            .expect("a fake engine reports")
+    }
+
+    /// Skips events until one matches.
+    pub fn until(&self, wanted: impl Fn(&EngineEvent) -> bool) -> EngineEvent {
+        loop {
+            let event = self.next();
+            if wanted(&event) {
+                return event;
+            }
+        }
+    }
+
+    /// Lets engine `engine` answer the `desktop_wait` it holds.
+    pub fn release(&self, engine: usize) {
+        let mut controls = self.controls.lock().unwrap_or_else(PoisonError::into_inner);
+        let control = controls.get_mut(&engine).expect("that engine started");
+        control.write_all(b"go\n").expect("the engine listens");
+    }
 }
