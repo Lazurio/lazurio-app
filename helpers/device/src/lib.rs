@@ -49,6 +49,7 @@ pub mod tap;
 mod testkit;
 pub mod wire;
 
+use lazurio::app::device::v1::DeviceStopped;
 use lazurio::app::helper::v1::{
     AppMessage, Failure, Hello, HelperMessage, Pong, app_message, helper_message,
 };
@@ -111,11 +112,13 @@ fn serve_with<R: Read, W: Write + Send>(
                 }));
             }
         };
+        // Who holds the computer goes to the writer inside the lock, as answer or on its own,
+        // so the main process gets the snapshots in the order of their sequences.
         let lock_report = {
             let outbox = outbox.clone();
-            move |state| {
+            move |request_id, state| {
                 let _ = outbox.send(Outgoing::Message(HelperMessage {
-                    request_id: 0,
+                    request_id,
                     kind: Some(helper_message::Kind::LockState(state)),
                 }));
             }
@@ -124,7 +127,14 @@ fn serve_with<R: Read, W: Write + Send>(
             .with_channel_report(Arc::new(report), helper_version)
             .with_lock_report(Arc::new(lock_report));
         let served = answer_requests(input, &outbox, &mut device, helper_version);
-        device.shutdown(Instant::now() + CHANNELS_CLOSE_WITHIN);
+        let channels_ended = device.shutdown(Instant::now() + CHANNELS_CLOSE_WITHIN);
+        // The last message: whether every engine's process tree is gone (ADR 0006 point 7).
+        let _ = outbox.send(Outgoing::Message(HelperMessage {
+            request_id: 0,
+            kind: Some(helper_message::Kind::DeviceStopped(DeviceStopped {
+                all_engines_ended: channels_ended && device.all_engines_ended(),
+            })),
+        }));
         drop(device);
         let _ = outbox.send(Outgoing::Close);
         let written = writer
@@ -197,11 +207,22 @@ fn answer_requests<R: Read>(
                     }
                     Some(app_message::Kind::Shutdown(_)) => return Ok(()),
                     // This helper serves no other helper's work, such as the tailnet's.
-                    Some(kind) => device.answer(&kind).unwrap_or_else(unknown_request),
+                    Some(kind) => match device.answer_request(request_id, &kind) {
+                        Some(device::Reply::Send(kind)) => kind,
+                        // Already on its way, in the lock's order.
+                        Some(device::Reply::Sent) => {
+                            #[cfg(test)]
+                            device.before_reply(request_id);
+                            continue;
+                        }
+                        None => unknown_request(),
+                    },
                     None => unknown_request(),
                 }
             }
         };
+        #[cfg(test)]
+        device.before_reply(request_id);
         send(HelperMessage {
             request_id,
             kind: Some(kind),
@@ -325,8 +346,14 @@ mod tests {
         let replies = replies(&output);
         assert_eq!(
             replies.len(),
-            3,
-            "Hello, Pong and Failure, nothing after Shutdown"
+            4,
+            "Hello, Pong, Failure and DeviceStopped, no answer after Shutdown"
+        );
+        assert_eq!(
+            replies[3].kind,
+            Some(helper_message::Kind::DeviceStopped(DeviceStopped {
+                all_engines_ended: true
+            }))
         );
         assert_eq!(
             replies[0].kind,
@@ -618,6 +645,201 @@ mod tests {
         );
     }
 
+    /// Serves `device` on its own thread, and returns the pipe to its input, its replies and
+    /// the thread.
+    fn serve_device(
+        device: device::Device,
+    ) -> (
+        std::sync::mpsc::Sender<Vec<u8>>,
+        testkit::Replies,
+        std::thread::JoinHandle<io::Result<()>>,
+    ) {
+        let (input, mut reader) = testkit::pipe();
+        let (mut tap, replies) = testkit::output();
+        let thread = std::thread::spawn(move || serve_with(&mut reader, &mut tap, "1.2.3", device));
+        (input, replies, thread)
+    }
+
+    /// A Device whose sessions start a fake engine of `engines` at `environment`, ending it
+    /// with `ender`.
+    fn engine_device(
+        environment: &testkit::FakeEnvironment,
+        engines: &testkit::FakeEngines,
+        ender: channel::Ender,
+    ) -> device::Device {
+        device::Device::with_lock_path(Some(testkit::scratch("lock").join("agent.lock")))
+            .with_channels(environment.connector(), testkit::quick_timing())
+            .with_engine(engines.spec())
+            .with_ender(ender)
+    }
+
+    fn shutdown(request_id: u64) -> AppMessage {
+        AppMessage {
+            request_id,
+            kind: Some(app_message::Kind::Shutdown(Shutdown {})),
+        }
+    }
+
+    fn device_stopped(message: &HelperMessage) -> Option<bool> {
+        match &message.kind {
+            Some(helper_message::Kind::DeviceStopped(stopped)) if message.request_id == 0 => {
+                Some(stopped.all_engines_ended)
+            }
+            _ => None,
+        }
+    }
+
+    /// Starts env-a's channel with a fake engine, and waits until its engine runs.
+    fn connected_with_engine(
+        input: &std::sync::mpsc::Sender<Vec<u8>>,
+        replies: &mut testkit::Replies,
+        engines: &testkit::FakeEngines,
+    ) {
+        input
+            .send(frames(&[configure(1), start_channel(2, "env-a", None)]))
+            .expect("reads");
+        for _ in 0..4 {
+            replies.next();
+        }
+        assert_eq!(engines.next(), testkit::EngineEvent::Started(1));
+    }
+
+    #[test]
+    fn shutdown_ends_with_device_stopped_once_every_engine_ended() {
+        let _forks = testkit::spawning();
+        let (environment, _orders) = testkit::scripted_environment();
+        let engines = testkit::FakeEngines::start();
+        let (input, mut replies, thread) =
+            serve_device(engine_device(&environment, &engines, engine::Engine::end));
+        connected_with_engine(&input, &mut replies, &engines);
+
+        input.send(frames(&[shutdown(3)])).expect("reads");
+        thread.join().expect("serve ends").expect("cleanly");
+        let rest = replies.rest();
+        assert_eq!(
+            rest.last().and_then(device_stopped),
+            Some(true),
+            "DeviceStopped is the last message: {rest:?}"
+        );
+        assert_eq!(
+            rest.iter().filter_map(device_stopped).count(),
+            1,
+            "and the only one"
+        );
+    }
+
+    #[test]
+    fn the_end_of_input_ends_with_device_stopped_too() {
+        let _forks = testkit::spawning();
+        let (environment, _orders) = testkit::scripted_environment();
+        let engines = testkit::FakeEngines::start();
+        let (input, mut replies, thread) =
+            serve_device(engine_device(&environment, &engines, engine::Engine::end));
+        connected_with_engine(&input, &mut replies, &engines);
+
+        drop(input);
+        thread.join().expect("serve ends").expect("cleanly");
+        assert_eq!(replies.rest().last().and_then(device_stopped), Some(true));
+    }
+
+    #[test]
+    fn a_tree_not_confirmed_gone_makes_device_stopped_say_so() {
+        let _forks = testkit::spawning();
+        let (environment, _orders) = testkit::scripted_environment();
+        let engines = testkit::FakeEngines::start();
+        let (input, mut replies, thread) = serve_device(engine_device(
+            &environment,
+            &engines,
+            testkit::unconfirmed_end,
+        ));
+        connected_with_engine(&input, &mut replies, &engines);
+
+        input.send(frames(&[shutdown(3)])).expect("reads");
+        thread.join().expect("serve ends").expect("cleanly");
+        assert_eq!(
+            replies.rest().last().and_then(device_stopped),
+            Some(false),
+            "the updater must not install"
+        );
+    }
+
+    #[test]
+    fn lock_states_arrive_in_the_order_they_were_taken() {
+        use super::lazurio::app::device::v1::{HoldForUpdate, LockState};
+
+        let _forks = testkit::spawning();
+        let (environment, orders) = testkit::scripted_environment();
+        let engines = testkit::FakeEngines::start();
+        // The request thread stops after the updater's answer is ready and before it is sent.
+        let (reached, at_hook) = std::sync::mpsc::channel();
+        let (go, gate) = std::sync::mpsc::channel::<()>();
+        let (reached, gate) = (std::sync::Mutex::new(reached), std::sync::Mutex::new(gate));
+        let device = engine_device(&environment, &engines, testkit::unconfirmed_end)
+            .with_before_reply(Arc::new(move |request_id| {
+                if request_id == 3 {
+                    let _ = reached.lock().expect("the test's sender").send(());
+                    let _ = gate.lock().expect("the test's gate").recv();
+                }
+            }));
+        let (input, mut replies, thread) = serve_device(device);
+        connected_with_engine(&input, &mut replies, &engines);
+
+        // The idle computer: the updater's hold is granted...
+        input
+            .send(frames(&[AppMessage {
+                request_id: 3,
+                kind: Some(app_message::Kind::HoldForUpdate(HoldForUpdate {
+                    hold: true,
+                })),
+            }]))
+            .expect("reads");
+        at_hook
+            .recv_timeout(testkit::PATIENCE)
+            .expect("the answer is ready");
+        // ...and before its answer is sent, the session ends and its engine's tree cannot be
+        // confirmed gone, which revokes the hold.
+        orders
+            .send(testkit::Order::Close)
+            .expect("the session closes");
+        let mut lock_states: Vec<(u64, LockState)> = Vec::new();
+        while !lock_states.iter().any(|(request_id, _)| *request_id == 0) {
+            if let HelperMessage {
+                request_id,
+                kind: Some(helper_message::Kind::LockState(state)),
+            } = replies.next()
+            {
+                lock_states.push((request_id, state));
+            }
+        }
+        go.send(()).expect("the request thread goes on");
+        input.send(frames(&[shutdown(4)])).expect("reads");
+        thread.join().expect("serve ends").expect("cleanly");
+        for message in replies.rest() {
+            if let Some(helper_message::Kind::LockState(state)) = message.kind {
+                lock_states.push((message.request_id, state));
+            }
+        }
+
+        assert!(
+            lock_states.iter().any(|(request_id, _)| *request_id == 3),
+            "the updater got its answer: {lock_states:?}"
+        );
+        assert!(
+            lock_states
+                .windows(2)
+                .all(|pair| pair[0].1.sequence < pair[1].1.sequence),
+            "in the order they were taken: {lock_states:?}"
+        );
+        let applied = lock_states
+            .iter()
+            .max_by_key(|(_, state)| state.sequence)
+            .expect("lock states");
+        assert!(
+            !applied.1.update_hold && !applied.1.idle,
+            "the last state applied revokes the hold: {lock_states:?}"
+        );
+    }
+
     #[test]
     fn the_end_of_input_closes_every_channel_within_two_seconds() {
         let environment = testkit::FakeEnvironment::start(|session: &mut testkit::Session| {
@@ -647,7 +869,14 @@ mod tests {
     fn ends_quietly_when_the_app_closes_its_input() {
         let mut output = Vec::new();
         serve(&mut [].as_slice(), &mut output, "1.2.3").expect("serve ends cleanly");
-        assert_eq!(replies(&output).len(), 1, "only Hello");
+        let replies = replies(&output);
+        assert_eq!(replies.len(), 2, "only Hello and DeviceStopped");
+        assert_eq!(
+            replies[1].kind,
+            Some(helper_message::Kind::DeviceStopped(DeviceStopped {
+                all_engines_ended: true
+            }))
+        );
     }
 
     #[test]

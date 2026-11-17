@@ -81,6 +81,8 @@ pub struct DeviceLock {
     /// The helper could not confirm that an engine's process tree ended: for the rest of the
     /// helper's life the hold and the device lock stay, and every tool call is refused.
     unconfirmed: bool,
+    /// The sequence of the last snapshot [`DeviceLock::state`] took.
+    sequence: u64,
 }
 
 impl DeviceLock {
@@ -99,6 +101,7 @@ impl DeviceLock {
             hold: None,
             update_hold: false,
             unconfirmed: false,
+            sequence: 0,
         }
     }
 
@@ -313,9 +316,11 @@ impl DeviceLock {
         self.unconfirmed
     }
 
-    /// Who holds the computer, for the main process, after expiring a passed hold.
+    /// Who holds the computer, for the main process, after expiring a passed hold. Each
+    /// snapshot carries the next sequence, strictly increasing for this lock.
     pub fn state(&mut self, now: Instant) -> LockState {
         let holder = self.holder(now);
+        self.sequence += 1;
         LockState {
             idle: holder.is_none() && !self.unconfirmed,
             holder_environment_id: holder
@@ -328,6 +333,7 @@ impl DeviceLock {
                 .unwrap_or_default(),
             since_unix_ms: holder.map_or(0, |holder| holder.since_unix_ms),
             update_hold: self.update_hold,
+            sequence: self.sequence,
         }
     }
 }

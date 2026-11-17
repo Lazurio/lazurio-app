@@ -146,6 +146,20 @@ message LockState {
 
   // True while the updater's hold is granted.
   bool update_hold = 5;
+
+  // Strictly increasing per helper process, assigned under the lock when this snapshot is
+  // taken; the helper sends the snapshots in that order. A consumer ignores a LockState whose
+  // sequence is not greater than the last one it applied.
+  uint64 sequence = 6;
+}
+
+// The device helper's last message after Shutdown or the end of its input, sent on its own once
+// every channel and every engine's process tree has been ended. The helper exits after it.
+message DeviceStopped {
+  // True only if every engine's process tree was confirmed gone and the helper never had to
+  // keep the computer because a tree could not be confirmed gone. The updater installs only
+  // after a DeviceStopped with true (ADR 0006 point 7).
+  bool all_engines_ended = 1;
 }
 
 // One entry of the history. It names what happened and never holds content: no screen, no text,

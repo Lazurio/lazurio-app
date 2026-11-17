@@ -89,9 +89,11 @@ pub fn retry_delay(failed_attempts: u32, timing: &Timing) -> Duration {
 /// holds its control lock, so it must return at once (sending on a channel is fine).
 pub type Report = Arc<dyn Fn(ChannelState) + Send + Sync>;
 
-/// Receives who holds the computer when a channel changes it on its own, such as the end of a
-/// Stop. The same rules as for [`Report`] apply.
-pub type LockReport = Arc<dyn Fn(LockState) + Send + Sync>;
+/// Receives a snapshot of who holds the computer, with the id of the request it answers or 0 when
+/// a channel changed it on its own, such as the end of a Stop. It runs inside the lock, so
+/// snapshots arrive in the order of their sequences; it must return at once and never take the
+/// lock (sending on a channel is fine).
+pub type LockReport = Arc<dyn Fn(u64, LockState) + Send + Sync>;
 
 /// What a supervisor needs, its secrets among them.
 pub struct Channel {
@@ -570,7 +572,7 @@ impl Worker {
         let request = &self.channel.request;
         let environment_id = &request.environment_id;
         let mut newly_unconfirmed = false;
-        let changed = self.channel.lock.with(|lock| {
+        self.channel.lock.with(|lock| {
             let stop_waited = self.control.engine_gone();
             if !gone {
                 // A process of the engine outlived its kill and may still work: for the rest
@@ -582,17 +584,19 @@ impl Worker {
                     Instant::now(),
                     history::now_unix_ms(),
                 );
-                return Some(lock.state(Instant::now()));
-            }
-            if stop_waited {
-                lock.engine_ended(environment_id)
-                    .then(|| lock.state(Instant::now()))
+            } else if stop_waited {
+                if !lock.engine_ended(environment_id) {
+                    return;
+                }
             } else {
                 for _ in 0..open {
                     lock.end_call(environment_id, Instant::now());
                 }
-                None
+                return;
             }
+            // Taken and handed on inside the lock, so the main process gets the snapshots in
+            // the order of their sequences.
+            (self.channel.lock_report)(0, lock.state(Instant::now()));
         });
         if newly_unconfirmed {
             // Once for the helper's life, without content.
@@ -602,9 +606,6 @@ impl Worker {
                 history::kind::UNCONFIRMED,
                 None,
             );
-        }
-        if let Some(state) = changed {
-            (self.channel.lock_report)(state);
         }
     }
 
@@ -954,7 +955,7 @@ mod tests {
             helper_version: "1.2.3".to_owned(),
             engine,
             lock: Arc::clone(lock),
-            lock_report: Arc::new(move |state| {
+            lock_report: Arc::new(move |_, state| {
                 let _ = lock_sender.lock().expect("the test's sender").send(state);
             }),
             ender,
@@ -1847,12 +1848,6 @@ mod tests {
         tapped.running.supervisor.stop();
     }
 
-    /// Ends the engine and its tree for real, but reports that it could not confirm it.
-    fn unconfirmed(engine: Engine, grace: Duration) -> bool {
-        let _ = engine.end(grace);
-        false
-    }
-
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -1861,8 +1856,13 @@ mod tests {
     fn an_unconfirmed_tree_keeps_the_computer_until_the_helper_ends() {
         let _forks = spawning();
         let lock = a_lock();
-        let mut tapped =
-            Tapped::start_ending("env-a", "Environment A", &lock, quick_timing(), unconfirmed);
+        let mut tapped = Tapped::start_ending(
+            "env-a",
+            "Environment A",
+            &lock,
+            quick_timing(),
+            crate::testkit::unconfirmed_end,
+        );
         tapped.send(tool_call(1, "desktop_wait"));
         tapped.engines.until(
             |event| matches!(event, EngineEvent::Got { tool, .. } if tool == "desktop_wait"),
@@ -1957,8 +1957,13 @@ mod tests {
     fn an_unconfirmed_tree_revokes_the_updaters_hold() {
         let _forks = spawning();
         let lock = a_lock();
-        let tapped =
-            Tapped::start_ending("env-a", "Environment A", &lock, quick_timing(), unconfirmed);
+        let tapped = Tapped::start_ending(
+            "env-a",
+            "Environment A",
+            &lock,
+            quick_timing(),
+            crate::testkit::unconfirmed_end,
+        );
         // The engine is idle: the updater gets the computer.
         assert!(lock.with(|lock| lock.hold_for_update(true, Instant::now())));
 

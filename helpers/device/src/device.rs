@@ -39,6 +39,15 @@ struct Runtime {
     lock: Arc<SharedLock>,
 }
 
+/// How the answer to a request reaches the main process.
+#[derive(Debug, PartialEq)]
+pub enum Reply {
+    /// The caller sends it.
+    Send(helper_message::Kind),
+    /// It went to the lock report with its request id, inside the lock.
+    Sent,
+}
+
 /// The Device's state in the helper.
 pub struct Device {
     /// Where the device lock of the person's session is; `None` when the system gives no place
@@ -57,6 +66,11 @@ struct Channels {
     helper_version: String,
     /// The engine each session starts.
     engine: Option<EngineSpec>,
+    /// How sessions end their engines.
+    ender: channel::Ender,
+    /// Runs before each answer is sent, so a test can hold the request thread there.
+    #[cfg(test)]
+    before_reply: Option<Arc<dyn Fn(u64) + Send + Sync>>,
     /// The started channels, by environment id.
     running: HashMap<String, Supervisor>,
     /// Stopped channels whose threads may still be ending; Shutdown waits for them too.
@@ -93,9 +107,12 @@ impl Device {
                 connector: Arc::new(Connector::system()),
                 timing: Timing::default(),
                 report: Arc::new(|_| {}),
-                lock_report: Arc::new(|_| {}),
+                lock_report: Arc::new(|_, _| {}),
                 helper_version: String::new(),
                 engine: EngineSpec::bundled(),
+                ender: crate::engine::Engine::end,
+                #[cfg(test)]
+                before_reply: None,
                 running: HashMap::new(),
                 stopping: Vec::new(),
                 prepared: None,
@@ -130,6 +147,30 @@ impl Device {
         self
     }
 
+    /// Sessions that end their engines with `ender`, for tests of an end that fails.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_ender(mut self, ender: channel::Ender) -> Self {
+        self.channels.ender = ender;
+        self
+    }
+
+    /// Runs `hook` with each request's id after its answer is ready and before it is sent.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_before_reply(mut self, hook: Arc<dyn Fn(u64) + Send + Sync>) -> Self {
+        self.channels.before_reply = Some(hook);
+        self
+    }
+
+    /// Runs the hook of [`Device::with_before_reply`].
+    #[cfg(test)]
+    pub(crate) fn before_reply(&self, request_id: u64) {
+        if let Some(hook) = &self.channels.before_reply {
+            hook(request_id);
+        }
+    }
+
     /// Sessions that start `engine`, for tests with a fake engine.
     #[cfg(test)]
     #[must_use]
@@ -138,8 +179,33 @@ impl Device {
         self
     }
 
+    /// Answers request `request_id` of `lazurio.app.device.v1`, or returns `None` for a kind of
+    /// another package, which the caller answers itself. Who holds the computer (`StopAgent`,
+    /// `HoldForUpdate`) goes to the lock report inside the lock, in the order of the lock's
+    /// snapshots; the caller sends every other answer.
+    pub fn answer_request(&mut self, request_id: u64, kind: &app_message::Kind) -> Option<Reply> {
+        let changed = match kind {
+            app_message::Kind::StopAgent(_) => self.stop_agent(),
+            app_message::Kind::HoldForUpdate(request) => self.hold_for_update(*request),
+            _ => return self.answer(kind).map(Reply::Send),
+        };
+        Some(
+            match changed.and_then(|()| self.runtime.as_ref().ok_or_else(not_configured)) {
+                Ok(runtime) => {
+                    let report = &self.channels.lock_report;
+                    runtime
+                        .lock
+                        .with(|lock| report(request_id, lock.state(Instant::now())));
+                    Reply::Sent
+                }
+                Err(failure) => Reply::Send(helper_message::Kind::Failure(failure)),
+            },
+        )
+    }
+
     /// Answers one request of `lazurio.app.device.v1`, or returns `None` for a kind of another
-    /// package, which the caller answers itself.
+    /// package, which the caller answers itself. Who holds the computer comes as the answer
+    /// itself here; the helper's protocol uses [`Device::answer_request`].
     pub fn answer(&mut self, kind: &app_message::Kind) -> Option<helper_message::Kind> {
         let answer = match kind {
             app_message::Kind::ConfigureDevice(request) => self.configure(request),
@@ -148,8 +214,10 @@ impl Device {
                 "StartChannel is decoded apart from the other requests",
             )),
             app_message::Kind::StopChannel(request) => self.stop_channel(request),
-            app_message::Kind::StopAgent(_) => self.stop_agent(),
-            app_message::Kind::HoldForUpdate(request) => self.hold_for_update(*request),
+            app_message::Kind::StopAgent(_) => self.stop_agent().and_then(|()| self.lock_state()),
+            app_message::Kind::HoldForUpdate(request) => self
+                .hold_for_update(*request)
+                .and_then(|()| self.lock_state()),
             app_message::Kind::ListHistory(request) => self.list_history(request),
             app_message::Kind::Ping(_)
             | app_message::Kind::Shutdown(_)
@@ -211,7 +279,7 @@ impl Device {
             history: Arc::clone(&runtime.history),
             report: Arc::clone(&self.channels.report),
             lock_report: Arc::clone(&self.channels.lock_report),
-            ender: crate::engine::Engine::end,
+            ender: self.channels.ender,
             helper_version: self.channels.helper_version.clone(),
             engine: self.channels.engine.clone(),
             lock: Arc::clone(&runtime.lock),
@@ -275,7 +343,7 @@ impl Device {
     /// device lock, lasts until each engine has been killed and waited for; the channel that
     /// ends the last one releases it and reports who holds the computer then. Until then the
     /// answer still names the holder.
-    fn stop_agent(&mut self) -> Result<helper_message::Kind, Failure> {
+    fn stop_agent(&mut self) -> Result<(), Failure> {
         let channels = &self.channels;
         let runtime = self.runtime.as_mut().ok_or_else(not_configured)?;
         let now = Instant::now();
@@ -303,16 +371,31 @@ impl Device {
                 None,
             );
         }
-        Ok(lock_state(runtime, now))
+        Ok(())
     }
 
-    fn hold_for_update(&mut self, request: HoldForUpdate) -> Result<helper_message::Kind, Failure> {
+    fn hold_for_update(&mut self, request: HoldForUpdate) -> Result<(), Failure> {
         let runtime = self.runtime_mut()?;
-        let now = Instant::now();
         runtime
             .lock
-            .with(|lock| lock.hold_for_update(request.hold, now));
-        Ok(lock_state(runtime, now))
+            .with(|lock| lock.hold_for_update(request.hold, Instant::now()));
+        Ok(())
+    }
+
+    fn lock_state(&self) -> Result<helper_message::Kind, Failure> {
+        let runtime = self.runtime.as_ref().ok_or_else(not_configured)?;
+        Ok(helper_message::Kind::LockState(
+            runtime.lock.with(|lock| lock.state(Instant::now())),
+        ))
+    }
+
+    /// Whether every engine's process tree was confirmed gone: false once the helper keeps the
+    /// computer because a tree could not be confirmed gone.
+    #[must_use]
+    pub fn all_engines_ended(&self) -> bool {
+        self.runtime
+            .as_ref()
+            .is_none_or(|runtime| !runtime.lock.with(|lock| lock.unconfirmed()))
     }
 
     fn list_history(&self, request: &ListHistory) -> Result<helper_message::Kind, Failure> {
@@ -329,10 +412,6 @@ impl Device {
     fn runtime_mut(&mut self) -> Result<&mut Runtime, Failure> {
         self.runtime.as_mut().ok_or_else(not_configured)
     }
-}
-
-fn lock_state(runtime: &Runtime, now: Instant) -> helper_message::Kind {
-    helper_message::Kind::LockState(runtime.lock.with(|lock| lock.state(now)))
 }
 
 fn not_configured() -> Failure {
@@ -626,6 +705,7 @@ mod tests {
             Some(helper_message::Kind::LockState(LockState {
                 idle: true,
                 update_hold: true,
+                sequence: 1,
                 ..LockState::default()
             }))
         );
@@ -636,6 +716,7 @@ mod tests {
             released,
             Some(helper_message::Kind::LockState(LockState {
                 idle: true,
+                sequence: 2,
                 ..LockState::default()
             }))
         );
@@ -864,7 +945,7 @@ mod tests {
         let mut device = Device::with_lock_path(Some(lock_path.clone()))
             .with_channels(environment.connector(), timing)
             .with_engine(engines.spec())
-            .with_lock_report(std::sync::Arc::new(move |state| {
+            .with_lock_report(std::sync::Arc::new(move |_, state| {
                 let _ = lock_sender.lock().expect("the test's sender").send(state);
             }));
         device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
@@ -940,20 +1021,16 @@ mod tests {
             }
         }
         environment.answer(&json!("p2"));
-        assert_eq!(
-            device.answer(&app_message::Kind::HoldForUpdate(HoldForUpdate {
-                hold: true
-            })),
-            Some(helper_message::Kind::LockState(LockState {
-                idle: false,
-                holder_environment_id: "env-a".to_owned(),
-                holder_environment_label: "Environment A".to_owned(),
-                since_unix_ms: match &stop {
-                    Some(helper_message::Kind::LockState(state)) => state.since_unix_ms,
-                    _ => 0,
-                },
-                update_hold: false,
-            })),
+        assert!(
+            matches!(
+                device.answer(&app_message::Kind::HoldForUpdate(HoldForUpdate { hold: true })),
+                Some(helper_message::Kind::LockState(LockState {
+                    idle: false,
+                    update_hold: false,
+                    ref holder_environment_id,
+                    ..
+                })) if holder_environment_id == "env-a"
+            ),
             "the updater waits"
         );
         assert!(
@@ -1013,6 +1090,7 @@ mod tests {
             device.answer(&app_message::Kind::StopAgent(StopAgent {})),
             Some(helper_message::Kind::LockState(LockState {
                 idle: true,
+                sequence: 1,
                 ..LockState::default()
             }))
         );

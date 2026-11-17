@@ -656,6 +656,24 @@ impl Replies {
             self.buffer.extend_from_slice(&bytes);
         }
     }
+
+    /// Every message still to come, until the writer is gone.
+    pub fn rest(&mut self) -> Vec<HelperMessage> {
+        self.drain();
+        let mut messages = Vec::new();
+        let mut rest = self.buffer.as_slice();
+        while !rest.is_empty() {
+            messages.push(HelperMessage::decode_length_delimited(&mut rest).expect("a message"));
+        }
+        self.buffer.clear();
+        messages
+    }
+}
+
+/// Ends the engine and its tree for real, but reports that it could not confirm it.
+pub fn unconfirmed_end(engine: crate::engine::Engine, grace: Duration) -> bool {
+    let _ = engine.end(grace);
+    false
 }
 
 #[must_use]

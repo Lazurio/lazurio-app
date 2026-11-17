@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file lazurio/app/device/v1/device.proto.
  */
 export const file_lazurio_app_device_v1_device: GenFile = /*@__PURE__*/
-  fileDesc("CiJsYXp1cmlvL2FwcC9kZXZpY2UvdjEvZGV2aWNlLnByb3RvEhVsYXp1cmlvLmFwcC5kZXZpY2UudjEiQAoPQ29uZmlndXJlRGV2aWNlEhYKDmRhdGFfZGlyZWN0b3J5GAEgASgJEhUKDWNvbXB1dGVyX25hbWUYAiABKAkiJwoLRGV2aWNlUmVhZHkSGAoQY29udHJhY3RfdmVyc2lvbhgBIAEoDSKuAQoMU3RhcnRDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJEhkKEWVudmlyb25tZW50X2xhYmVsGAIgASgJEhIKCmF0dGFjaF91cmwYAyABKAkSEQoJZGV2aWNlX2lkGAQgASgJEhAKCGtleV9zZWVkGAUgASgMEjIKBXByb3h5GAYgASgLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLlRhaWxuZXRQcm94eSJOCgxUYWlsbmV0UHJveHkSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgNEhAKCHVzZXJuYW1lGAMgASgJEhAKCHBhc3N3b3JkGAQgASgJIiUKC1N0b3BDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJIgsKCVN0b3BBZ2VudCIdCg1Ib2xkRm9yVXBkYXRlEgwKBGhvbGQYASABKAgiMAoLTGlzdEhpc3RvcnkSEgoKcGFnZV90b2tlbhgBIAEoCRINCgVsaW1pdBgCIAEoDSKwAgoMQ2hhbm5lbFN0YXRlEhYKDmVudmlyb25tZW50X2lkGAEgASgJEikKA29mZhgCIAEoCzIaLmxhenVyaW8uYXBwLmRldmljZS52MS5PZmZIABI3Cgpjb25uZWN0aW5nGAMgASgLMiEubGF6dXJpby5hcHAuZGV2aWNlLnYxLkNvbm5lY3RpbmdIABI1Cgljb25uZWN0ZWQYBCABKAsyIC5sYXp1cmlvLmFwcC5kZXZpY2UudjEuQ29ubmVjdGVkSAASMQoHcmVmdXNlZBgFIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5SZWZ1c2VkSAASMQoHd29ya2luZxgGIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5Xb3JraW5nSABCBwoFc3RhdGUiBQoDT2ZmIiUKCkNvbm5lY3RpbmcSFwoPZmFpbGVkX2F0dGVtcHRzGAEgASgNIgsKCUNvbm5lY3RlZCIZCgdSZWZ1c2VkEg4KBnJlYXNvbhgBIAEoCSIsCgdXb3JraW5nEgwKBHRvb2wYASABKAkSEwoLYXBwbGljYXRpb24YAiABKAkihgEKCUxvY2tTdGF0ZRIMCgRpZGxlGAEgASgIEh0KFWhvbGRlcl9lbnZpcm9ubWVudF9pZBgCIAEoCRIgChhob2xkZXJfZW52aXJvbm1lbnRfbGFiZWwYAyABKAkSFQoNc2luY2VfdW5peF9tcxgEIAEoBBITCgt1cGRhdGVfaG9sZBgFIAEoCCJoCgxIaXN0b3J5RW50cnkSEgoKYXRfdW5peF9tcxgBIAEoBBIWCg5lbnZpcm9ubWVudF9pZBgCIAEoCRIMCgRraW5kGAMgASgJEgwKBHRvb2wYBCABKAkSEAoIc2VxdWVuY2UYBSABKAQiXAoLSGlzdG9yeVBhZ2USNAoHZW50cmllcxgBIAMoCzIjLmxhenVyaW8uYXBwLmRldmljZS52MS5IaXN0b3J5RW50cnkSFwoPbmV4dF9wYWdlX3Rva2VuGAIgASgJQlNaUWdpdGh1Yi5jb20vTGF6dXJpby9sYXp1cmlvLWFwcC9oZWxwZXJzL3RhaWxuZXQvZ2VuL2xhenVyaW8vYXBwL2RldmljZS92MTtkZXZpY2V2MWIGcHJvdG8z");
+  fileDesc("CiJsYXp1cmlvL2FwcC9kZXZpY2UvdjEvZGV2aWNlLnByb3RvEhVsYXp1cmlvLmFwcC5kZXZpY2UudjEiQAoPQ29uZmlndXJlRGV2aWNlEhYKDmRhdGFfZGlyZWN0b3J5GAEgASgJEhUKDWNvbXB1dGVyX25hbWUYAiABKAkiJwoLRGV2aWNlUmVhZHkSGAoQY29udHJhY3RfdmVyc2lvbhgBIAEoDSKuAQoMU3RhcnRDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJEhkKEWVudmlyb25tZW50X2xhYmVsGAIgASgJEhIKCmF0dGFjaF91cmwYAyABKAkSEQoJZGV2aWNlX2lkGAQgASgJEhAKCGtleV9zZWVkGAUgASgMEjIKBXByb3h5GAYgASgLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLlRhaWxuZXRQcm94eSJOCgxUYWlsbmV0UHJveHkSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgNEhAKCHVzZXJuYW1lGAMgASgJEhAKCHBhc3N3b3JkGAQgASgJIiUKC1N0b3BDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJIgsKCVN0b3BBZ2VudCIdCg1Ib2xkRm9yVXBkYXRlEgwKBGhvbGQYASABKAgiMAoLTGlzdEhpc3RvcnkSEgoKcGFnZV90b2tlbhgBIAEoCRINCgVsaW1pdBgCIAEoDSKwAgoMQ2hhbm5lbFN0YXRlEhYKDmVudmlyb25tZW50X2lkGAEgASgJEikKA29mZhgCIAEoCzIaLmxhenVyaW8uYXBwLmRldmljZS52MS5PZmZIABI3Cgpjb25uZWN0aW5nGAMgASgLMiEubGF6dXJpby5hcHAuZGV2aWNlLnYxLkNvbm5lY3RpbmdIABI1Cgljb25uZWN0ZWQYBCABKAsyIC5sYXp1cmlvLmFwcC5kZXZpY2UudjEuQ29ubmVjdGVkSAASMQoHcmVmdXNlZBgFIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5SZWZ1c2VkSAASMQoHd29ya2luZxgGIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5Xb3JraW5nSABCBwoFc3RhdGUiBQoDT2ZmIiUKCkNvbm5lY3RpbmcSFwoPZmFpbGVkX2F0dGVtcHRzGAEgASgNIgsKCUNvbm5lY3RlZCIZCgdSZWZ1c2VkEg4KBnJlYXNvbhgBIAEoCSIsCgdXb3JraW5nEgwKBHRvb2wYASABKAkSEwoLYXBwbGljYXRpb24YAiABKAkimAEKCUxvY2tTdGF0ZRIMCgRpZGxlGAEgASgIEh0KFWhvbGRlcl9lbnZpcm9ubWVudF9pZBgCIAEoCRIgChhob2xkZXJfZW52aXJvbm1lbnRfbGFiZWwYAyABKAkSFQoNc2luY2VfdW5peF9tcxgEIAEoBBITCgt1cGRhdGVfaG9sZBgFIAEoCBIQCghzZXF1ZW5jZRgGIAEoBCIqCg1EZXZpY2VTdG9wcGVkEhkKEWFsbF9lbmdpbmVzX2VuZGVkGAEgASgIImgKDEhpc3RvcnlFbnRyeRISCgphdF91bml4X21zGAEgASgEEhYKDmVudmlyb25tZW50X2lkGAIgASgJEgwKBGtpbmQYAyABKAkSDAoEdG9vbBgEIAEoCRIQCghzZXF1ZW5jZRgFIAEoBCJcCgtIaXN0b3J5UGFnZRI0CgdlbnRyaWVzGAEgAygLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLkhpc3RvcnlFbnRyeRIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAlCU1pRZ2l0aHViLmNvbS9MYXp1cmlvL2xhenVyaW8tYXBwL2hlbHBlcnMvdGFpbG5ldC9nZW4vbGF6dXJpby9hcHAvZGV2aWNlL3YxO2RldmljZXYxYgZwcm90bzM");
 
 /**
  * Tells the helper where it keeps its files and how the computer is named. The first request of
@@ -447,6 +447,15 @@ export type LockState = Message<"lazurio.app.device.v1.LockState"> & {
    * @generated from field: bool update_hold = 5;
    */
   updateHold: boolean;
+
+  /**
+   * Strictly increasing per helper process, assigned under the lock when this snapshot is
+   * taken; the helper sends the snapshots in that order. A consumer ignores a LockState whose
+   * sequence is not greater than the last one it applied.
+   *
+   * @generated from field: uint64 sequence = 6;
+   */
+  sequence: bigint;
 };
 
 /**
@@ -455,6 +464,30 @@ export type LockState = Message<"lazurio.app.device.v1.LockState"> & {
  */
 export const LockStateSchema: GenMessage<LockState> = /*@__PURE__*/
   messageDesc(file_lazurio_app_device_v1_device, 14);
+
+/**
+ * The device helper's last message after Shutdown or the end of its input, sent on its own once
+ * every channel and every engine's process tree has been ended. The helper exits after it.
+ *
+ * @generated from message lazurio.app.device.v1.DeviceStopped
+ */
+export type DeviceStopped = Message<"lazurio.app.device.v1.DeviceStopped"> & {
+  /**
+   * True only if every engine's process tree was confirmed gone and the helper never had to
+   * keep the computer because a tree could not be confirmed gone. The updater installs only
+   * after a DeviceStopped with true (ADR 0006 point 7).
+   *
+   * @generated from field: bool all_engines_ended = 1;
+   */
+  allEnginesEnded: boolean;
+};
+
+/**
+ * Describes the message lazurio.app.device.v1.DeviceStopped.
+ * Use `create(DeviceStoppedSchema)` to create a new message.
+ */
+export const DeviceStoppedSchema: GenMessage<DeviceStopped> = /*@__PURE__*/
+  messageDesc(file_lazurio_app_device_v1_device, 15);
 
 /**
  * One entry of the history. It names what happened and never holds content: no screen, no text,
@@ -501,7 +534,7 @@ export type HistoryEntry = Message<"lazurio.app.device.v1.HistoryEntry"> & {
  * Use `create(HistoryEntrySchema)` to create a new message.
  */
 export const HistoryEntrySchema: GenMessage<HistoryEntry> = /*@__PURE__*/
-  messageDesc(file_lazurio_app_device_v1_device, 15);
+  messageDesc(file_lazurio_app_device_v1_device, 16);
 
 /**
  * A page of the history.
@@ -527,5 +560,5 @@ export type HistoryPage = Message<"lazurio.app.device.v1.HistoryPage"> & {
  * Use `create(HistoryPageSchema)` to create a new message.
  */
 export const HistoryPageSchema: GenMessage<HistoryPage> = /*@__PURE__*/
-  messageDesc(file_lazurio_app_device_v1_device, 16);
+  messageDesc(file_lazurio_app_device_v1_device, 17);
 

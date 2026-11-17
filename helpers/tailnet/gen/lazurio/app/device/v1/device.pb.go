@@ -858,7 +858,11 @@ type LockState struct {
 	// Unix milliseconds since the holder holds the computer.
 	SinceUnixMs uint64 `protobuf:"varint,4,opt,name=since_unix_ms,json=sinceUnixMs,proto3" json:"since_unix_ms,omitempty"`
 	// True while the updater's hold is granted.
-	UpdateHold    bool `protobuf:"varint,5,opt,name=update_hold,json=updateHold,proto3" json:"update_hold,omitempty"`
+	UpdateHold bool `protobuf:"varint,5,opt,name=update_hold,json=updateHold,proto3" json:"update_hold,omitempty"`
+	// Strictly increasing per helper process, assigned under the lock when this snapshot is
+	// taken; the helper sends the snapshots in that order. A consumer ignores a LockState whose
+	// sequence is not greater than the last one it applied.
+	Sequence      uint64 `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -928,6 +932,62 @@ func (x *LockState) GetUpdateHold() bool {
 	return false
 }
 
+func (x *LockState) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+// The device helper's last message after Shutdown or the end of its input, sent on its own once
+// every channel and every engine's process tree has been ended. The helper exits after it.
+type DeviceStopped struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// True only if every engine's process tree was confirmed gone and the helper never had to
+	// keep the computer because a tree could not be confirmed gone. The updater installs only
+	// after a DeviceStopped with true (ADR 0006 point 7).
+	AllEnginesEnded bool `protobuf:"varint,1,opt,name=all_engines_ended,json=allEnginesEnded,proto3" json:"all_engines_ended,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *DeviceStopped) Reset() {
+	*x = DeviceStopped{}
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceStopped) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceStopped) ProtoMessage() {}
+
+func (x *DeviceStopped) ProtoReflect() protoreflect.Message {
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceStopped.ProtoReflect.Descriptor instead.
+func (*DeviceStopped) Descriptor() ([]byte, []int) {
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *DeviceStopped) GetAllEnginesEnded() bool {
+	if x != nil {
+		return x.AllEnginesEnded
+	}
+	return false
+}
+
 // One entry of the history. It names what happened and never holds content: no screen, no text,
 // no arguments.
 type HistoryEntry struct {
@@ -947,7 +1007,7 @@ type HistoryEntry struct {
 
 func (x *HistoryEntry) Reset() {
 	*x = HistoryEntry{}
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[15]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -959,7 +1019,7 @@ func (x *HistoryEntry) String() string {
 func (*HistoryEntry) ProtoMessage() {}
 
 func (x *HistoryEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[15]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -972,7 +1032,7 @@ func (x *HistoryEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryEntry.ProtoReflect.Descriptor instead.
 func (*HistoryEntry) Descriptor() ([]byte, []int) {
-	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{15}
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *HistoryEntry) GetAtUnixMs() uint64 {
@@ -1022,7 +1082,7 @@ type HistoryPage struct {
 
 func (x *HistoryPage) Reset() {
 	*x = HistoryPage{}
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[16]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1034,7 +1094,7 @@ func (x *HistoryPage) String() string {
 func (*HistoryPage) ProtoMessage() {}
 
 func (x *HistoryPage) ProtoReflect() protoreflect.Message {
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[16]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1047,7 +1107,7 @@ func (x *HistoryPage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryPage.ProtoReflect.Descriptor instead.
 func (*HistoryPage) Descriptor() ([]byte, []int) {
-	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{16}
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *HistoryPage) GetEntries() []*HistoryEntry {
@@ -1115,14 +1175,17 @@ const file_lazurio_app_device_v1_device_proto_rawDesc = "" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"?\n" +
 	"\aWorking\x12\x12\n" +
 	"\x04tool\x18\x01 \x01(\tR\x04tool\x12 \n" +
-	"\vapplication\x18\x02 \x01(\tR\vapplication\"\xd2\x01\n" +
+	"\vapplication\x18\x02 \x01(\tR\vapplication\"\xee\x01\n" +
 	"\tLockState\x12\x12\n" +
 	"\x04idle\x18\x01 \x01(\bR\x04idle\x122\n" +
 	"\x15holder_environment_id\x18\x02 \x01(\tR\x13holderEnvironmentId\x128\n" +
 	"\x18holder_environment_label\x18\x03 \x01(\tR\x16holderEnvironmentLabel\x12\"\n" +
 	"\rsince_unix_ms\x18\x04 \x01(\x04R\vsinceUnixMs\x12\x1f\n" +
 	"\vupdate_hold\x18\x05 \x01(\bR\n" +
-	"updateHold\"\x97\x01\n" +
+	"updateHold\x12\x1a\n" +
+	"\bsequence\x18\x06 \x01(\x04R\bsequence\";\n" +
+	"\rDeviceStopped\x12*\n" +
+	"\x11all_engines_ended\x18\x01 \x01(\bR\x0fallEnginesEnded\"\x97\x01\n" +
 	"\fHistoryEntry\x12\x1c\n" +
 	"\n" +
 	"at_unix_ms\x18\x01 \x01(\x04R\batUnixMs\x12%\n" +
@@ -1146,7 +1209,7 @@ func file_lazurio_app_device_v1_device_proto_rawDescGZIP() []byte {
 	return file_lazurio_app_device_v1_device_proto_rawDescData
 }
 
-var file_lazurio_app_device_v1_device_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_lazurio_app_device_v1_device_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_lazurio_app_device_v1_device_proto_goTypes = []any{
 	(*ConfigureDevice)(nil), // 0: lazurio.app.device.v1.ConfigureDevice
 	(*DeviceReady)(nil),     // 1: lazurio.app.device.v1.DeviceReady
@@ -1163,8 +1226,9 @@ var file_lazurio_app_device_v1_device_proto_goTypes = []any{
 	(*Refused)(nil),         // 12: lazurio.app.device.v1.Refused
 	(*Working)(nil),         // 13: lazurio.app.device.v1.Working
 	(*LockState)(nil),       // 14: lazurio.app.device.v1.LockState
-	(*HistoryEntry)(nil),    // 15: lazurio.app.device.v1.HistoryEntry
-	(*HistoryPage)(nil),     // 16: lazurio.app.device.v1.HistoryPage
+	(*DeviceStopped)(nil),   // 15: lazurio.app.device.v1.DeviceStopped
+	(*HistoryEntry)(nil),    // 16: lazurio.app.device.v1.HistoryEntry
+	(*HistoryPage)(nil),     // 17: lazurio.app.device.v1.HistoryPage
 }
 var file_lazurio_app_device_v1_device_proto_depIdxs = []int32{
 	3,  // 0: lazurio.app.device.v1.StartChannel.proxy:type_name -> lazurio.app.device.v1.TailnetProxy
@@ -1173,7 +1237,7 @@ var file_lazurio_app_device_v1_device_proto_depIdxs = []int32{
 	11, // 3: lazurio.app.device.v1.ChannelState.connected:type_name -> lazurio.app.device.v1.Connected
 	12, // 4: lazurio.app.device.v1.ChannelState.refused:type_name -> lazurio.app.device.v1.Refused
 	13, // 5: lazurio.app.device.v1.ChannelState.working:type_name -> lazurio.app.device.v1.Working
-	15, // 6: lazurio.app.device.v1.HistoryPage.entries:type_name -> lazurio.app.device.v1.HistoryEntry
+	16, // 6: lazurio.app.device.v1.HistoryPage.entries:type_name -> lazurio.app.device.v1.HistoryEntry
 	7,  // [7:7] is the sub-list for method output_type
 	7,  // [7:7] is the sub-list for method input_type
 	7,  // [7:7] is the sub-list for extension type_name
@@ -1199,7 +1263,7 @@ func file_lazurio_app_device_v1_device_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lazurio_app_device_v1_device_proto_rawDesc), len(file_lazurio_app_device_v1_device_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

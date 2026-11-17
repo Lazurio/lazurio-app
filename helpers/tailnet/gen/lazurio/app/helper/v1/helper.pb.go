@@ -255,6 +255,7 @@ type HelperMessage struct {
 	//	*HelperMessage_ChannelState
 	//	*HelperMessage_LockState
 	//	*HelperMessage_HistoryPage
+	//	*HelperMessage_DeviceStopped
 	Kind          isHelperMessage_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -385,6 +386,15 @@ func (x *HelperMessage) GetHistoryPage() *v11.HistoryPage {
 	return nil
 }
 
+func (x *HelperMessage) GetDeviceStopped() *v11.DeviceStopped {
+	if x != nil {
+		if x, ok := x.Kind.(*HelperMessage_DeviceStopped); ok {
+			return x.DeviceStopped
+		}
+	}
+	return nil
+}
+
 type isHelperMessage_Kind interface {
 	isHelperMessage_Kind()
 }
@@ -427,6 +437,10 @@ type HelperMessage_HistoryPage struct {
 	HistoryPage *v11.HistoryPage `protobuf:"bytes,23,opt,name=history_page,json=historyPage,proto3,oneof"`
 }
 
+type HelperMessage_DeviceStopped struct {
+	DeviceStopped *v11.DeviceStopped `protobuf:"bytes,24,opt,name=device_stopped,json=deviceStopped,proto3,oneof"`
+}
+
 func (*HelperMessage_Hello) isHelperMessage_Kind() {}
 
 func (*HelperMessage_Pong) isHelperMessage_Kind() {}
@@ -444,6 +458,8 @@ func (*HelperMessage_ChannelState) isHelperMessage_Kind() {}
 func (*HelperMessage_LockState) isHelperMessage_Kind() {}
 
 func (*HelperMessage_HistoryPage) isHelperMessage_Kind() {}
+
+func (*HelperMessage_DeviceStopped) isHelperMessage_Kind() {}
 
 // The helper's first message. The main process stops a helper whose protocol it does not speak.
 type Hello struct {
@@ -712,7 +728,7 @@ const file_lazurio_app_helper_v1_helper_proto_rawDesc = "" +
 	"stop_agent\x18\x17 \x01(\v2 .lazurio.app.device.v1.StopAgentH\x00R\tstopAgent\x12N\n" +
 	"\x0fhold_for_update\x18\x18 \x01(\v2$.lazurio.app.device.v1.HoldForUpdateH\x00R\rholdForUpdate\x12G\n" +
 	"\flist_history\x18\x19 \x01(\v2\".lazurio.app.device.v1.ListHistoryH\x00R\vlistHistoryB\x06\n" +
-	"\x04kind\"\x90\x05\n" +
+	"\x04kind\"\xdf\x05\n" +
 	"\rHelperMessage\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\x124\n" +
@@ -727,7 +743,8 @@ const file_lazurio_app_helper_v1_helper_proto_rawDesc = "" +
 	"\rchannel_state\x18\x15 \x01(\v2#.lazurio.app.device.v1.ChannelStateH\x00R\fchannelState\x12A\n" +
 	"\n" +
 	"lock_state\x18\x16 \x01(\v2 .lazurio.app.device.v1.LockStateH\x00R\tlockState\x12G\n" +
-	"\fhistory_page\x18\x17 \x01(\v2\".lazurio.app.device.v1.HistoryPageH\x00R\vhistoryPageB\x06\n" +
+	"\fhistory_page\x18\x17 \x01(\v2\".lazurio.app.device.v1.HistoryPageH\x00R\vhistoryPage\x12M\n" +
+	"\x0edevice_stopped\x18\x18 \x01(\v2$.lazurio.app.device.v1.DeviceStoppedH\x00R\rdeviceStoppedB\x06\n" +
 	"\x04kind\"z\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1f\n" +
@@ -778,6 +795,7 @@ var file_lazurio_app_helper_v1_helper_proto_goTypes = []any{
 	(*v11.ChannelState)(nil),    // 17: lazurio.app.device.v1.ChannelState
 	(*v11.LockState)(nil),       // 18: lazurio.app.device.v1.LockState
 	(*v11.HistoryPage)(nil),     // 19: lazurio.app.device.v1.HistoryPage
+	(*v11.DeviceStopped)(nil),   // 20: lazurio.app.device.v1.DeviceStopped
 }
 var file_lazurio_app_helper_v1_helper_proto_depIdxs = []int32{
 	3,  // 0: lazurio.app.helper.v1.AppMessage.ping:type_name -> lazurio.app.helper.v1.Ping
@@ -798,11 +816,12 @@ var file_lazurio_app_helper_v1_helper_proto_depIdxs = []int32{
 	17, // 15: lazurio.app.helper.v1.HelperMessage.channel_state:type_name -> lazurio.app.device.v1.ChannelState
 	18, // 16: lazurio.app.helper.v1.HelperMessage.lock_state:type_name -> lazurio.app.device.v1.LockState
 	19, // 17: lazurio.app.helper.v1.HelperMessage.history_page:type_name -> lazurio.app.device.v1.HistoryPage
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	20, // 18: lazurio.app.helper.v1.HelperMessage.device_stopped:type_name -> lazurio.app.device.v1.DeviceStopped
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_lazurio_app_helper_v1_helper_proto_init() }
@@ -831,6 +850,7 @@ func file_lazurio_app_helper_v1_helper_proto_init() {
 		(*HelperMessage_ChannelState)(nil),
 		(*HelperMessage_LockState)(nil),
 		(*HelperMessage_HistoryPage)(nil),
+		(*HelperMessage_DeviceStopped)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
