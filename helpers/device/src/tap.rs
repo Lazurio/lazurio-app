@@ -7,7 +7,12 @@
 //!   answer ends the call on the lock and in the history;
 //! - the engine's answer to `initialize`, which gains the app's announcement of the device lock
 //!   under `_meta["io.lazurio/app"]`, next to whatever `_meta` the engine sent;
-//! - an engine started again after Stop, which gets the Environment's `initialize` once more.
+//! - the agent's `notifications/cancelled` for an open tool call, which the engine never
+//!   answers: the channel ends the engine with its process tree and starts a new one;
+//! - an engine started again after Stop or a cancellation, which gets the Environment's
+//!   `initialize` once more, under an id of the helper's own (`lazurio-device:`);
+//! - a request whose id is reserved for the helper or used by an open tool call, which is
+//!   refused, so every answer of the engine has one meaning.
 //!
 //! The engine reads one message per line, so a frame is never passed on with a raw line break
 //! in it: a second message in the same frame would reach the engine without the tap seeing it.
@@ -23,8 +28,17 @@ use crate::mcp_stub::{APP_META_KEY, DEVICE_LOCK_VERSION};
 pub const STOPPED: &str = "Vlastník počítače práci agenta zastavil. \
      (The owner of the computer stopped the agent's work.)";
 
+/// The answer to a tool call that ended because the agent cancelled another one, in Czech and
+/// English.
+pub const INTERRUPTED: &str = "Nástroj se zastavil, protože agent zrušil jiné volání. Zkuste to \
+     znovu. (The tool stopped because the agent cancelled another call. Try again.)";
+
+/// The prefix of the ids the helper itself sends to the engine; no request of the Environment
+/// may use it.
+const RESERVED_ID_PREFIX: &str = "lazurio-device:";
+
 /// The id under which the tap initializes an engine started again; its answer stays here.
-const REINITIALIZE_ID: &str = "io.lazurio/app:reinitialize";
+const REINITIALIZE_ID: &str = "lazurio-device:reinitialize";
 
 /// JSON-RPC's code for an invalid request.
 const INVALID_REQUEST: i64 = -32600;
@@ -36,6 +50,9 @@ pub enum FromEnvironment {
     Forward(String),
     /// Answer the Environment with this line; nothing reaches the engine.
     Answer(String),
+    /// The agent cancelled the open tool call with this id. The engine never answers a
+    /// cancelled call, so it ends with its whole process tree; nothing is passed on.
+    Cancel(Value),
     /// A tool call: with the device lock, [`Tap::call_started`] and forward `line`; without
     /// it, refuse with [`tool_error`].
     ToolCall {
@@ -109,14 +126,34 @@ impl Tap {
         };
         let method = object.get("method").and_then(Value::as_str);
         let id = object.get("id");
+        if let (Some(_), Some(id)) = (method, id) {
+            // An id the helper uses itself, or one an open tool call uses, would make the
+            // engine's answers ambiguous.
+            if id
+                .as_str()
+                .is_some_and(|id| id.starts_with(RESERVED_ID_PREFIX))
+            {
+                return FromEnvironment::Answer(error(id, "This id is reserved."));
+            }
+            if self.open.contains_key(&key(id)) {
+                return FromEnvironment::Answer(error(
+                    id,
+                    "The id is in use by an open tool call.",
+                ));
+            }
+        }
         match (method, id) {
-            (Some("tools/call"), Some(id)) => {
-                if self.open.contains_key(&key(id)) {
-                    return FromEnvironment::Answer(error(
-                        id,
-                        "The id of this tool call is in use.",
-                    ));
+            (Some("notifications/cancelled"), None) => {
+                let cancelled = object
+                    .get("params")
+                    .and_then(|params| params.get("requestId"))
+                    .filter(|request_id| self.open.contains_key(&key(request_id)));
+                match cancelled {
+                    Some(request_id) => FromEnvironment::Cancel(request_id.clone()),
+                    None => FromEnvironment::Forward(line),
                 }
+            }
+            (Some("tools/call"), Some(id)) => {
                 let tool = object
                     .get("params")
                     .and_then(|params| params.get("name"))
@@ -326,6 +363,58 @@ mod tests {
             FromEngine::Finished { call, .. } if call.tool == "desktop_wait"
         ));
         assert!(!tap.calls_open());
+    }
+
+    #[test]
+    fn no_request_reuses_the_id_of_an_open_tool_call() {
+        let mut tap = Tap::default();
+        let FromEnvironment::ToolCall { id, tool, .. } = tap.sort_environment(
+            r#"{"id": 1, "method": "tools/call", "params": {"name": "desktop_wait"}}"#,
+        ) else {
+            panic!("a tool call");
+        };
+        tap.call_started(id, tool);
+        for request in [
+            r#"{"jsonrpc": "2.0", "id": 1, "method": "ping"}"#,
+            r#"{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}"#,
+        ] {
+            let FromEnvironment::Answer(answer) = tap.sort_environment(request) else {
+                panic!("refused, not passed on: {request}");
+            };
+            assert_eq!(parse(&answer)["error"]["code"], INVALID_REQUEST);
+            assert_eq!(parse(&answer)["id"], 1);
+        }
+        assert!(
+            matches!(
+                tap.sort_engine(r#"{"jsonrpc": "2.0", "id": 1, "result": {}}"#, "1.2.3"),
+                FromEngine::Finished { call, .. } if call.tool == "desktop_wait"
+            ),
+            "the tool's answer still ends the call"
+        );
+    }
+
+    #[test]
+    fn the_helpers_own_ids_are_reserved() {
+        let mut tap = Tap::default();
+        for request in [
+            r#"{"id": "lazurio-device:reinitialize", "method": "ping"}"#,
+            r#"{"id": "lazurio-device:x", "method": "tools/call", "params": {"name": "a"}}"#,
+        ] {
+            let FromEnvironment::Answer(answer) = tap.sort_environment(request) else {
+                panic!("refused, not passed on: {request}");
+            };
+            assert_eq!(parse(&answer)["error"]["code"], INVALID_REQUEST);
+        }
+        tap.sort_environment(r#"{"id": "i0", "method": "initialize"}"#);
+        tap.sort_engine(r#"{"id": "i0", "result": {}}"#, "1.2.3");
+        let replay = tap.replay();
+        assert!(
+            parse(&replay[0])["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("lazurio-device:")),
+            "the replayed initialize uses a reserved id: {}",
+            replay[0]
+        );
     }
 
     #[test]

@@ -692,7 +692,12 @@ pub fn spawning() -> std::sync::RwLockWriteGuard<'static, ()> {
 /// connection goes (`engine::tests::fake_engine`).
 pub const FAKE_ENGINE_CONTROL: &str = "LAZURIO_FAKE_ENGINE_CONTROL";
 
-/// What a fake engine did; engines are numbered from 1 in the order they started.
+/// The variable that tells the test binary to act as a tool the fake engine started
+/// (`engine::tests::fake_tool`).
+pub const FAKE_TOOL: &str = "LAZURIO_FAKE_TOOL";
+
+/// What a fake engine did. Engines, and the tools they start, are numbered from 1 in the order
+/// they connected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineEvent {
     Started(usize),
@@ -702,8 +707,13 @@ pub enum EngineEvent {
         method: String,
         tool: String,
     },
-    /// The engine's process ended.
+    /// The engine's process ended (or a tool's, by its number).
     Ended(usize),
+    /// A tool the engine started runs, with this process id.
+    Tool {
+        number: usize,
+        pid: u32,
+    },
 }
 
 /// The control side of the fake engines one test starts: each engine connects here when it
@@ -737,6 +747,10 @@ impl FakeEngines {
                         let Ok(line) = line else { break };
                         let event = match line.split('\t').collect::<Vec<_>>()[..] {
                             ["started"] => EngineEvent::Started(engine),
+                            ["tool", pid] => EngineEvent::Tool {
+                                number: engine,
+                                pid: pid.parse().expect("a process id"),
+                            },
                             ["got", method, tool] => EngineEvent::Got {
                                 engine,
                                 method: method.to_owned(),
@@ -793,8 +807,17 @@ impl FakeEngines {
 
     /// Lets engine `engine` answer the `desktop_wait` it holds.
     pub fn release(&self, engine: usize) {
+        self.order(engine, b"go\n");
+    }
+
+    /// Lets engine `engine` go on without ever answering the `desktop_wait` it holds.
+    pub fn skip(&self, engine: usize) {
+        self.order(engine, b"skip\n");
+    }
+
+    fn order(&self, engine: usize, order: &[u8]) {
         let mut controls = self.controls.lock().unwrap_or_else(PoisonError::into_inner);
         let control = controls.get_mut(&engine).expect("that engine started");
-        control.write_all(b"go\n").expect("the engine listens");
+        control.write_all(order).expect("the engine listens");
     }
 }
