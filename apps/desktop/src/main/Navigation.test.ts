@@ -384,6 +384,8 @@ describe("environmentOriginOf", () => {
       "https://evil-lazurio.io/",
       "https://lazurio.io.attacker.example/",
       "https://notes.example-org.lazurio.app/",
+      "https://notes.alice.personal.lazurio.io/today",
+      "https://launchpad.lazurio.io.attacker.example/",
       "https://auth.lazurio.ai/realms/workspace",
       "https://dashboard.lazurio.ai/",
       "http://launchpad.bob.lazurio.io/",
