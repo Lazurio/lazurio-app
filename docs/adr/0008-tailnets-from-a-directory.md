@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Proposed:** 2026-11-17, for the proof of concept of plan LZD-0017 (task 640)
-- **Amended:** 2026-11-17, with Matěj's decisions on the source of a person's tailnets and on the IT policy for the alpha at a client (point 6, open question 1)
+- **Amended:** 2026-11-17, with Matěj's decisions on the source of a person's tailnets, on the IT policy for the alpha at a client and on two sign-ins in the first version (points 6 and 7, open questions 1 and 2)
 - **Related:** decision 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md), [ADR 0002](0002-sign-in-pages.md) (pages of a remote view), [ADR 0003](0003-node-state-sealed.md) (sealed node state), [ADR 0005](0005-installers-updates-and-channels.md) (updates)
 
 ## Context
@@ -38,7 +38,12 @@ What exists:
    - The Environment's own sign-in goes through its gateway, Lazurio Auth and GitHub, unchanged (ADR 0002).
 5. **Updates are unchanged** (ADR 0005). The proof of concept is a nightly or trial build of the same app.
 6. **The sources after the proof of concept** (Matěj, 2026-11-17, about 17:10Z):
-   - **Target: the directory of the person's Organizations at Lazurio Auth**, asked as a request of its own after the sign-in, not carried inside the sign-in. The Dashboard is not a source. The request and its interface at Auth are agreed with the refactoring of Lazurio's sign-in (AUTH REFACTOR) and come with plan LZD-0017, task 644.
+   - **Target: the directory of the person's Organizations at Lazurio Auth**, asked as a request of its own after the sign-in, not carried inside the sign-in. The Dashboard is not a source. It comes with plan LZD-0017, task 644. As agreed with the refactoring of Lazurio's sign-in (AUTH REFACTOR):
+     - The Auth side is a read for the signed-in person, "my Organizations and their tailnets", in plan LZD-0009.
+     - The app asks with its own public client at the issuer (point 7).
+     - Memberships come only from what Auth stores. Control servers and DNS suffixes come from the registration of each tailnet's client, whose source is the Organization's `infra`.
+     - The directory returns tailnets, each once, with the Organizations each serves, since one tailnet can serve several Organizations. The app never derives a control server from an Organization's name.
+     - The app keeps the last valid list, so a computer already joined does not need the directory when it starts.
    - **Until then, on Windows, an IT policy for the alpha at a client.** It is an exception to decision 1 of the network part, which assigns tailnets by account: the policy assigns them by computer.
      - The Organization's IT writes the string value `Tailnets` under `HKLM\SOFTWARE\Policies\Lazurio\App`, in the built-in directory's JSON, through Group Policy or its device management. Only an administrator writes there, so a person or a program without administrator rights cannot replace it.
      - The app reads it through the system's own `reg.exe` (the 64-bit view of the registry) when it starts.
@@ -46,9 +51,16 @@ What exists:
      - The same check of Lazurio's domains applies. The exception ends with task 644.
      - How IT deploys it: [Tailnets of Lazurio App set by IT](../it/tailnet-policy.md).
 
+7. **Two sign-ins in the first version** (Matěj, 2026-11-17, 17:44–17:47Z):
+   - **The app's own public client signs in in the system's browser**, with a redirect to the loopback (RFC 8252). It does so for the directory and for the Device's permission. The node's sign-in stays there too (point 2).
+   - **One browser session:** both sign-ins share the person's session at the issuer in the browser. The app's window, with the Dashboard and the Environments, keeps its own.
+   - **Twice in all:** the person signs in once in the browser and once in the window.
+   - **No change to ADR 0002:** the window does not catch the redirect of the app's own client.
+   - **Later:** one sign-in for both waits for a function of Lazurio Auth that hands a sign-in from the browser over to the window's session (plan LZD-0017, task 647).
+
 ## Consequences
 
-- **The person signs in twice** with the same Lazurio account: once in the system's browser for the tailnet node, and once in the app's view for the Dashboard and the Environment. Folding the node's sign-in into one app sign-in needs a client at Lazurio Auth (open question 2).
+- **The person signs in twice** with the same Lazurio account: once in the system's browser, for the tailnet node and the app's own client, and once in the app's view, for the Dashboard and the Environment. Matěj accepted this for the first version (point 7); one sign-in waits for Lazurio Auth.
 - **Approving a new Device stays a step of an Owner** in the Organization's Deployment Repo (approved Devices, plan, apply). The proof of concept on a person's computer needs that step for its Device.
 - **A directory built into a public repository names only Lazurio's own tailnets.** A customer Organization's control server never goes into this repository or into a published build. It reaches the app through the IT policy on the Organization's own computers, and later through the directory at Lazurio Auth.
 - **The IT policy assigns tailnets by computer.** Everyone who signs in on a computer with the policy gets its tailnets offered, and only members get past Lazurio Auth's check. It is accepted for the alpha at a client and ends with task 644.
@@ -62,7 +74,7 @@ What exists:
 
 1. **Where a person's tailnets come from after the proof of concept.** Decided by Matěj on 2026-11-17: the directory of the person's Organizations at Lazurio Auth, as a request of its own after the sign-in, not the Dashboard (point 6).
 
-2. **One sign-in for the app instead of two.** It would need a client of Lazurio App at the issuer, and possibly claims about the person's Organizations or tailnets in its token. That belongs to the refactoring of the sign-in, not to this proof of concept.
+2. **One sign-in for the app instead of two.** Decided by Matěj on 2026-11-17 for the first version: two sign-ins, with the app's own client in the system's browser and ADR 0002 unchanged (point 7). One sign-in waits for Lazurio Auth.
 
 ## Alternatives considered
 
