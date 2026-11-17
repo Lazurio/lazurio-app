@@ -18,6 +18,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::lazurio::app::device::v1::LockState;
+
 /// How long the computer stays with an Environment after its last tool call (contract v1).
 pub const HOLD_AFTER_LAST_CALL: Duration = Duration::from_secs(20);
 
@@ -39,6 +41,9 @@ pub enum Busy {
     OtherApplication,
     /// The updater holds the computer while the app installs an update.
     Updating,
+    /// The helper could not confirm that a stopped tool ended, so it keeps the computer until
+    /// Lazurio App restarts.
+    Unconfirmed,
 }
 
 impl Busy {
@@ -52,6 +57,7 @@ impl Busy {
             ),
             Self::OtherApplication => "Počítač teď ovládá agent z jiné aplikace Lazurio. Zkuste to, až skončí. (The computer is in use by an agent from another Lazurio app. Try again when it is done.)".to_owned(),
             Self::Updating => "Lazurio App se právě aktualizuje. Zkuste to za chvíli. (Lazurio App is updating. Try again in a moment.)".to_owned(),
+            Self::Unconfirmed => "Agent Desktop nemohl potvrdit, že zastavený nástroj skončil. Restartujte Lazurio App. (Agent Desktop could not confirm that a stopped tool ended. Restart Lazurio App.)".to_owned(),
         }
     }
 }
@@ -59,6 +65,8 @@ impl Busy {
 struct Hold {
     holder: Holder,
     active: u32,
+    /// After Stop, how many of the holder's engines have yet to end before the hold does.
+    stopping: u32,
     last: Instant,
     /// The open lock file while this process holds the device lock.
     _device_lock: File,
@@ -70,6 +78,11 @@ pub struct DeviceLock {
     linger: Duration,
     hold: Option<Hold>,
     update_hold: bool,
+    /// The helper could not confirm that an engine's process tree ended: for the rest of the
+    /// helper's life the hold and the device lock stay, and every tool call is refused.
+    unconfirmed: bool,
+    /// The sequence of the last snapshot [`DeviceLock::state`] took.
+    sequence: u64,
 }
 
 impl DeviceLock {
@@ -87,6 +100,8 @@ impl DeviceLock {
             linger,
             hold: None,
             update_hold: false,
+            unconfirmed: false,
+            sequence: 0,
         }
     }
 
@@ -104,6 +119,9 @@ impl DeviceLock {
         now: Instant,
         now_unix_ms: u64,
     ) -> Result<(), Busy> {
+        if self.unconfirmed {
+            return Err(Busy::Unconfirmed);
+        }
         self.expire(now);
         if self.update_hold {
             return Err(Busy::Updating);
@@ -124,6 +142,7 @@ impl DeviceLock {
                 since_unix_ms: now_unix_ms,
             },
             active: 1,
+            stopping: 0,
             last: now,
             _device_lock: device_lock,
         });
@@ -145,10 +164,11 @@ impl DeviceLock {
     /// The session of `environment_id` ended, or Stop ended its work: it no longer holds the
     /// computer, and the device lock is released.
     pub fn release(&mut self, environment_id: &str) {
-        if self
-            .hold
-            .as_ref()
-            .is_some_and(|hold| hold.holder.environment_id == environment_id)
+        if !self.unconfirmed
+            && self
+                .hold
+                .as_ref()
+                .is_some_and(|hold| hold.holder.environment_id == environment_id)
         {
             self.hold = None;
         }
@@ -156,15 +176,56 @@ impl DeviceLock {
 
     /// Stop: whoever holds the computer no longer does.
     pub fn release_any(&mut self) {
-        self.hold = None;
+        if !self.unconfirmed {
+            self.hold = None;
+        }
+    }
+
+    /// Stop, while `engines` more engines of the holder may still run a tool: the hold, and with
+    /// it the device lock, lasts until each of them reported its end with
+    /// [`DeviceLock::engine_ended`]. With none, the hold ends now.
+    pub fn stop(&mut self, engines: u32) {
+        if self.unconfirmed {
+            return;
+        }
+        if let Some(hold) = &mut self.hold {
+            hold.stopping = hold.stopping.saturating_add(engines);
+            if hold.stopping == 0 {
+                self.hold = None;
+            }
+        }
+    }
+
+    /// An engine of `environment_id` that Stop waited for has ended (killed and waited for).
+    /// Returns whether that ended the hold.
+    pub fn engine_ended(&mut self, environment_id: &str) -> bool {
+        if self.unconfirmed {
+            return false;
+        }
+        let Some(hold) = self
+            .hold
+            .as_mut()
+            .filter(|hold| hold.holder.environment_id == environment_id && hold.stopping > 0)
+        else {
+            return false;
+        };
+        hold.stopping -= 1;
+        if hold.stopping == 0 {
+            self.hold = None;
+            return true;
+        }
+        false
     }
 
     /// Ends a hold whose time has passed, releasing the device lock, so the other process does
     /// not wait for this one's next request. Returns whether the holder changed.
     pub fn expire(&mut self, now: Instant) -> bool {
-        let expired = self.hold.as_ref().is_some_and(|hold| {
-            hold.active == 0 && now.saturating_duration_since(hold.last) >= self.linger
-        });
+        let expired = !self.unconfirmed
+            && self.hold.as_ref().is_some_and(|hold| {
+                hold.active == 0
+                    && hold.stopping == 0
+                    && now.saturating_duration_since(hold.last) >= self.linger
+            });
         if expired {
             self.hold = None;
         }
@@ -172,11 +233,12 @@ impl DeviceLock {
     }
 
     /// The updater's gate (ADR 0006 point 7): granted only while no agent holds the computer.
-    /// While granted, every new tool call is refused with [`Busy::Updating`]. Returns whether the
-    /// hold is granted now.
+    /// While granted, every new tool call is refused with [`Busy::Updating`]. Never granted once
+    /// a tree could not be confirmed gone, and [`DeviceLock::hold_unconfirmed`] revokes a granted
+    /// one. Returns whether the hold is granted now.
     pub fn hold_for_update(&mut self, hold: bool, now: Instant) -> bool {
         self.expire(now);
-        if !hold {
+        if !hold || self.unconfirmed {
             self.update_hold = false;
             return false;
         }
@@ -202,13 +264,77 @@ impl DeviceLock {
         self.update_hold
     }
 
-    /// When the current hold ends if no call comes: `None` while a call runs or nobody holds.
+    /// When the current hold ends if no call comes: `None` while a call runs, while Stop waits
+    /// for an engine to end, or when nobody holds.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
         self.hold
             .as_ref()
-            .filter(|hold| hold.active == 0)
+            .filter(|hold| hold.active == 0 && hold.stopping == 0 && !self.unconfirmed)
             .map(|hold| hold.last + self.linger)
+    }
+
+    /// An engine's process tree of `environment_id` could not be confirmed gone, so a tool may
+    /// still run: from now until the helper ends, the hold stays and every tool call is refused
+    /// with [`Busy::Unconfirmed`]. Without a hold, it takes one for `environment_id`, which takes
+    /// the device lock, if no other process holds it. A granted update hold is revoked, and the
+    /// updater is refused from then on: while a tool may still run, the app is not idle (ADR
+    /// 0006 point 7). Returns whether this is new.
+    pub fn hold_unconfirmed(
+        &mut self,
+        environment_id: &str,
+        environment_label: &str,
+        now: Instant,
+        now_unix_ms: u64,
+    ) -> bool {
+        if self.unconfirmed {
+            return false;
+        }
+        if self.hold.is_none()
+            && let Ok(device_lock) = take_device_lock(&self.path)
+        {
+            self.hold = Some(Hold {
+                holder: Holder {
+                    environment_id: environment_id.to_owned(),
+                    environment_label: environment_label.to_owned(),
+                    since_unix_ms: now_unix_ms,
+                },
+                active: 0,
+                stopping: 0,
+                last: now,
+                _device_lock: device_lock,
+            });
+        }
+        self.unconfirmed = true;
+        self.update_hold = false;
+        true
+    }
+
+    /// Whether the helper keeps the computer because a tree could not be confirmed gone.
+    #[must_use]
+    pub fn unconfirmed(&self) -> bool {
+        self.unconfirmed
+    }
+
+    /// Who holds the computer, for the main process, after expiring a passed hold. Each
+    /// snapshot carries the next sequence, strictly increasing for this lock.
+    pub fn state(&mut self, now: Instant) -> LockState {
+        let holder = self.holder(now);
+        self.sequence += 1;
+        LockState {
+            idle: holder.is_none() && !self.unconfirmed,
+            holder_environment_id: holder
+                .as_ref()
+                .map(|holder| holder.environment_id.clone())
+                .unwrap_or_default(),
+            holder_environment_label: holder
+                .as_ref()
+                .map(|holder| holder.environment_label.clone())
+                .unwrap_or_default(),
+            since_unix_ms: holder.map_or(0, |holder| holder.since_unix_ms),
+            update_hold: self.update_hold,
+            sequence: self.sequence,
+        }
     }
 }
 
@@ -347,22 +473,10 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
 
+    // Tests that start a child must not overlap tests that hold a device lock (testkit).
+    use crate::testkit::{in_process, spawning};
+
     const LINGER: Duration = Duration::from_secs(20);
-
-    /// A child process started in one test thread inherits every descriptor of this process
-    /// until its `exec`, and `flock` belongs to the open file, so for that moment the child also
-    /// holds any device lock another test thread has taken (Lazurio/lazurio-app#29). Tests that
-    /// start a child take this exclusively; tests that take a device lock in this process take it
-    /// shared, so no child is ever started while they hold one.
-    static FORKS: std::sync::RwLock<()> = std::sync::RwLock::new(());
-
-    fn in_process() -> std::sync::RwLockReadGuard<'static, ()> {
-        FORKS.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn spawning() -> std::sync::RwLockWriteGuard<'static, ()> {
-        FORKS.write().unwrap_or_else(PoisonError::into_inner)
-    }
 
     fn lock_in(directory: &Path) -> DeviceLock {
         DeviceLock::with_linger(directory.join("agent.lock"), LINGER)
@@ -451,6 +565,95 @@ mod tests {
         lock.try_begin("a", "A", start, 1).expect("A starts");
         lock.release_any();
         lock.try_begin("b", "B", start, 2).expect("B after Stop");
+    }
+
+    #[test]
+    fn stop_keeps_the_hold_until_every_engine_it_waits_for_has_ended() {
+        let _forks = in_process();
+        let directory = scratch("stopping");
+        let mut lock = lock_in(&directory);
+        let mut other = lock_in(&directory);
+        let start = Instant::now();
+        lock.try_begin("a", "A", start, 1).expect("A starts");
+        lock.end_call("a", start);
+        lock.stop(2);
+        let later = start + LINGER * 10;
+        assert_eq!(lock.deadline(), None, "no linger while Stop waits");
+        assert!(matches!(
+            lock.try_begin("b", "B", later, 2),
+            Err(Busy::Environment(_))
+        ));
+        assert!(!lock.hold_for_update(true, later), "the updater waits");
+        assert_eq!(
+            other.try_begin("b", "B", later, 2),
+            Err(Busy::OtherApplication)
+        );
+        assert!(!lock.engine_ended("b"), "only the holder's engines count");
+        assert!(!lock.engine_ended("a"));
+        assert!(lock.holder(later).is_some(), "one engine is left");
+        assert!(lock.engine_ended("a"), "the last engine ends the hold");
+        assert_eq!(lock.holder(later), None);
+        other
+            .try_begin("b", "B", later, 3)
+            .expect("another process after the engines ended");
+        lock.try_begin("a", "A", later, 4)
+            .expect_err("the other process holds it now");
+        other.release("b");
+        lock.try_begin("a", "A", later, 5).expect("A again");
+        lock.stop(0);
+        assert_eq!(
+            lock.holder(later),
+            None,
+            "with no engine to wait for, Stop is done"
+        );
+    }
+
+    #[test]
+    fn an_unconfirmed_tree_keeps_the_device_lock_for_good() {
+        let _forks = in_process();
+        let directory = scratch("unconfirmed");
+        let mut lock = lock_in(&directory);
+        let mut other = lock_in(&directory);
+        let start = Instant::now();
+        assert!(lock.hold_unconfirmed("a", "A", start, 1), "new");
+        assert!(!lock.hold_unconfirmed("a", "A", start, 1), "once");
+        let later = start + LINGER * 100;
+        lock.stop(0);
+        lock.release_any();
+        lock.release("a");
+        assert!(!lock.engine_ended("a"));
+        assert_eq!(lock.deadline(), None);
+        assert_eq!(lock.try_begin("a", "A", later, 2), Err(Busy::Unconfirmed));
+        assert_eq!(lock.try_begin("b", "B", later, 2), Err(Busy::Unconfirmed));
+        assert!(!lock.hold_for_update(true, later));
+        let state = lock.state(later);
+        assert!(
+            !state.idle && state.holder_environment_id == "a",
+            "{state:?}"
+        );
+        assert_eq!(
+            other.try_begin("b", "B", later, 3),
+            Err(Busy::OtherApplication),
+            "the device lock stays taken"
+        );
+    }
+
+    #[test]
+    fn an_unconfirmed_tree_revokes_a_granted_update_hold() {
+        let _forks = in_process();
+        let directory = scratch("revoked");
+        let mut lock = lock_in(&directory);
+        let start = Instant::now();
+        assert!(lock.hold_for_update(true, start), "granted while idle");
+        assert!(lock.hold_unconfirmed("a", "A", start, 1));
+        let state = lock.state(start);
+        assert!(
+            !state.idle && !state.update_hold,
+            "revoked, and not idle: {state:?}"
+        );
+        assert!(!lock.update_hold());
+        assert!(!lock.hold_for_update(true, start), "never granted again");
+        assert!(!lock.state(start).update_hold);
     }
 
     #[test]

@@ -57,6 +57,7 @@ message HelperMessage {
     lazurio.app.device.v1.ChannelState channel_state = 21;
     lazurio.app.device.v1.LockState lock_state = 22;
     lazurio.app.device.v1.HistoryPage history_page = 23;
+    lazurio.app.device.v1.DeviceStopped device_stopped = 24;
   }
 }
 
