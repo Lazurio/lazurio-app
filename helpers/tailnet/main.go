@@ -19,6 +19,10 @@ var version = "0.0.0-dev"
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	if err := checkBuild(missingOmissions()); err != nil {
+		logger.Error("helper stopped", "error", err)
+		os.Exit(1)
+	}
 	out := NewOutbox(os.Stdout)
 	nodes := NewNodes(func(state *tailnetv1.NodeState) {
 		if err := out.Send(&helperv1.HelperMessage{
