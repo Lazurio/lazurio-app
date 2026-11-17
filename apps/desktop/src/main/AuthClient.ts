@@ -38,6 +38,8 @@ export const DEVICE_ENTRY_SCOPE = "lazurio-device-entry";
 const DEFAULT_SIGN_IN_TIMEOUT = Duration.minutes(5);
 // An access token counts as expired this long before Lazurio Auth's own expiry.
 const EXPIRY_MARGIN_MILLIS = 30_000;
+// How far the computer's clock may differ from Lazurio Auth's for an ID token's times.
+const CLOCK_SKEW_SECONDS = 60;
 const REVOCATION_WITHIN = Duration.seconds(5);
 const HAND_OVER_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
@@ -53,12 +55,11 @@ export class InvalidIssuerError extends Schema.TaggedError<InvalidIssuerError>()
 }
 
 export class SignInError extends Schema.TaggedError<SignInError>()("SignInError", {
-  // in-progress: another sign-in runs; browser: the system's browser did not open; loopback: no
-  // loopback port; timed-out: no return in time; denied: the person or Auth declined;
-  // state-mismatch, invalid-callback: a return that is not this sign-in's; token-refused,
-  // invalid-tokens, nonce-mismatch: the code did not give this sign-in's tokens.
+  // in-progress: another sign-in runs; cancelled: a sign-out ended it; timed-out: the whole
+  // sign-in took too long; the others: the browser, the return or the tokens failed.
   reason: Schema.Literals([
     "in-progress",
+    "cancelled",
     "browser",
     "loopback",
     "timed-out",
@@ -67,6 +68,7 @@ export class SignInError extends Schema.TaggedError<SignInError>()("SignInError"
     "invalid-callback",
     "token-refused",
     "invalid-tokens",
+    "invalid-id-token",
     "nonce-mismatch",
   ]),
 }) {
@@ -95,6 +97,15 @@ export class AuthUnreachableError extends Schema.TaggedError<AuthUnreachableErro
 export class SignedOutError extends Schema.TaggedError<SignedOutError>()("SignedOutError", {}) {
   override get message(): string {
     return "signed out of Lazurio Auth";
+  }
+}
+
+// A sign-out that ended the session in the app but not on disk: the next start opens it again.
+export class SignOutError extends Schema.TaggedError<SignOutError>()("SignOutError", {
+  reason: Schema.Literals(["session-not-removed"]),
+}) {
+  override get message(): string {
+    return "sign-out: the sealed session could not be removed, so the next start opens it again";
   }
 }
 
@@ -148,9 +159,11 @@ export interface AuthClientShape {
   readonly state: Effect.Effect<AuthState>;
   // The current state, then every change.
   readonly changes: Stream.Stream<AuthState>;
-  // One at a time; to cancel it, interrupt it.
+  // One at a time, within its time limit; a sign-out or an interruption cancels it.
   readonly signIn: Effect.Effect<void, SignInError | AuthUnreachableError>;
-  readonly signOut: Effect.Effect<void>;
+  // Ends the session in the app and revokes it at Lazurio Auth. Fails when the sealed session
+  // stays on disk, since the next start would open it again.
+  readonly signOut: Effect.Effect<void, SignOutError>;
   // `origin` is `https://<the host of the Environment's Launchpad>`.
   readonly handOver: (
     origin: string,
@@ -183,7 +196,10 @@ const decodeTokenResponse = Schema.decodeUnknownOption(TokenResponse);
 const IdTokenClaims = Schema.Struct({
   iss: Schema.String,
   aud: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+  azp: Schema.optional(Schema.String),
   nonce: Schema.optional(Schema.String),
+  exp: Schema.Number,
+  iat: Schema.Number,
 });
 const decodeIdTokenClaims = Schema.decodeUnknownOption(Schema.fromJsonString(IdTokenClaims));
 
@@ -456,19 +472,21 @@ export const layer = (options: AuthClientOptions) =>
         ),
       );
 
-      const removeSession = fileSystem
-        .remove(options.sessionPath, { force: true })
-        .pipe(
-          Effect.catch(() => Effect.logWarning("auth: the sealed session could not be removed")),
-        );
+      // Whether no sealed session is left on disk.
+      const removeSession = fileSystem.remove(options.sessionPath, { force: true }).pipe(
+        Effect.as(true),
+        Effect.catch(() =>
+          Effect.logWarning("auth: the sealed session could not be removed").pipe(Effect.as(false)),
+        ),
+      );
 
       // Ends the session in memory and on disk. Callers hold the lock.
       const endSession = Effect.gen(function* () {
         const ended = session;
         session = Option.none();
-        yield* removeSession;
-        yield* SubscriptionRef.set(state, "signedOut");
-        return ended;
+        const removed = yield* removeSession;
+        if (Option.isSome(ended)) yield* SubscriptionRef.set(state, "signedOut");
+        return { ended, removed };
       });
 
       const accessTokenOf = (tokens: TokenResponse): Effect.Effect<AccessToken> =>
@@ -564,32 +582,40 @@ export const layer = (options: AuthClientOptions) =>
         ) {
           return yield* new SignInError({ reason: "invalid-tokens" });
         }
-        if (tokens.value.id_token !== undefined) {
-          const claims = idTokenClaims(tokens.value.id_token);
-          if (Option.isNone(claims)) return yield* new SignInError({ reason: "invalid-tokens" });
-          const audience = claims.value.aud;
-          const forThisApp = Array.isArray(audience)
-            ? audience.includes(CLIENT_ID)
-            : audience === CLIENT_ID;
-          if (claims.value.iss !== issuer || !forThisApp) {
-            return yield* new SignInError({ reason: "invalid-tokens" });
-          }
-          if (claims.value.nonce !== nonce) {
-            return yield* new SignInError({ reason: "nonce-mismatch" });
-          }
+        // OIDC Core 3.1.3.7: the sign-in counts only with this sign-in's ID token.
+        const invalidIdToken = new SignInError({ reason: "invalid-id-token" });
+        if (tokens.value.id_token === undefined) return yield* invalidIdToken;
+        const claims = idTokenClaims(tokens.value.id_token);
+        if (Option.isNone(claims)) return yield* invalidIdToken;
+        const { iss, aud, azp, exp, iat } = claims.value;
+        const audiences = typeof aud === "string" ? [aud] : aud;
+        const now = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+        if (
+          iss !== issuer ||
+          !audiences.includes(CLIENT_ID) ||
+          ((audiences.length > 1 || azp !== undefined) && azp !== CLIENT_ID) ||
+          exp + CLOCK_SKEW_SECONDS <= now ||
+          iat - CLOCK_SKEW_SECONDS > now
+        ) {
+          return yield* invalidIdToken;
+        }
+        if (claims.value.nonce !== nonce) {
+          return yield* new SignInError({ reason: "nonce-mismatch" });
         }
         return { tokens: tokens.value, refreshToken: tokens.value.refresh_token };
       });
 
       let signingIn = false;
-      const signIn = Effect.gen(function* () {
+      // Each sign-out starts a new generation; a sign-in commits only in the one it began in.
+      let generation = 0;
+      let cancelSignIn: Option.Option<Deferred.Deferred<void>> = Option.none();
+
+      const attempt = Effect.fn("AuthClient.attempt")(function* (started: number) {
         const found = yield* discover();
         const verifier = randomToken();
         const expectedState = randomToken();
         const nonce = randomToken();
         const returnPath = `/callback/${randomToken()}`;
-        // The time limit counts from here, whenever the wait for the return begins.
-        const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(signInTimeout);
         const listener = yield* loopback(returnPath, options.locale);
         const redirectUri = `http://127.0.0.1:${listener.port}${returnPath}`;
 
@@ -608,12 +634,7 @@ export const layer = (options: AuthClientOptions) =>
         }
         yield* options.openBrowser(authorize.toString());
 
-        const timedOut = new SignInError({ reason: "timed-out" });
-        const remaining = deadline - (yield* Clock.currentTimeMillis);
-        if (remaining <= 0) return yield* timedOut;
-        const back = yield* listener.returned.pipe(
-          Effect.timeoutOrElse({ duration: remaining, orElse: () => Effect.fail(timedOut) }),
-        );
+        const back = yield* listener.returned;
         const query = back.url.searchParams;
         if (query.get("state") !== expectedState) {
           return yield* new SignInError({ reason: "state-mismatch" });
@@ -635,16 +656,46 @@ export const layer = (options: AuthClientOptions) =>
           scope: tokens.scope ?? ["openid", ...requestedScopes].join(" "),
           access: Option.some(access),
         };
+        // A sign-out since the start wins, whenever it came.
         yield* lock.withPermits(1)(
-          Effect.gen(function* () {
-            session = Option.some(next);
-            yield* saveSession(next);
-            yield* SubscriptionRef.set(state, "signedIn");
-          }),
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (generation !== started) return yield* new SignInError({ reason: "cancelled" });
+              session = Option.some(next);
+              yield* saveSession(next);
+              yield* SubscriptionRef.set(state, "signedIn");
+            }),
+          ),
         );
         yield* back.respond("signed-in");
         yield* Effect.logInfo("auth: signed in");
-      }).pipe(Effect.scoped, Effect.withSpan("AuthClient.signIn"));
+      }, Effect.scoped);
+
+      // The time limit holds for the whole sign-in, from discovery through the code's exchange,
+      // and a sign-out ends it at once; either way its loopback address closes.
+      const signIn = Effect.gen(function* () {
+        const started = generation;
+        const cancelled = yield* Deferred.make<void>();
+        cancelSignIn = Option.some(cancelled);
+        yield* attempt(started).pipe(
+          Effect.timeoutOrElse({
+            duration: signInTimeout,
+            orElse: () => Effect.fail(new SignInError({ reason: "timed-out" })),
+          }),
+          Effect.raceFirst(
+            Deferred.await(cancelled).pipe(
+              Effect.andThen(Effect.fail(new SignInError({ reason: "cancelled" }))),
+            ),
+          ),
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            cancelSignIn = Option.none();
+          }),
+        ),
+        Effect.withSpan("AuthClient.signIn"),
+      );
 
       const opened = yield* openSession;
       if (Option.isSome(opened)) {
@@ -680,23 +731,33 @@ export const layer = (options: AuthClientOptions) =>
           );
         }),
         signOut: Effect.gen(function* () {
-          const ended = yield* lock.withPermits(1)(endSession);
-          if (Option.isNone(ended)) return;
-          yield* Effect.logInfo("auth: signed out");
-          // Best effort: the session at Lazurio Auth ends on its own when this fails.
-          const found = Option.flatMap(endpoints, (known) =>
-            Option.fromNullishOr(known.revocation),
+          const { ended, removed } = yield* lock.withPermits(1)(
+            Effect.gen(function* () {
+              generation += 1;
+              if (Option.isSome(cancelSignIn))
+                yield* Deferred.succeed(cancelSignIn.value, undefined);
+              return yield* endSession;
+            }),
           );
-          if (Option.isNone(found)) return;
-          yield* send(
-            HttpClientRequest.post(found.value).pipe(
-              HttpClientRequest.bodyUrlParams({
-                token: Redacted.value(ended.value.refreshToken),
-                token_type_hint: "refresh_token",
-                client_id: CLIENT_ID,
-              }),
-            ),
-          ).pipe(Effect.timeoutOption(REVOCATION_WITHIN), Effect.ignore);
+          if (Option.isSome(ended)) {
+            yield* Effect.logInfo("auth: signed out");
+            // Best effort: the session at Lazurio Auth ends on its own when this fails. After a
+            // restart the app has not discovered the endpoints yet, so it does here.
+            yield* Effect.gen(function* () {
+              const found = yield* discover();
+              if (found.revocation === undefined) return;
+              yield* send(
+                HttpClientRequest.post(found.revocation).pipe(
+                  HttpClientRequest.bodyUrlParams({
+                    token: Redacted.value(ended.value.refreshToken),
+                    token_type_hint: "refresh_token",
+                    client_id: CLIENT_ID,
+                  }),
+                ),
+              );
+            }).pipe(Effect.timeoutOption(REVOCATION_WITHIN), Effect.ignore);
+          }
+          if (!removed) return yield* new SignOutError({ reason: "session-not-removed" });
         }).pipe(Effect.withSpan("AuthClient.signOut")),
         handOver: Effect.fn("AuthClient.handOver")(function* (origin: string) {
           if (!isEnvironmentOrigin(origin)) {
