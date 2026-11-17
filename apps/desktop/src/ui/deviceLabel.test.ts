@@ -28,6 +28,25 @@ describe("channelLabel", () => {
     );
   });
 
+  it("says in words that the utility Lazurio Agent Desktop keeps the channels closed", () => {
+    assert.strictEqual(
+      channelLabel({ state: "refused", reason: "agent_desktop_paired" }, messages.cs.device),
+      "Na tomto počítači je spárovaná utilita Lazurio Agent Desktop.",
+    );
+    assert.strictEqual(
+      channelLabel({ state: "refused", reason: "agent_desktop_paired" }, messages.en.device),
+      "The utility Lazurio Agent Desktop is paired on this computer.",
+    );
+    assert.match(
+      channelLabel({ state: "refused", reason: "agent_desktop_check_failed" }, messages.cs.device),
+      /Nepodařilo se ověřit/u,
+    );
+    assert.match(
+      channelLabel({ state: "refused", reason: "agent_desktop_check_failed" }, messages.en.device),
+      /Could not check/u,
+    );
+  });
+
   it("names the tool an agent runs and the application, when the engine names one", () => {
     assert.strictEqual(
       channelLabel({ state: "working", tool: "click", application: "Outlook" }, messages.cs.device),

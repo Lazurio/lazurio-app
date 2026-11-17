@@ -2,11 +2,12 @@
 //!
 //! A [`Supervisor`] runs on its own thread from `StartChannel` until its one session ends,
 //! `StopChannel`, `Shutdown` or a refusal. It owns the request's secrets, which wipe themselves
-//! when it ends. Its session: connect with the hand-over ([`wire::connect`]), which is dropped
-//! right after that attempt, wait for `ready` of contract v3, then serve MCP one message per text
-//! frame: through the [`tap`] with the session's own engine ([`engine`]), or with [`mcp_stub`] when
-//! the engine is missing or does not start. It pings every 15 s and ends a session after 45 s
-//! without a frame, or on the Launchpad's `denied`.
+//! when it ends. First the [`Guard`] checks that the utility Lazurio Agent Desktop is not paired.
+//! Then the session: connect with the hand-over ([`wire::connect`]), which is dropped right after
+//! that attempt, wait for `ready` of contract v3, then serve MCP one message per text frame:
+//! through the [`tap`] with the session's own engine ([`engine`]), or with [`mcp_stub`] when the
+//! engine is missing or does not start. It pings every 15 s and ends a session after 45 s without
+//! a frame, or on the Launchpad's `denied`.
 //!
 //! A hand-over is used once, so the channel never connects again by itself. When the session or
 //! the attempt ends, it reports `NeedsHandOver` with the pause before the next hand-over: 1 s after
@@ -16,7 +17,7 @@
 //!
 //! Every change of state goes to [`Report`], never after the channel was stopped. Stopping shuts
 //! the session's TCP stream down, so a session ends at once whatever it waits for, its handshake
-//! included.
+//! included. The guard closes a channel the same way, with its reason.
 
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -27,6 +28,7 @@ use tungstenite::Message;
 use zeroize::Zeroizing;
 
 use crate::engine::{self, Engine, EngineSpec};
+use crate::guard::{Guard, Watched};
 use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
     ChannelState, Connected, LockState, NeedsHandOver, Off, Refused, Working, channel_state,
@@ -142,6 +144,8 @@ pub struct Channel {
     pub request: StartRequest,
     /// The earlier hand-overs of this Environment.
     pub attempts: SharedAttempts,
+    /// The guard against the utility Lazurio Agent Desktop, shared by every channel.
+    pub guard: Arc<Guard>,
     pub connector: Arc<Connector>,
     pub timing: Timing,
     pub history: Arc<History>,
@@ -176,7 +180,7 @@ impl Supervisor {
     /// Fails when the system gives no thread; the channel's secrets are then dropped, wiped.
     pub fn spawn(channel: Channel) -> std::io::Result<Self> {
         let environment_id = channel.request.environment_id.clone();
-        let control = Arc::new(Control::new());
+        let control = Arc::new(Control::new(environment_id.clone()));
         let mut worker = Worker {
             control: Arc::clone(&control),
             channel,
@@ -240,8 +244,9 @@ impl Drop for Supervisor {
     }
 }
 
-/// The state shared by a supervisor's handle and its thread.
+/// The state shared by a supervisor's handle, its thread and the guard.
 struct Control {
+    environment_id: String,
     state: Mutex<ControlState>,
     changed: Condvar,
 }
@@ -249,6 +254,8 @@ struct Control {
 #[derive(Default)]
 struct ControlState {
     stopped: bool,
+    /// The guard closed the channel, for this reason.
+    revoked: Option<&'static str>,
     ended: bool,
     /// A clone of the current session's TCP stream, to shut it down on stop.
     stream: Option<TcpStream>,
@@ -268,8 +275,9 @@ enum EngineState {
 }
 
 impl Control {
-    fn new() -> Self {
+    fn new(environment_id: String) -> Self {
         Self {
+            environment_id,
             state: Mutex::new(ControlState::default()),
             changed: Condvar::new(),
         }
@@ -294,10 +302,15 @@ impl Control {
         self.lock().stopped
     }
 
-    /// Keeps a handle on the session's stream, unless the channel was stopped meanwhile.
+    fn revoked(&self) -> Option<&'static str> {
+        self.lock().revoked
+    }
+
+    /// Keeps a handle on the session's stream, unless the channel was stopped or closed by the
+    /// guard meanwhile.
     fn register(&self, tcp: &TcpStream) -> bool {
         let mut state = self.lock();
-        if state.stopped {
+        if state.stopped || state.revoked.is_some() {
             return false;
         }
         match tcp.try_clone() {
@@ -364,6 +377,32 @@ impl Control {
     }
 }
 
+impl Watched for Control {
+    fn environment_id(&self) -> &str {
+        &self.environment_id
+    }
+
+    /// Closes the channel with the guard's `reason`: the session's stream is shut down, so it ends
+    /// at once whatever it waits for. With `stop_engine`, its engine ends as after Stop, in the
+    /// same step, so the session never starts a new engine for it.
+    fn revoke(&self, reason: &'static str, stop_engine: bool) -> bool {
+        let mut state = self.lock();
+        if state.revoked.is_none() {
+            state.revoked = Some(reason);
+        }
+        if let Some(stream) = state.stream.take() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        let waits = stop_engine && state.engine == EngineState::Running;
+        if waits {
+            state.engine = EngineState::Stopping;
+        }
+        drop(state);
+        self.changed.notify_all();
+        waits
+    }
+}
+
 /// Marks the thread as ended when it returns, also after a panic.
 struct EndedOnDrop(Arc<Control>);
 
@@ -415,7 +454,8 @@ enum Outcome {
 
 /// How serving a session that got `ready` ended.
 enum SessionEnd {
-    /// The connection broke, went silent, closed, or the channel was stopped.
+    /// The connection broke, went silent or closed, or the channel was stopped or closed by the
+    /// guard.
     Ended,
     /// The Launchpad's `denied` with this reason.
     Denied(&'static str),
@@ -450,16 +490,37 @@ impl Worker {
     fn run(&mut self) {
         // The hand-over leaves the request now and is dropped, wiped, after the one attempt.
         let hand_over = std::mem::take(&mut self.channel.request.hand_over);
-        let outcome = self.session(hand_over);
+        let outcome = self.open(hand_over);
         self.conclude(outcome);
     }
 
-    /// Reports how the channel ended, unless it was stopped.
+    /// The guard's check, then the channel's one session, watched by the guard throughout.
+    fn open(&self, hand_over: Zeroizing<Vec<u8>>) -> Outcome {
+        let watched: Arc<dyn Watched> = Arc::clone(&self.control) as Arc<dyn Watched>;
+        let Ok(_watched) = self.channel.guard.register(watched) else {
+            // Without the periodic check the channel would not be guarded: no channel then.
+            return Outcome::Refused(crate::guard::CHECK_FAILED);
+        };
+        if let Some(reason) = self.channel.guard.check_before_open() {
+            return Outcome::Refused(reason);
+        }
+        if self.control.stopped() {
+            return Outcome::Stopped;
+        }
+        self.session(hand_over)
+    }
+
+    /// Reports how the channel ended, unless it was stopped. The guard's reason comes before any
+    /// other.
     fn conclude(&self, outcome: Outcome) {
         // A stopped channel reports nothing more and records no refusal.
         if self.control.stopped() {
             return;
         }
+        let outcome = match self.control.revoked() {
+            Some(reason) => Outcome::Refused(reason),
+            None => outcome,
+        };
         match outcome {
             Outcome::Stopped => {}
             Outcome::Refused(reason) => {
@@ -683,6 +744,11 @@ impl Worker {
         let mut last_heard = Instant::now();
         let mut next_ping = last_heard + timing.ping_every;
         while !self.control.stopped() {
+            // The guard closed the channel: its engine ends with the session, as after Stop
+            // when this Environment held the computer, and no new engine starts.
+            if self.control.revoked().is_some() {
+                return SessionEnd::Ended;
+            }
             if self.control.stop_pending()
                 && self.restart_engine(socket, served, &Restart::Stop).is_err()
             {
@@ -959,8 +1025,9 @@ mod tests {
     use crate::lock::{Busy, DeviceLock, Holder};
     use crate::secret_start::ProxyRequest;
     use crate::testkit::{
-        ATTACH_URL, EngineEvent, Event, FakeEngines, FakeEnvironment, FakeProxy, HAND_OVER, Order,
-        PATIENCE, Session, hand_over, quick_timing, scratch, scripted_environment, spawning,
+        ATTACH_URL, EngineEvent, Event, FakeEngines, FakeEnvironment, FakeProxy, FakeUtility,
+        HAND_OVER, Order, PATIENCE, Session, hand_over, quick_timing, scratch,
+        scripted_environment, spawning,
     };
 
     fn request(proxy: Option<ProxyRequest>) -> StartRequest {
@@ -1070,9 +1137,17 @@ mod tests {
         let lock_report: LockReport = Arc::new(move |_, state| {
             let _ = lock_sender.lock().expect("the test's sender").send(state);
         });
+        let guard = Arc::new(Guard::new(
+            FakeUtility::absent(),
+            crate::guard::CHECK_EVERY,
+            Arc::clone(lock),
+            Arc::clone(&history),
+            Arc::clone(&lock_report),
+        ));
         let supervisor = Supervisor::spawn(Channel {
             request,
             attempts,
+            guard,
             connector: Arc::new(connector),
             timing,
             history: Arc::clone(&history),

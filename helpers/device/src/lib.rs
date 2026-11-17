@@ -1,11 +1,12 @@
 //! The Device helper of Lazurio App. The app's main process starts it and speaks the helper
 //! protocol of `proto/lazurio/app/helper/v1` with it over standard input and output, and the
 //! Device's work of `proto/lazurio/app/device/v1` (ADR 0006): the attach channel of each
-//! Environment (`channel`, contract v3 with Lazurio Auth's hand-over), the lock of one agent
-//! (`lock`) and the history without content (`history`). Each session passes MCP to the engine that
-//! operates the computer's applications (`Lazurio/agent-desktop`, `engine`), through the tap that
-//! holds the lock around every tool call (`tap`); without the engine, the channel serves no tools
-//! (`mcp_stub`). Packaging the engine next to the helper is a later step (ADR 0006 step 4).
+//! Environment (`channel`, contract v3 with Lazurio Auth's hand-over), the guard against the
+//! earlier utility Lazurio Agent Desktop (`guard`), the lock of one agent (`lock`) and the history
+//! without content (`history`). Each session passes MCP to the engine that operates the computer's
+//! applications (`Lazurio/agent-desktop`, `engine`), through the tap that holds the lock around
+//! every tool call (`tap`); without the engine, the channel serves no tools (`mcp_stub`). Packaging
+//! the engine next to the helper is a later step (ADR 0006 step 4).
 
 use std::io::{self, Read, Write};
 use std::sync::{Arc, mpsc};
@@ -40,6 +41,7 @@ pub mod lazurio {
 pub mod channel;
 pub mod device;
 pub mod engine;
+pub mod guard;
 pub mod history;
 pub mod lock;
 pub mod mcp_stub;

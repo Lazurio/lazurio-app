@@ -71,7 +71,7 @@ export type DeviceChannelState =
   | { readonly state: "connecting"; readonly failedAttempts: number }
   | { readonly state: "connected" }
   // The channel ended and opens again only after the person acts, with the helper's code for why
-  // (the Environment refused the computer).
+  // (the Environment refused the computer, or the utility Lazurio Agent Desktop is paired here).
   | { readonly state: "refused"; readonly reason: string }
   // The channel ended and spent its hand-over; it opens again with a new one, with the helper's code
   // for why.

@@ -10,7 +10,8 @@
 //
 // The main process owns every switch and every secret. The helper opens a channel only on
 // StartChannel, keeps its hand-over only in memory and only until it was sent once, writes only to
-// the data directory it is given, and reports every change of state on its own.
+// the data directory it is given, and reports every change of state on its own. It opens no channel
+// while the earlier utility Lazurio Agent Desktop is paired on the computer.
 
 package devicev1
 
@@ -789,6 +790,13 @@ func (*Connected) Descriptor() ([]byte, []int) {
 // The channel ended and does not open again until the next StartChannel, which the main process
 // sends only after the person did something about the reason. The reason is a stable code:
 //
+//   - "agent_desktop_paired": the earlier utility Lazurio Agent Desktop is paired on this computer
+//     (it keeps an entry of the service `io.lazurio.agent-desktop` in the system's keystore). The
+//     helper stopped the agent and closed every channel. The person removes every Environment in
+//     the utility, or its entries by hand, and switches on again.
+//   - "agent_desktop_check_failed": the helper could not tell whether that utility is paired (the
+//     keystore is locked, `cmdkey` failed or did not answer within 5 s), and fails closed the same
+//     way.
 //   - "already-attached": the Environment kept answering that it serves another session of this
 //     computer for longer than the helper waits for an earlier session of its own to end.
 //   - "contract_mismatch": the Environment answered in a way contract v3 does not know: another

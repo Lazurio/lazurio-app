@@ -1,7 +1,8 @@
 //! Test doubles for the attach channel: a fake Environment of contract v3 (its gateway and its
 //! Launchpad) over real TLS with a certificate that only the tests trust, a fake tailnet proxy, a
-//! server that never answers, and pipes for `serve`. Every double reports what it saw as events, so
-//! tests wait for events and never for time.
+//! server that never answers, a fake check for the utility Lazurio Agent Desktop, and pipes for
+//! `serve`. Every double reports what it saw as events, so tests wait for events and never for
+//! time.
 
 #![allow(
     clippy::expect_used,
@@ -30,6 +31,7 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::{Message, WebSocket};
 
 use crate::channel::Timing;
+use crate::guard::{Pairing, UtilityCheck};
 use crate::lazurio::app::helper::v1::HelperMessage;
 use crate::wire::Connector;
 
@@ -857,5 +859,55 @@ impl FakeEngines {
         let mut controls = self.controls.lock().unwrap_or_else(PoisonError::into_inner);
         let control = controls.get_mut(&engine).expect("that engine started");
         control.write_all(order).expect("the engine listens");
+    }
+}
+
+/// A fake check for the utility Lazurio Agent Desktop: answers what the test sets, and counts how
+/// often it was asked.
+#[derive(Default)]
+pub struct FakeUtility {
+    answer: Mutex<Option<Pairing>>,
+    asked: Mutex<usize>,
+    changed: std::sync::Condvar,
+}
+
+impl FakeUtility {
+    /// A utility that is not paired.
+    #[must_use]
+    pub fn absent() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// From now on, the check answers `pairing`.
+    pub fn set(&self, pairing: Pairing) {
+        *self.answer.lock().unwrap_or_else(PoisonError::into_inner) = Some(pairing);
+    }
+
+    /// How often the check was asked so far.
+    pub fn asked(&self) -> usize {
+        *self.asked.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Waits until the check was asked more than `times` times.
+    pub fn wait_asked_more_than(&self, times: usize) {
+        let asked = self.asked.lock().unwrap_or_else(PoisonError::into_inner);
+        let (_asked, timeout) = self
+            .changed
+            .wait_timeout_while(asked, PATIENCE, |asked| *asked <= times)
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(!timeout.timed_out(), "the check was asked");
+    }
+}
+
+impl UtilityCheck for FakeUtility {
+    fn check(&self) -> Pairing {
+        let answer = self
+            .answer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or(Pairing::Absent);
+        *self.asked.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        self.changed.notify_all();
+        answer
     }
 }
