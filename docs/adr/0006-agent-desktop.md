@@ -113,6 +113,18 @@ Each step is one small pull request with targeted tests and a review on its exac
 8. commands on the computer behind their own switch;
 9. the channel with the short-lived permission from Lazurio Auth, together with the Environment's side.
 
+### The first usable build for Windows (2026-11-17)
+
+On 2026-11-17 Matěj asked for a minimal but working Agent Desktop in Lazurio App for Windows as soon as possible. Its cut, which changes the order of the steps above and nothing they decide:
+
+- **In:**
+  - the engine in the Windows package (step 4);
+  - the main process (step 5) with the device service, the key sealed with `safeStorage`, pairing through the Launchpad, and `DeviceActivity` with the updater's handshake of point 7;
+  - minimal native controls in the window's local column (step 6): the paired Environments, each with its switch, Stop and Remove, and a field to pair a new one;
+  - Stop and every other end of an engine ending its whole process tree, which the helper does already (point 8).
+- **Later:** taking over the pilot application's pairing, the icon in the menu bar or notification area, showing the history (the helper keeps writing it), the macOS permission guide, the switch for commands, and macOS builds.
+- **The channel's path.** When the Environment's host lies in a tailnet the app is a node of, the main process gives `StartChannel` the tailnet helper's loopback proxy and the credentials of its current start (point 3). Otherwise the helper connects directly, through the system's network. The helper supports both already; the main process passes the proxy.
+
 ## Alternatives considered
 
 | Alternative                                                               | Why not                                                                                                                                                                                         |
