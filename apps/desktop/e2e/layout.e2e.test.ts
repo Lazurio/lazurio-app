@@ -22,7 +22,9 @@ let shell: Page;
 beforeAll(async () => {
   server = NodeHttp.createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html" });
-    response.end("<!doctype html><title>remote</title><p>remote</p>");
+    response.end(
+      `<!doctype html><title>remote</title><body style="margin:0;background:rgb(0,160,0)"><p>remote</p>`,
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -107,4 +109,59 @@ describe("Lazurio App GEN4 with a remote page", () => {
       frame: true,
     });
   });
+
+  // What the system composes into the window, not what the page drew for itself: on Windows the
+  // page painted and still the window showed the local page's background in its place (the trial of
+  // 2026-11-17). The remote page is green, the local window dark.
+  it.skipIf(process.platform === "darwin")(
+    // macOS lets no capture through without the Screen Recording permission, which no runner has.
+    "shows the remote page in the window's own pixels",
+    async () => {
+      const sample = await app.evaluate(async ({ BaseWindow, desktopCapturer, screen }) => {
+        const window = BaseWindow.getAllWindows()[0];
+        if (window === undefined) return { found: "no window" };
+        const bounds = window.getBounds();
+        // The remote page's middle, in screen coordinates.
+        const content = window.getContentBounds();
+        const point = { x: content.x + content.width * 0.75, y: content.y + content.height * 0.5 };
+        const windowSources = await desktopCapturer.getSources({
+          types: ["window"],
+          thumbnailSize: { width: bounds.width, height: bounds.height },
+        });
+        const own = windowSources.find((source) => source.id === window.getMediaSourceId());
+        // Without a window manager (Xvfb) no window is listed, so the whole screen is captured.
+        const display = screen.getDisplayMatching(bounds);
+        const screenSources =
+          own === undefined
+            ? await desktopCapturer.getSources({
+                types: ["screen"],
+                thumbnailSize: { width: display.size.width, height: display.size.height },
+              })
+            : [];
+        const shot =
+          own ??
+          screenSources.find((source) => source.display_id === String(display.id)) ??
+          screenSources[0];
+        if (shot === undefined) return { found: "no capture" };
+        const origin = own === undefined ? display.bounds : bounds;
+        const size = shot.thumbnail.getSize();
+        const scale = size.width / (own === undefined ? display.bounds.width : bounds.width);
+        const x = Math.floor((point.x - origin.x) * scale);
+        const y = Math.floor((point.y - origin.y) * scale);
+        const bitmap = shot.thumbnail.toBitmap();
+        // The bitmap is BGRA, row by row.
+        const index = (y * size.width + x) * 4;
+        return {
+          found: own === undefined ? "screen" : "window",
+          remote: [bitmap[index + 2] ?? 0, bitmap[index + 1] ?? 0, bitmap[index] ?? 0],
+        };
+      });
+      if (sample.remote === undefined) throw new Error(`nothing captured: ${sample.found}`);
+      const [red = 0, green = 0, blue = 0] = sample.remote;
+      assert.isTrue(
+        green > 120 && red < 80 && blue < 80,
+        `the window shows rgb(${red}, ${green}, ${blue}) where the remote page is (${sample.found})`,
+      );
+    },
+  );
 });
