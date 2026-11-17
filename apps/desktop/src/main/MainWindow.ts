@@ -63,11 +63,30 @@ const serveStatus = (status: () => AppStatus) =>
     () => Effect.sync(() => Electron.ipcMain.removeHandler(STATUS_CHANNEL)),
   );
 
+// Resolves once the window is shown, at once when it already is.
+const whenShown = (window: Electron.BrowserWindow) =>
+  Effect.callback<void>((resume) => {
+    if (window.isVisible()) {
+      resume(Effect.void);
+      return;
+    }
+    const listener = () => resume(Effect.void);
+    window.once("show", listener);
+    return Effect.sync(() => window.off("show", listener));
+  });
+
+// What the remote page's renderer sees, for the log: a page hidden to it stays blank in the
+// window (the trial of the proof of concept on Windows, 2026-11-17).
+const PAGE_STATE = `({ visibility: document.visibilityState, width: innerWidth, height: innerHeight })`;
+
 const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
   window: Electron.BrowserWindow,
   url: string,
   whenReachable: (url: string) => Effect.Effect<void>,
 ) {
+  // The view joins a window that is already shown. On Windows a view added to the window while
+  // it was still hidden stayed blank after the window was shown.
+  yield* whenShown(window);
   const view = new Electron.WebContentsView({
     webPreferences: {
       partition: REMOTE_PARTITION,
@@ -92,6 +111,10 @@ const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
   };
   layout();
   window.on("resize", layout);
+  window.on("show", layout);
+  window.on("restore", layout);
+  window.on("maximize", layout);
+  window.on("unmaximize", layout);
   // The page loads only once its tailnet runs, so the first load does not fail while the node
   // starts.
   yield* whenReachable(url).pipe(
@@ -104,6 +127,16 @@ const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
     Effect.retry({ times: 2, while: (failure) => RETRIED_FAILURES.has(failure.code) }),
     Effect.ignore,
   );
+  const page = yield* Effect.tryPromise({
+    try: () => view.webContents.executeJavaScript(PAGE_STATE) as Promise<unknown>,
+    catch: (failure) => new RemoteLoadError({ code: codeOf(failure) }),
+  }).pipe(Effect.orElseSucceed(() => "unknown"));
+  yield* Effect.logInfo("remote view", {
+    windowVisible: window.isVisible(),
+    viewVisible: view.getVisible(),
+    bounds: view.getBounds(),
+    page,
+  });
 });
 
 export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowOptions) {
