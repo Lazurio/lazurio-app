@@ -38,14 +38,17 @@ const belowLazurio = (name: string): boolean => {
   );
 };
 
-// A tailnet's name names its key and state files (Tailnet.run), so it is one plain path component.
+// A tailnet's name names its key and state files (Tailnet.run), so it is one plain path component
+// and none of the device names Windows reserves, with or without an extension.
 const TAILNET_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/u;
+const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/u;
 
 // Why an entry is refused, or undefined when the app may join its tailnet.
 export const refusalOf = (entry: DirectoryEntry): string | undefined => {
   if (!TAILNET_NAME.test(entry.tailnet)) {
     return "its name is not lower-case letters, digits and hyphens";
   }
+  if (WINDOWS_RESERVED.test(entry.tailnet)) return "its name is a device name Windows reserves";
   const control = URL.parse(entry.controlUrl);
   if (control === null || control.protocol !== "https:") {
     return "its control server is no https:// address";

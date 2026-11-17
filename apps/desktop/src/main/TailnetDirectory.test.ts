@@ -123,7 +123,8 @@ describe("refusalOf", () => {
 
   it("takes as a name only one plain path component, since it names the tailnet's files", () => {
     const names = ["", " ", "../../outside", "..", "a/b", "a\\b", "Org", "org.x", "-org", "C:org"];
-    for (const tailnet of [...names, "x".repeat(64)]) {
+    const reserved = ["con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9", "com0"];
+    for (const tailnet of [...names, ...reserved, "x".repeat(64)]) {
       assert.isString(
         refusalOf({ tailnet, controlUrl: "https://h.org.lazurio.io", domains: ["org.lazurio.io"] }),
         JSON.stringify(tailnet),
@@ -131,7 +132,7 @@ describe("refusalOf", () => {
     }
     assert.isUndefined(
       refusalOf({
-        tailnet: "lazurio-example-1",
+        tailnet: "console-1",
         controlUrl: "https://h.org.lazurio.io",
         domains: ["org.lazurio.io"],
       }),

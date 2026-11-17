@@ -18,7 +18,7 @@ The policy only says where the tailnets are. It grants nobody access:
 
 Each tailnet has three fields:
 
-- `tailnet`: the tailnet's name, as Lazurio gives it to the Organization: lower-case letters, digits and hyphens, unique in the array;
+- `tailnet`: the tailnet's name, as Lazurio gives it to the Organization: lower-case letters, digits and hyphens, unique in the array and none of the device names Windows reserves (`con`, `prn`, `aux`, `nul`, `com0`–`com9`, `lpt0`–`lpt9`);
 - `controlUrl`: the tailnet's control server, an `https://` address without a port;
 - `domains`: the DNS suffixes of the Organization's Environments, in ASCII (an international name in its `xn--` form).
 
