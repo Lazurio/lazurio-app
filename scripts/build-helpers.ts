@@ -1,6 +1,7 @@
-// Builds both helper processes where apps/desktop looks for them: helpers/tailnet/bin and
-// helpers/device/target/{debug,release}. `pnpm build:helpers --release` builds for packaging with
-// the app's version, from apps/desktop/package.json or `--app-version <version>`.
+// Builds both helpers where apps/desktop looks for them (helpers/tailnet/bin, helpers/device/target)
+// and places the verified engine of helpers/device/engine.lock next to the device helper.
+// `--release` builds for packaging with the app's version (apps/desktop/package.json or
+// `--app-version <version>`).
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@lazurio/app-shared/HostProcess";
@@ -9,8 +10,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { bundleEngine } from "./lib/engine-fetch.ts";
 import { appVersionArgument, helperBuild } from "./lib/helper-build.ts";
-import { runInherited } from "./lib/run.ts";
+import { runCaptured, runInherited } from "./lib/run.ts";
 
 const decodeDesktopPackage = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
@@ -40,6 +42,13 @@ const program = Effect.gen(function* () {
   if ("invalidVersion" in build)
     return yield* new InvalidAppVersion({ version: build.invalidVersion });
 
+  // The engine first: a refused engine stops the build before anything is built.
+  yield* bundleEngine({
+    lockPath: path.join(root, "helpers", "device", "engine.lock"),
+    outputDirectory: path.join(root, "helpers", "device", "target", release ? "release" : "debug"),
+    release,
+    runner: (command, args) => runCaptured(command, args, root),
+  });
   yield* runInherited("go", build.go, root);
   // From its own directory, so that rustup uses the toolchain of its rust-toolchain.toml.
   yield* runInherited("cargo", build.cargo, path.join(root, "helpers", "device"), build.cargoEnv);
