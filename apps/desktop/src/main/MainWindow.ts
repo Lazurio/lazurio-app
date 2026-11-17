@@ -9,12 +9,14 @@ import { hardenSession, registerView } from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
 import { destinationOf } from "./Navigation.ts";
 
-// The main window: a local window with the preload bridge, and below it at most one remote view
-// for a page of the web Lazurio, which gets no preload and its own session.
+// The main window: a local window with the preload bridge in a column on the left, and beside it
+// at most one remote view for a page of the web Lazurio, which gets no preload and its own session.
+// The column keeps the tailnets' status, their advice and the update controls in sight while a
+// page is open (until the GEN4 window replaces this layout).
 
 // The session of every remote view; the tailnet gives it its PAC script (Tailnet.ts).
 export const REMOTE_PARTITION = "persist:lazurio-remote";
-const HEADER_HEIGHT = 120;
+const LOCAL_COLUMN_WIDTH = 360;
 
 export interface MainWindowOptions {
   readonly preloadPath: string;
@@ -81,7 +83,12 @@ const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
   window.contentView.addChildView(view);
   const layout = () => {
     const [width = 0, height = 0] = window.getContentSize();
-    view.setBounds({ x: 0, y: HEADER_HEIGHT, width, height: Math.max(0, height - HEADER_HEIGHT) });
+    view.setBounds({
+      x: LOCAL_COLUMN_WIDTH,
+      y: 0,
+      width: Math.max(0, width - LOCAL_COLUMN_WIDTH),
+      height,
+    });
   };
   layout();
   window.on("resize", layout);
