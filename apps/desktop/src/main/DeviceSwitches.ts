@@ -115,7 +115,8 @@ export interface DeviceSwitches {
   readonly setSwitch: (origin: string, on: boolean) => Effect.Effect<void, DeviceSwitchError>;
   readonly addEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
   readonly removeEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
-  readonly signOut: Effect.Effect<void>;
+  // Fails with not-saved when the sealed session could not be removed: the next start opens it.
+  readonly signOut: Effect.Effect<void, DeviceSwitchError>;
   // The address the main window's page shows now.
   readonly pageShown: (address: string) => void;
 }
@@ -432,7 +433,9 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       Effect.gen(function* () {
         for (const origin of entries.keys()) yield* turnOff(origin);
         if (Option.isSome(signInFiber)) yield* Fiber.interrupt(signInFiber.value);
-        yield* auth.signOut;
+        yield* auth.signOut.pipe(
+          Effect.mapError(() => new DeviceSwitchError({ problem: "not-saved" })),
+        );
       }),
     ).pipe(Effect.withSpan("DeviceSwitches.signOut")),
     pageShown: (address) => {

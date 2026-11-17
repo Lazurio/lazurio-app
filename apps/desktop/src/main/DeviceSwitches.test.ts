@@ -17,6 +17,7 @@ import {
   AuthUnreachableError,
   HandOverError,
   SignedOutError,
+  SignOutError,
   type AuthClientShape,
   type AuthState,
   type HandOver,
@@ -46,6 +47,7 @@ const fakeAuth = (initial: AuthState) =>
     const handOverAnswers: Array<HandOverAnswer> = [];
     const handOverOrigins: Array<string> = [];
     const calls = { signIn: 0, signOut: 0 };
+    const signOutAnswers: Array<"ok" | "not-removed"> = [];
     let issued = 0;
     const shape: AuthClientShape = {
       state: SubscriptionRef.get(state),
@@ -59,6 +61,9 @@ const fakeAuth = (initial: AuthState) =>
       signOut: Effect.gen(function* () {
         calls.signOut += 1;
         yield* SubscriptionRef.set(state, "signedOut");
+        if (signOutAnswers.shift() === "not-removed") {
+          return yield* new SignOutError({ reason: "session-not-removed" });
+        }
       }),
       handOver: (origin) =>
         Effect.gen(function* () {
@@ -79,7 +84,7 @@ const fakeAuth = (initial: AuthState) =>
           } satisfies HandOver;
         }),
     };
-    return { shape, state, signIns, handOverAnswers, handOverOrigins, calls };
+    return { shape, state, signIns, handOverAnswers, handOverOrigins, signOutAnswers, calls };
   });
 
 const memoryEnvironments = (origins: ReadonlyArray<string>) => {
@@ -423,6 +428,23 @@ describe("DeviceSwitches", () => {
       );
       assert.deepStrictEqual(stopsOf(helper).toSorted(), [ORIGIN, OTHER].toSorted());
       yield* stateWhere(switches, (current) => current.account === "signed-out");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("tells the window when the sign-out does not last past a restart", () =>
+    Effect.gen(function* () {
+      const { helper, auth, switches } = yield* setUp({ account: "signedIn" });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      auth.signOutAnswers.push("not-removed");
+      const failure = yield* Effect.flip(switches.signOut);
+      assert.strictEqual(failure.problem, "not-saved");
+      // The switches are off and the channel stopped all the same.
+      assert.deepStrictEqual(switches.current().switches[0]?.switch, {
+        phase: "off",
+        problem: null,
+      });
+      assert.deepStrictEqual(stopsOf(helper), [ORIGIN]);
     }).pipe(Effect.scoped),
   );
 

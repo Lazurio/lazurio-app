@@ -48,6 +48,28 @@ const readBody = (request: NodeHttp.IncomingMessage): Promise<string> =>
     request.on("error", reject);
   });
 
+// The nonce of each authorization, by its code, for the ID token the code buys.
+const nonces = new Map<string, string>();
+const segment = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+// An unsigned ID token: the app takes it straight from the token endpoint over TLS, so it checks
+// its claims, not a signature (AuthClient).
+const idToken = (nonce: string) => {
+  return [
+    segment({ alg: "none", typ: "JWT" }),
+    segment({
+      iss: issuer,
+      aud: "lazurio-app",
+      azp: "lazurio-app",
+      sub: "e2e-person",
+      nonce,
+      // Fixed: issued in the past and valid far ahead, whatever the runner's clock says.
+      iat: 1_600_000_000,
+      exp: 4_102_444_800,
+    }),
+    "",
+  ].join(".");
+};
+
 const json = (response: NodeHttp.ServerResponse, status: number, body: unknown) => {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
@@ -70,22 +92,30 @@ const serveAuth = async (request: NodeHttp.IncomingMessage, response: NodeHttp.S
     case "GET /protocol/openid-connect/auth": {
       signIns += 1;
       const back = new URL(url.searchParams.get("redirect_uri") ?? "");
-      back.searchParams.set("code", `code-${randomPart(8)}`);
+      const code = `code-${randomPart(8)}`;
+      nonces.set(code, url.searchParams.get("nonce") ?? "");
+      back.searchParams.set("code", code);
       back.searchParams.set("state", url.searchParams.get("state") ?? "");
       back.searchParams.set("iss", issuer);
       response.writeHead(302, { location: back.toString() });
       response.end();
       return;
     }
-    case "POST /protocol/openid-connect/token":
+    case "POST /protocol/openid-connect/token": {
+      const form = new URLSearchParams(body);
+      const nonce = nonces.get(form.get("code") ?? "");
       return json(response, 200, {
+        ...(form.get("grant_type") === "authorization_code" && nonce !== undefined
+          ? { id_token: idToken(nonce) }
+          : {}),
         access_token: `access-${randomPart(16)}`,
         token_type: "Bearer",
         expires_in: 300,
         refresh_token: `refresh-${randomPart(16)}`,
         scope: "openid lazurio-device-entry",
-        grant: new URLSearchParams(body).get("grant_type"),
+        grant: form.get("grant_type"),
       });
+    }
     case "POST /protocol/openid-connect/revoke":
       response.writeHead(200);
       response.end();

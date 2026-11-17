@@ -30,7 +30,7 @@ export interface DeviceControls {
   readonly setSwitch: (origin: string, on: boolean) => Effect.Effect<void, DeviceSwitchError>;
   readonly addEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
   readonly removeEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
-  readonly signOut: Effect.Effect<void>;
+  readonly signOut: Effect.Effect<void, DeviceSwitchError>;
 }
 
 const isLocalSender = (event: Electron.IpcMainInvokeEvent): boolean => {

@@ -305,10 +305,24 @@ fn upgrade<S: Read + Write>(stream: &mut S, host: &str, hand_over: &[u8]) -> Res
             .map(|(_, value)| value.trim())
     };
     if status != 101 {
-        // Only delay-seconds; an HTTP date is left to the back-off.
-        let retry_after = header("retry-after")
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(Duration::from_secs);
+        // Delay-seconds, or an HTTP date (IMF-fixdate) measured against the answer's own `Date`
+        // when it has one, so the computer's clock does not matter; other date forms are left to
+        // the back-off.
+        let retry_after = header("retry-after").and_then(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .map(Duration::from_secs)
+                .or_else(|| {
+                    let until = imf_fixdate(value)?;
+                    let now = header("date").and_then(imf_fixdate).unwrap_or_else(|| {
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |since| since.as_secs())
+                    });
+                    Some(Duration::from_secs(until.saturating_sub(now)))
+                })
+        });
         return Err(WireError::Http {
             status,
             retry_after,
@@ -543,6 +557,60 @@ fn ws_error(error: tungstenite::Error) -> WireError {
     }
 }
 
+/// An HTTP date in its preferred form, IMF-fixdate (RFC 9110, 5.6.7): `Sun, 06 Nov 1994 08:49:37
+/// GMT`, as seconds since the Unix epoch. The obsolete forms answer `None`.
+fn imf_fixdate(value: &str) -> Option<u64> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (_, rest) = value.split_once(", ")?;
+    let mut parts = rest.split(' ');
+    let (day, month, year, time, zone) = (
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+    );
+    if parts.next().is_some() || zone != "GMT" || day.len() != 2 || year.len() != 4 {
+        return None;
+    }
+    let day: u64 = day.parse().ok()?;
+    let month = u64::try_from(MONTHS.iter().position(|name| *name == month)?).ok()? + 1;
+    let year: u64 = year.parse().ok()?;
+    let mut clock = time.split(':');
+    let (hour, minute, second): (u64, u64, u64) = (
+        clock.next()?.parse().ok()?,
+        clock.next()?.parse().ok()?,
+        clock.next()?.parse().ok()?,
+    );
+    if clock.next().is_some() || hour > 23 || minute > 59 || second > 60 || year < 1970 {
+        return None;
+    }
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days_in_month = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day == 0 || day > days_in_month {
+        return None;
+    }
+    // Days from the civil date (Howard Hinnant's algorithm, years from March).
+    let (y, m) = if month <= 2 {
+        (year - 1, month + 9)
+    } else {
+        (year, month - 3)
+    };
+    let era = y / 400;
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * m + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic)]
 mod tests {
@@ -648,10 +716,33 @@ mod tests {
     }
 
     #[test]
+    fn an_imf_fixdate_is_read_as_seconds_since_the_epoch() {
+        assert_eq!(imf_fixdate("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        assert_eq!(
+            imf_fixdate("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(784_111_777)
+        );
+        assert_eq!(
+            imf_fixdate("Wed, 21 Oct 2026 07:28:00 GMT"),
+            Some(1_792_567_680)
+        );
+        assert_eq!(imf_fixdate("Sat, 29 Feb 2025 00:00:00 GMT"), None);
+        for other in [
+            "Sunday, 06-Nov-94 08:49:37 GMT",
+            "Sun Nov  6 08:49:37 1994",
+            "Sun, 06 Nov 1994 08:49:37 UTC",
+            "Sun, 06 Nov 1994 24:00:00 GMT",
+            "",
+        ] {
+            assert_eq!(imf_fixdate(other), None, "{other}");
+        }
+    }
+
+    #[test]
     fn a_refused_upgrade_carries_its_retry_after_in_seconds() {
         for (value, expected) in [
             ("30", Some(Duration::from_secs(30))),
-            ("Wed, 21 Oct 2026 07:28:00 GMT", None),
+            ("Sun Nov  6 08:49:37 1994", None),
         ] {
             let environment = FakeEnvironment::refusing_with_retry_after(429, value);
             let result = connect(
