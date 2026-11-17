@@ -45,8 +45,8 @@ What exists:
      - The directory returns tailnets, each once, with the Organizations each serves, since one tailnet can serve several Organizations. The app never derives a control server from an Organization's name.
      - The app keeps the last valid list, so a computer already joined does not need the directory when it starts.
    - **Until then, on Windows, an IT policy for the alpha at a client.** It is an exception to decision 1 of the network part, which assigns tailnets by account: the policy assigns them by computer.
-     - The Organization's IT writes the string value `Tailnets` under `HKLM\SOFTWARE\Policies\Lazurio\App`, in the built-in directory's JSON, through Group Policy or its device management. Only an administrator writes there, so a person or a program without administrator rights cannot replace it.
-     - The app reads it through the system's own `reg.exe` (the 64-bit view of the registry) when it starts.
+     - The Organization's IT writes the string value `Tailnets` under `HKLM\SOFTWARE\Policies\Lazurio\App`, in the built-in directory's JSON, through Group Policy or its device management. Only an administrator writes there. Lazurio App itself is installed per user, though, so a program with the person's rights can change the app as well as what it reads. The policy keeps the list of tailnets an administrator's setting; it does not protect an installation the person's own programs can change.
+     - The app's own tailnet helper reads it through the registry's API (`lazurio-tailnet read-policy`, the 64-bit view) when the app starts, so neither the path nor the environment chooses the program that answers.
      - Where a policy exists it replaces the built-in directory. A policy that does not decode joins no tailnet rather than the built-in one.
      - The same check of Lazurio's domains applies. The exception ends with task 644.
      - How IT deploys it: [Tailnets of Lazurio App set by IT](../it/tailnet-policy.md).

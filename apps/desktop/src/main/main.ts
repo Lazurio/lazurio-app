@@ -88,8 +88,9 @@ const packagedDirectory = Effect.gen(function* () {
       directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
     };
   }
-  const systemRoot = yield* Config.String("SystemRoot").pipe(Config.withDefault("C:\\Windows"));
-  const policy = yield* TailnetPolicy.readWindows(systemRoot).pipe(
+  // The packaged tailnet helper reads the policy through the registry's API.
+  const helper = path.join(process.resourcesPath, "helpers", "lazurio-tailnet.exe");
+  const policy = yield* TailnetPolicy.readWindows(helper).pipe(
     Effect.tapError((error) => Effect.logWarning("cannot read the tailnet policy", error)),
     Effect.orElseSucceed(() => Option.none<string>()),
   );

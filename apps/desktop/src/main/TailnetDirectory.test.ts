@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import { pacDataUrl, pacScript } from "./Tailnet.ts";
 import { fromFile, fromText, nodeHostname, refusalOf } from "./TailnetDirectory.ts";
 
 const withDirectory = <A, E>(
@@ -87,6 +88,9 @@ describe("refusalOf", () => {
   it("takes a control server and suffixes below Lazurio's domains", () => {
     assert.isUndefined(refusalOf(entry("https://headscale.org.lazurio.io", ["org.lazurio.io"])));
     assert.isUndefined(refusalOf(entry("https://control.lazurio.ai/", ["org.lazurio.ai."])));
+    assert.isUndefined(
+      refusalOf(entry("https://headscale.org.lazurio.io", ["xn--org-yva.lazurio.io"])),
+    );
   });
 
   it("refuses what could send a person's names elsewhere", () => {
@@ -105,9 +109,30 @@ describe("refusalOf", () => {
     for (const [controlUrl, domains] of refused) {
       assert.isString(refusalOf(entry(controlUrl, domains)), `${controlUrl} ${domains.join(",")}`);
     }
-    assert.isString(
+  });
+
+  it("refuses a suffix the PAC script cannot carry as it is", () => {
+    for (const domain of [
+      "ž.lazurio.io",
+      "org_x.lazurio.io",
+      "-org.lazurio.io",
+      "org..lazurio.io",
+    ]) {
+      assert.isString(refusalOf(entry("https://headscale.org.lazurio.io", [domain])), domain);
+    }
+  });
+
+  it("takes as a name only one plain path component, since it names the tailnet's files", () => {
+    const names = ["", " ", "../../outside", "..", "a/b", "a\\b", "Org", "org.x", "-org", "C:org"];
+    for (const tailnet of [...names, "x".repeat(64)]) {
+      assert.isString(
+        refusalOf({ tailnet, controlUrl: "https://h.org.lazurio.io", domains: ["org.lazurio.io"] }),
+        JSON.stringify(tailnet),
+      );
+    }
+    assert.isUndefined(
       refusalOf({
-        tailnet: " ",
+        tailnet: "lazurio-example-1",
         controlUrl: "https://h.org.lazurio.io",
         domains: ["org.lazurio.io"],
       }),
@@ -136,9 +161,43 @@ describe("fromText", () => {
       assert.deepStrictEqual(directory.refused, [
         {
           tailnet: "other",
-          reason: "its control server headscale.example.com lies outside Lazurio's domains",
+          reason: "its control server headscale.example.com is no name below Lazurio's domains",
         },
       ]);
+    }),
+  );
+
+  it.effect("joins the valid entries of a mixed directory and builds their PAC script", () =>
+    Effect.gen(function* () {
+      const directory = yield* fromText(
+        JSON.stringify([
+          {
+            tailnet: "accent",
+            controlUrl: "https://headscale.org.lazurio.io",
+            domains: ["ž.lazurio.io"],
+          },
+          entry("https://headscale.org.lazurio.io", ["org.lazurio.io"]),
+          {
+            tailnet: "../../outside",
+            controlUrl: "https://h.x.lazurio.io",
+            domains: ["x.lazurio.io"],
+          },
+          { tailnet: "org", controlUrl: "https://h.y.lazurio.io", domains: ["y.lazurio.io"] },
+        ]),
+        "Desk",
+      );
+      assert.deepStrictEqual(
+        directory.tailnets.map((tailnet) => tailnet.tailnet),
+        ["org"],
+      );
+      assert.deepStrictEqual(
+        directory.refused.map((refused) => refused.tailnet),
+        ["accent", "../../outside", "org"],
+      );
+      assert.strictEqual(directory.refused[2]?.reason, "an earlier entry has the same name");
+      const domains = directory.tailnets.flatMap((tailnet) => tailnet.domains);
+      const proxy = { host: "127.0.0.1", port: 1 };
+      assert.isTrue(pacDataUrl(pacScript(domains, proxy)).startsWith("data:"));
     }),
   );
 });

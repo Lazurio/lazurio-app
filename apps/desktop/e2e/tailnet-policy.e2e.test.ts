@@ -1,55 +1,97 @@
-// End-to-end on Windows: the IT policy of tailnets is read through the system's reg.exe, as a
-// packaged app reads it (TailnetPolicy, docs/adr/0008). The test writes its own key under HKCU,
-// since only an administrator writes the policy's key under HKLM, and removes it afterwards.
+// End-to-end on Windows: the tailnet helper the app ships reads the IT policy of tailnets
+// (HKLM\SOFTWARE\Policies\Lazurio\App, value Tailnets) through the registry's API, as a packaged
+// app asks it to (TailnetPolicy, docs/adr/0008), also when the environment names another system
+// directory and no path. The runner's account is an administrator, so the test writes the real
+// policy and removes it; a computer that already has one is left alone.
+// @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the built helper on disk.
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@lazurio/app-shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { readWindows } from "../src/main/TailnetPolicy.ts";
 
 const POLICY = `[{"tailnet":"org","controlUrl":"https://headscale.org.lazurio.io","domains":["org.lazurio.io"]}]`;
+const LAZURIO_KEY = "HKLM\\SOFTWARE\\Policies\\Lazurio";
+const POLICY_KEY = `${LAZURIO_KEY}\\App`;
+const HELPER = NodePath.resolve(
+  import.meta.dirname,
+  "../../../helpers/tailnet/bin/lazurio-tailnet.exe",
+);
 
-const reg = (systemRoot: string, args: ReadonlyArray<string>) =>
+const run = (command: string, args: ReadonlyArray<string>, env?: Record<string, string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const child = yield* spawner.spawn(
-      ChildProcess.make(`${systemRoot}\\System32\\reg.exe`, [...args], {
-        stdout: "ignore",
+      ChildProcess.make(command, [...args], {
         stderr: "ignore",
+        ...(env === undefined ? {} : { env, extendEnv: false }),
       }),
     );
-    return Number(yield* child.exitCode);
+    const [output, exitCode] = yield* Effect.all(
+      [
+        child.stdout.pipe(
+          Stream.decodeText(),
+          Stream.runFold(
+            () => "",
+            (text, chunk) => text + chunk,
+          ),
+        ),
+        child.exitCode.pipe(Effect.map(Number)),
+      ],
+      { concurrency: "unbounded" },
+    );
+    return { output, exitCode };
   }).pipe(Effect.scoped);
 
 describe("the tailnet policy on Windows", () => {
-  it.effect("reads the Tailnets string back, and nothing from a key without it", (context) =>
-    Effect.gen(function* () {
-      if ((yield* HostProcess.Platform) !== "win32") {
-        context.skip("reg.exe and the registry exist only on Windows");
-      }
-      const systemRoot = yield* Config.String("SystemRoot").pipe(Config.withDefault("C:\\Windows"));
-      const key = "HKCU\\Software\\LazurioAppE2E\\TailnetPolicy";
-      yield* Effect.acquireRelease(
-        reg(systemRoot, [
-          "add",
-          key,
-          "/v",
-          "Tailnets",
-          "/t",
-          "REG_SZ",
-          "/d",
-          POLICY,
-          "/f",
-          "/reg:64",
-        ]),
-        () => reg(systemRoot, ["delete", key, "/f", "/reg:64"]).pipe(Effect.ignore),
-      );
-      assert.deepStrictEqual(yield* readWindows(systemRoot, key), Option.some(POLICY));
-      assert.isTrue(Option.isNone(yield* readWindows(systemRoot, `${key}Missing`)));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  it.effect(
+    "is read by the app's helper through the registry, whatever the environment",
+    (context) =>
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) !== "win32") {
+          context.skip("the registry exists only on Windows");
+        }
+        const systemRoot = yield* Config.String("SystemRoot").pipe(
+          Config.withDefault("C:\\Windows"),
+        );
+        const reg = `${systemRoot}\\System32\\reg.exe`;
+        if ((yield* run(reg, ["query", LAZURIO_KEY, "/reg:64"])).exitCode === 0) {
+          context.skip("this computer already has a Lazurio policy, which the test does not touch");
+        }
+        yield* Effect.acquireRelease(
+          run(reg, [
+            "add",
+            POLICY_KEY,
+            "/v",
+            "Tailnets",
+            "/t",
+            "REG_SZ",
+            "/d",
+            POLICY,
+            "/f",
+            "/reg:64",
+          ]),
+          () => run(reg, ["delete", LAZURIO_KEY, "/f", "/reg:64"]).pipe(Effect.ignore),
+        );
+
+        assert.deepStrictEqual(yield* readWindows(HELPER), Option.some(POLICY));
+        // An environment that names another system directory and no path changes nothing.
+        const forged = yield* run(HELPER, ["read-policy"], {
+          SystemRoot: "C:\\Forged",
+          windir: "C:\\Forged",
+          PATH: "",
+        });
+        assert.deepStrictEqual(forged, { output: POLICY, exitCode: 0 });
+
+        yield* run(reg, ["delete", POLICY_KEY, "/v", "Tailnets", "/f", "/reg:64"]);
+        assert.isTrue(Option.isNone(yield* readWindows(HELPER)));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

@@ -5,6 +5,7 @@ go 1.27.4
 tool google.golang.org/protobuf/cmd/protoc-gen-go
 
 require (
+	golang.org/x/sys v0.49.0
 	google.golang.org/protobuf v1.36.12
 	tailscale.com v1.105.0-pre.0.20261029222943-96467f7d1642
 )
@@ -52,7 +53,6 @@ require (
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect

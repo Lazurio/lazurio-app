@@ -24,14 +24,28 @@ const LAZURIO_DOMAINS: ReadonlyArray<string> = ["lazurio.io", "lazurio.ai"];
 
 const normalize = (name: string): string => name.toLowerCase().replace(/^\.+|\.+$/gu, "");
 
+// An ASCII DNS name of letters, digits and hyphens: the PAC script carries it as it is, and Chromium
+// takes the script only as base64, which has no other characters. An international name comes as
+// its xn-- form.
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+const isDnsName = (name: string): boolean =>
+  name.length <= 253 && name.split(".").every((label) => LABEL.test(label));
+
 const belowLazurio = (name: string): boolean => {
   const normalized = normalize(name);
-  return LAZURIO_DOMAINS.some((domain) => normalized.endsWith(`.${domain}`));
+  return (
+    isDnsName(normalized) && LAZURIO_DOMAINS.some((domain) => normalized.endsWith(`.${domain}`))
+  );
 };
+
+// A tailnet's name names its key and state files (Tailnet.run), so it is one plain path component.
+const TAILNET_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 
 // Why an entry is refused, or undefined when the app may join its tailnet.
 export const refusalOf = (entry: DirectoryEntry): string | undefined => {
-  if (entry.tailnet.trim() === "") return "it has no name";
+  if (!TAILNET_NAME.test(entry.tailnet)) {
+    return "its name is not lower-case letters, digits and hyphens";
+  }
   const control = URL.parse(entry.controlUrl);
   if (control === null || control.protocol !== "https:") {
     return "its control server is no https:// address";
@@ -40,11 +54,13 @@ export const refusalOf = (entry: DirectoryEntry): string | undefined => {
     return "its control server carries credentials or a port";
   }
   if (!belowLazurio(control.hostname)) {
-    return `its control server ${control.hostname} lies outside Lazurio's domains`;
+    return `its control server ${control.hostname} is no name below Lazurio's domains`;
   }
   if (entry.domains.length === 0) return "it names no DNS suffix";
   const outside = entry.domains.find((domain) => !belowLazurio(domain));
-  if (outside !== undefined) return `its DNS suffix ${outside} lies outside Lazurio's domains`;
+  if (outside !== undefined) {
+    return `its DNS suffix ${JSON.stringify(outside)} is no ASCII name below Lazurio's domains`;
+  }
   return undefined;
 };
 
@@ -73,9 +89,13 @@ export const fromText = Effect.fn("TailnetDirectory.fromText")(function* (
   const hostname = nodeHostname(computer);
   const tailnets: Array<TailnetConfig> = [];
   const refused: Array<{ tailnet: string; reason: string }> = [];
+  const names = new Set<string>();
   for (const entry of entries) {
-    const reason = refusalOf(entry);
+    const reason = names.has(entry.tailnet)
+      ? "an earlier entry has the same name"
+      : refusalOf(entry);
     if (reason === undefined) {
+      names.add(entry.tailnet);
       tailnets.push({
         tailnet: entry.tailnet,
         controlUrl: entry.controlUrl,

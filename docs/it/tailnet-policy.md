@@ -18,9 +18,9 @@ The policy only says where the tailnets are. It grants nobody access:
 
 Each tailnet has three fields:
 
-- `tailnet`: the tailnet's name, as Lazurio gives it to the Organization;
+- `tailnet`: the tailnet's name, as Lazurio gives it to the Organization: lower-case letters, digits and hyphens, unique in the array;
 - `controlUrl`: the tailnet's control server, an `https://` address without a port;
-- `domains`: the DNS suffixes of the Organization's Environments.
+- `domains`: the DNS suffixes of the Organization's Environments, in ASCII (an international name in its `xn--` form).
 
 ```text
 [{"tailnet":"<organization>","controlUrl":"https://headscale.<organization>.lazurio.io","domains":["<organization>.lazurio.io"]}]
@@ -32,7 +32,7 @@ Lazurio gives the Organization the exact values. Lazurio App takes only control 
 
 - It reads the policy each time it starts. A policy that exists replaces the tailnets built into the app.
 - A policy that is not valid JSON in this shape joins no tailnet at all.
-- Only an administrator can write under `HKEY_LOCAL_MACHINE\SOFTWARE\Policies`, so a person without administrator rights cannot change the tailnets.
+- Only an administrator can write under `HKEY_LOCAL_MACHINE\SOFTWARE\Policies`, so the policy stays an administrator's setting. Lazurio App is installed per user, though, and a program running with the person's rights can change the app itself; the policy does not protect against that.
 - Updates of Lazurio App keep the policy, because it lives outside the app.
 
 ## Deploying it
