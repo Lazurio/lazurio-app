@@ -19,7 +19,7 @@ export interface Keystore {
 }
 
 // Linux backends that are no keystore: "basic_text" seals with a password built into Chromium.
-const NO_KEYSTORE: ReadonlySet<string> = new Set(["basic_text", "unknown"]);
+export const NO_KEYSTORE: ReadonlySet<string> = new Set(["basic_text", "unknown"]);
 
 export class NodeKeyError extends Schema.TaggedError<NodeKeyError>()("NodeKeyError", {
   // no-keystore: no keystore to seal with; key-inaccessible: the key's file cannot be checked or
