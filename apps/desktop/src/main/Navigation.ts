@@ -37,6 +37,8 @@ const LAZURIO_APPS_DOMAIN = "lazurio.app";
 // Lazurio Auth, which signs a person in to Environments, and the Dashboard. Nothing else on
 // lazurio.ai is Lazurio's page for the app.
 const LAZURIO_AUTH_HOST = "auth.lazurio.ai";
+// The issuer of the app's own public client (docs/adr/0008, point 7), and of nothing else.
+export const LAZURIO_AUTH_ISSUER = `https://${LAZURIO_AUTH_HOST}/realms/workspace`;
 const LAZURIO_HOSTS: ReadonlySet<string> = new Set([LAZURIO_AUTH_HOST, "dashboard.lazurio.ai"]);
 // Lazurio Auth signs in with GitHub. When GitHub does not know the person yet, they sign in on
 // these pages of github.com: the sign-in form, its POST, two-factor, passkeys, device checks and

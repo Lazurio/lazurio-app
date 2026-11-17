@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Proposed:** 2026-11-17, for the proof of concept of plan LZD-0017 (task 640)
-- **Amended:** 2026-11-17, with Matěj's decisions on the source of a person's tailnets, on the IT policy for Lazurio App (Alpha) at a client and on two sign-ins in the first version (points 6 and 7, open questions 1 and 2)
+- **Amended:** 2026-11-17, with Matěj's decisions on the source of a person's tailnets, on the IT policy for Lazurio App (Alpha) at a client and on two sign-ins in the first version (points 6 and 7, open questions 1 and 2), and the issuer of the app's own client (consequences)
 - **Related:** decision 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md), [ADR 0002](0002-sign-in-pages.md) (pages of a remote view), [ADR 0003](0003-node-state-sealed.md) (sealed node state), [ADR 0005](0005-installers-updates-and-channels.md) (updates)
 
 ## Context
@@ -65,8 +65,8 @@ What exists:
 - **A directory built into a public repository names only Lazurio's own tailnets.** A customer Organization's control server never goes into this repository or into a published build. It reaches the app through the IT policy on the Organization's own computers, and later through the directory at Lazurio Auth.
 - **The IT policy assigns tailnets by computer.** Everyone who signs in on a computer with the policy gets its tailnets offered, and only members get past Lazurio Auth's check. It is accepted for Lazurio App (Alpha) at a client and ends with task 644.
 - **The directory gives only a control server and DNS suffixes**, which are no secrets: the names are public in DNS, and the control server admits only members.
-- **The app never names the sign-in issuer for its own sign-ins.** A node signs in through the login address its control server gives, and an Environment through its gateway's redirects. An issuer that moves therefore changes neither the node's nor the Environment's sign-in.
-- **The issuer's host appears in exactly one place:** `LAZURIO_AUTH_HOST` in `apps/desktop/src/main/Navigation.ts`. ADR 0002 uses it to let a remote view show the issuer and, only during a sign-in it answered, GitHub's sign-in pages.
+- **A node's and an Environment's sign-ins never name the issuer:** a node signs in through the login address its control server gives, and an Environment through its gateway's redirects. Only the app's own client (point 7) names it, through `LAZURIO_AUTH_ISSUER`. An issuer that moves therefore changes neither the node's nor the Environment's sign-in.
+- **The issuer appears in exactly two lines of `apps/desktop/src/main/Navigation.ts`:** its host `LAZURIO_AUTH_HOST`, which ADR 0002 uses, and the issuer `LAZURIO_AUTH_ISSUER` derived from it, which only the app's own client uses (point 7). ADR 0002 uses it to let a remote view show the issuer and, only during a sign-in it answered, GitHub's sign-in pages.
   - An issuer on another subdomain of `lazurio.io` stays allowed as a page of Lazurio. The constant still has to name it for the GitHub exception.
   - An issuer outside `lazurio.io` and `auth.lazurio.ai` needs that constant and an amendment of ADR 0002 and decision 0248.
 
