@@ -316,14 +316,38 @@ const program = Effect.gen(function* () {
         Effect.orElseSucceed(() => Option.none()),
       )
     : Option.none();
+  // GitHub's answer without following a redirect (ReleaseFeed.Answer); Electron's net.fetch with
+  // redirect "manual" fails instead of answering, so this asks with net.request.
   const githubGet = (url: string) =>
-    Effect.tryPromise({
-      try: async () => {
-        const response = await Electron.net.fetch(url);
-        return { status: response.status, url: response.url, text: await response.text() };
-      },
-      catch: (cause) => new ReleaseFeed.ReleaseFeedError({ cause }),
-    });
+    Effect.callback<ReleaseFeed.Answer, ReleaseFeed.ReleaseFeedError>((resume, signal) => {
+      const request = Electron.net.request({ url, redirect: "manual" });
+      const fail = (cause: unknown) =>
+        resume(Effect.fail(new ReleaseFeed.ReleaseFeedError({ cause })));
+      request.on("redirect", (status, _method, location) => {
+        resume(Effect.succeed({ status, location, text: "" }));
+        request.abort();
+      });
+      request.on("response", (response) => {
+        const decoder = new TextDecoder();
+        let text = "";
+        response.on("data", (chunk) => {
+          text += decoder.decode(chunk, { stream: true });
+        });
+        response.on("end", () =>
+          resume(
+            Effect.succeed({
+              status: response.statusCode,
+              location: undefined,
+              text: text + decoder.decode(),
+            }),
+          ),
+        );
+        response.on("error", fail);
+      });
+      request.on("error", fail);
+      signal.addEventListener("abort", () => request.abort());
+      request.end();
+    }).pipe(Effect.timeout("30 seconds"));
   const updates = yield* Updates.make({
     appVersion: Electron.app.getVersion(),
     packaged: Electron.app.isPackaged,

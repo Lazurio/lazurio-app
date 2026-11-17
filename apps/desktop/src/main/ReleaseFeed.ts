@@ -72,15 +72,17 @@ export class ReleaseFeedError extends Schema.TaggedError<ReleaseFeedError>()("Re
   cause: Schema.Defect(),
 }) {}
 
-interface Answer {
+// GitHub's answer as it came, with a redirect not followed: Electron's net.fetch does not tell
+// where a redirect led, and for the stable channel the redirect itself is the answer.
+export interface Answer {
   readonly status: number;
-  // The address the answer came from, after GitHub's redirects.
-  readonly url: string;
+  // Where a redirect sends the request on; none for any other answer.
+  readonly location: string | undefined;
   readonly text: string;
 }
 
 // Some(true) or Some(false) when GitHub answered, none when it did not (a network or other
-// failure): then the check's failure stands. GitHub sends /releases/latest on to the latest stable
+// failure): then the check's failure stands. GitHub redirects /releases/latest to the latest stable
 // release's tag, or to the list of releases when there is none; a nightly is in the Atom feed.
 export const channelHasRelease = Effect.fn("ReleaseFeed.channelHasRelease")(function* <E>(
   repository: { readonly owner: string; readonly repo: string },
@@ -92,12 +94,14 @@ export const channelHasRelease = Effect.fn("ReleaseFeed.channelHasRelease")(func
     Effect.option,
   );
   if (Option.isNone(answer)) return Option.none<boolean>();
-  const { status, url, text } = answer.value;
+  const { status, location, text } = answer.value;
   if (channel === "latest") {
-    if (status !== 200) return Option.none<boolean>();
-    if (url.startsWith(`${base}/tag/`)) return Option.some(true);
-    return url === base || url === `${base}/` ? Option.some(false) : Option.none<boolean>();
+    if (status !== 302 || location === undefined) return Option.none<boolean>();
+    if (location.startsWith(`${base}/tag/`)) return Option.some(true);
+    return location === base || location === `${base}/`
+      ? Option.some(false)
+      : Option.none<boolean>();
   }
-  // Only the feed itself answers: not a page GitHub sent the request on to, nor anything else.
-  return status === 200 && url === `${base}.atom` ? atomHasNightly(text) : Option.none<boolean>();
+  // Only the feed itself answers, not a page GitHub sends the request on to.
+  return status === 200 ? atomHasNightly(text) : Option.none<boolean>();
 });

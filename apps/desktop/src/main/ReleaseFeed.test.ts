@@ -72,40 +72,52 @@ describe("atomHasNightly", () => {
 describe("channelHasRelease", () => {
   const RELEASES = "https://github.com/Lazurio/lazurio-app/releases";
   const answering =
-    (status: number, url = RELEASES, text = "") =>
+    (status: number, location?: string, text = "") =>
     () =>
-      Effect.succeed({ status, url, text });
+      Effect.succeed({ status, location, text });
 
-  // As github.com answers on 2026-11-17: /releases/latest redirects to the latest stable release's
-  // tag, or to the list of releases when there is no stable release.
-  it.effect("confirms stable absent only when GitHub sends the latest release to the list", () =>
-    Effect.gen(function* () {
-      assert.deepStrictEqual(
-        yield* channelHasRelease(REPOSITORY, "latest", answering(200, RELEASES)),
-        Option.some(false),
-      );
-      assert.deepStrictEqual(
-        yield* channelHasRelease(REPOSITORY, "latest", answering(200, `${RELEASES}/tag/v0.1.0`)),
-        Option.some(true),
-      );
-      assert.isTrue(Option.isNone(yield* channelHasRelease(REPOSITORY, "latest", answering(503))));
-      assert.isTrue(
-        Option.isNone(
-          yield* channelHasRelease(
-            REPOSITORY,
-            "latest",
-            answering(200, "https://github.com/login"),
+  // As github.com answers on 2026-11-17, read with Electron's net.request in the packaged app:
+  // /releases/latest redirects (302) to the latest stable release's tag, or to the list of
+  // releases when there is no stable release.
+  it.effect(
+    "confirms stable absent only when GitHub redirects the latest release to the list",
+    () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(
+          yield* channelHasRelease(REPOSITORY, "latest", answering(302, RELEASES)),
+          Option.some(false),
+        );
+        assert.deepStrictEqual(
+          yield* channelHasRelease(REPOSITORY, "latest", answering(302, `${RELEASES}/tag/v0.1.0`)),
+          Option.some(true),
+        );
+        assert.isTrue(
+          Option.isNone(yield* channelHasRelease(REPOSITORY, "latest", answering(503))),
+        );
+        // A page instead of a redirect, a redirect without its address, or one elsewhere.
+        assert.isTrue(
+          Option.isNone(yield* channelHasRelease(REPOSITORY, "latest", answering(200, undefined))),
+        );
+        assert.isTrue(
+          Option.isNone(yield* channelHasRelease(REPOSITORY, "latest", answering(302))),
+        );
+        assert.isTrue(
+          Option.isNone(
+            yield* channelHasRelease(
+              REPOSITORY,
+              "latest",
+              answering(302, "https://github.com/login"),
+            ),
           ),
-        ),
-      );
-      assert.isTrue(
-        Option.isNone(
-          yield* channelHasRelease(REPOSITORY, "latest", () =>
-            Effect.fail(new ReleaseFeedError({ cause: "offline" })),
+        );
+        assert.isTrue(
+          Option.isNone(
+            yield* channelHasRelease(REPOSITORY, "latest", () =>
+              Effect.fail(new ReleaseFeedError({ cause: "offline" })),
+            ),
           ),
-        ),
-      );
-    }),
+        );
+      }),
   );
 
   it.effect("reads a nightly from the releases' Atom feed, and asks the right address", () =>
@@ -114,7 +126,7 @@ describe("channelHasRelease", () => {
       const atom = (text: string) => (url: string) =>
         Effect.sync(() => {
           urls.push(url);
-          return { status: 200, url, text };
+          return { status: 200, location: undefined, text };
         });
       assert.deepStrictEqual(
         yield* channelHasRelease(REPOSITORY, "nightly", atom(feed())),
@@ -134,23 +146,21 @@ describe("channelHasRelease", () => {
 
   it.effect("answers nothing about a nightly unless the feed itself answered", () =>
     Effect.gen(function* () {
-      const unknown = (status: number, url: string, text: string) =>
-        channelHasRelease(REPOSITORY, "nightly", answering(status, url, text)).pipe(
+      const unknown = (status: number, location: string | undefined, text: string) =>
+        channelHasRelease(REPOSITORY, "nightly", answering(status, location, text)).pipe(
           Effect.map(Option.isNone),
         );
       const EMPTY_FEED = feed();
-      // Not found, or GitHub sent the request on to a sign-in page or elsewhere.
-      assert.isTrue(yield* unknown(404, `${RELEASES}.atom`, EMPTY_FEED));
-      assert.isTrue(yield* unknown(200, "https://github.com/login", EMPTY_FEED));
-      assert.isTrue(yield* unknown(200, RELEASES, EMPTY_FEED));
+      // Not found, or GitHub sends the request on to a sign-in page or elsewhere.
+      assert.isTrue(yield* unknown(404, undefined, EMPTY_FEED));
+      assert.isTrue(yield* unknown(302, "https://github.com/login", ""));
+      assert.isTrue(yield* unknown(301, RELEASES, ""));
       // The feed's address answered with a page, an empty body or a feed of another kind.
-      assert.isTrue(
-        yield* unknown(200, `${RELEASES}.atom`, "<!doctype html><title>Sign in</title>"),
-      );
-      assert.isTrue(yield* unknown(200, `${RELEASES}.atom`, ""));
-      assert.isTrue(yield* unknown(200, `${RELEASES}.atom`, "<feed></feed>"));
+      assert.isTrue(yield* unknown(200, undefined, "<!doctype html><title>Sign in</title>"));
+      assert.isTrue(yield* unknown(200, undefined, ""));
+      assert.isTrue(yield* unknown(200, undefined, "<feed></feed>"));
       // The feed's own answer, cut off before it closes.
-      assert.isTrue(yield* unknown(200, `${RELEASES}.atom`, `${FEED_START}<entry>`));
+      assert.isTrue(yield* unknown(200, undefined, `${FEED_START}<entry>`));
     }),
   );
 });
