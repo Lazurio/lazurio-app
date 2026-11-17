@@ -1,6 +1,8 @@
 // End-to-end tests only (main.ts, LAZURIO_APP_E2E_TAILNET_HELPER): lazurio-tailnet's protocol without
 // tsnet. A node needs a sign-in at once and runs once a GET of LAZURIO_FAKE_RUNNING_URL answers.
 // With LAZURIO_FAKE_UPSTREAM its proxy tunnels every CONNECT there, as the real one does.
+// @effect-diagnostics-next-line nodeBuiltinImport:off - The test's switch is a file on disk.
+import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The fake proxy is a plain HTTP server.
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
@@ -14,6 +16,9 @@ const upstream = process.env["LAZURIO_FAKE_UPSTREAM"];
 // LAZURIO_FAKE_FAIL_FIRST_CONNECT: the first tunnel fails as one to a node that cannot reach
 // its peer yet.
 let failNextConnect = process.env["LAZURIO_FAKE_FAIL_FIRST_CONNECT"] === "true";
+// LAZURIO_FAKE_REFUSE_WHILE: every tunnel fails while this file exists, as a node's whose Device
+// the Organization has not approved yet, and works once the test removes it.
+const refuseWhile = process.env["LAZURIO_FAKE_REFUSE_WHILE"];
 const CREDENTIALS = `Basic ${btoa("e2e:e2e")}`;
 
 // The proxy asks for its credentials as the real one does, then tunnels to the upstream.
@@ -28,6 +33,10 @@ const startProxy = async (target: string): Promise<number> => {
       client.end(
         'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Lazurio App"\r\nContent-Length: 0\r\n\r\n',
       );
+      return;
+    }
+    if (refuseWhile !== undefined && NodeFS.existsSync(refuseWhile)) {
+      client.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
       return;
     }
     if (failNextConnect) {

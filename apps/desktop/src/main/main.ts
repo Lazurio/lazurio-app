@@ -443,6 +443,10 @@ const program = Effect.gen(function* () {
       status,
       remoteUrl: yield* remoteUrlOf(hooks.remoteUrl),
       whenReachable: tailnets.whenReachable,
+      servedByTailnet: (address) => {
+        const url = URL.parse(address);
+        return url !== null && Option.isSome(tailnets.proxyFor(url.hostname));
+      },
     }).pipe(Effect.andThen(Effect.never)),
     allWindowsClosed,
   );
