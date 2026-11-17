@@ -11,7 +11,7 @@ import { destinationOf } from "./Navigation.ts";
 
 // The main window: the local view with the preload bridge in a column, and beside it at most one
 // remote view for a page of the web Lazurio, without preload and in its own session. The two views
-// of a BaseWindow never overlap: on Windows a BrowserWindow drew its own page over the remote view.
+// of a BaseWindow never overlap, so neither page is laid out under the other.
 
 // The session of every remote view; the tailnet gives it its PAC script (Tailnet.ts).
 export const REMOTE_PARTITION = "persist:lazurio-remote";
@@ -64,7 +64,9 @@ const serveStatus = (status: () => AppStatus) =>
     () => Effect.sync(() => Electron.ipcMain.removeHandler(STATUS_CHANNEL)),
   );
 
-// What the remote page's renderer sees, for the log.
+// What the remote page's renderer sees, for the log. A page is hidden to it while the system's
+// display is off, and the window then stays blank (the trial of 2026-11-17), so the log also gives
+// the seconds since the last input, which a long idle time points to.
 const PAGE_STATE = `({ visibility: document.visibilityState, width: innerWidth, height: innerHeight })`;
 
 const viewOptions = (
@@ -117,6 +119,7 @@ const loadRemote = Effect.fn("MainWindow.loadRemote")(function* (
     viewVisible: view.getVisible(),
     bounds: view.getBounds(),
     page,
+    idleSeconds: Electron.powerMonitor.getSystemIdleTime(),
   });
 });
 
