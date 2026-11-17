@@ -13,7 +13,7 @@
     "start": "electron .",
     "typecheck": "effect-tsgo tsc@7.0.2 --noEmit",
     "test": "vp test run --config ../../vite.config.ts --dir src",
-    "test:e2e": "vp test run --config ../../vite.config.ts --dir e2e",
+    "test:e2e": "vp test run --config ../../vite.config.ts --dir e2e --no-file-parallelism",
     "package:dir": "electron-builder --dir",
     "check:fuses": "node scripts/check-fuses.ts"
   },
