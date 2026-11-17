@@ -16,6 +16,9 @@ import * as Electron from "electron";
 
 import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
 
+import { DeviceActivity } from "./DeviceActivity.ts";
+import * as DeviceIpc from "./DeviceIpc.ts";
+import * as DeviceService from "./DeviceService.ts";
 import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
 import * as KeystoreCheck from "./KeystoreCheck.ts";
@@ -167,6 +170,16 @@ const selfUpdateUnsupported = Effect.gen(function* () {
   return Option.none<UpdatesOffReason>();
 });
 
+// The Device helper's data directory inside userData (docs/adr/0006, point 1): never next to its
+// binary, which an update replaces.
+const deviceDirectory = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const directory = path.join(Electron.app.getPath("userData"), "device");
+  yield* fileSystem.makeDirectory(directory, { recursive: true, mode: 0o700 }).pipe(Effect.ignore);
+  return directory;
+});
+
 // The data folder keeps its name whatever the product's name or the generation: an update, and
 // GEN5 after it, opens the same sign-in, tailnet nodes and settings (docs/adr/0005, point 1).
 const DATA_FOLDER = "Lazurio App";
@@ -214,6 +227,35 @@ const program = Effect.gen(function* () {
             }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
         })
       : Tailnet.noTailnets;
+  // Agent Desktop (docs/adr/0006): the Device helper of the helpers list, if this build has it.
+  // Its service reads the helper outside the helpers' scope, so the helper's last message after
+  // Shutdown reaches the updater; without the helper the computer is always idle.
+  const deviceHelper = helpers.find((helper) => helper.status.name === DeviceService.DEVICE_HELPER);
+  const device =
+    deviceHelper !== undefined && Option.isSome(deviceHelper.connection)
+      ? Option.some(
+          yield* DeviceService.run({
+            connection: deviceHelper.connection.value,
+            dataDirectory: yield* deviceDirectory,
+            computerName: NodeOS.hostname(),
+            tailnets,
+          }),
+        )
+      : Option.none<DeviceService.DeviceService>();
+  const deviceControls: DeviceIpc.DeviceControls = Option.match(device, {
+    onSome: (service) => service,
+    onNone: () => ({
+      current: () => DeviceService.withoutHelper(deviceHelper === undefined ? "absent" : "failed"),
+      subscribe: () => () => {},
+      stop: Effect.void,
+    }),
+  });
+  // The updater's view of the computer: the configured helper's, or the default (always idle).
+  const idleByDefault = yield* DeviceActivity;
+  const deviceActivity = Option.getOrElse(
+    Option.flatMap(device, (service) => service.activity),
+    () => idleByDefault,
+  );
   // Set once the person quits or closes the last window: a failed install then lets the app end
   // instead of starting it again.
   let quitting = false;
@@ -229,7 +271,10 @@ const program = Effect.gen(function* () {
       if (!quitting) Electron.app.relaunch();
       Electron.app.exit(0);
     }),
-  }).pipe(Effect.provide(ElectronUpdater.layer));
+  }).pipe(
+    Effect.provide(ElectronUpdater.layer),
+    Effect.provideService(DeviceActivity, deviceActivity),
+  );
   const status = (): AppStatus => ({
     appVersion: Electron.app.getVersion(),
     generation: "GEN4",
@@ -254,6 +299,8 @@ const program = Effect.gen(function* () {
   );
   // Only the app's local windows may pick the channel or install (UpdatesIpc.ts).
   yield* UpdatesIpc.serve(updates);
+  // Only the app's local windows see Agent Desktop's state and may press Stop (DeviceIpc.ts).
+  yield* DeviceIpc.serve(deviceControls);
   // The app ends when its windows are closed, also while the main window is still opening (its
   // remote page may wait for a tailnet's sign-in), and when opening it fails.
   const allWindowsClosed = Effect.callback<void>((resume) => {
