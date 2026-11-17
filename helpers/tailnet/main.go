@@ -23,6 +23,9 @@ func main() {
 		logger.Error("helper stopped", "error", err)
 		os.Exit(1)
 	}
+	if len(os.Args) == 2 && os.Args[1] == "read-policy" {
+		os.Exit(readPolicyCommand(readPolicy, os.Stdout, os.Stderr))
+	}
 	out := NewOutbox(os.Stdout)
 	nodes := NewNodes(func(state *tailnetv1.NodeState) {
 		if err := out.Send(&helperv1.HelperMessage{

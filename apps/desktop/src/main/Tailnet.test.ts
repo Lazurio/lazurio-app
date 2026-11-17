@@ -17,6 +17,7 @@ import {
   startingBoard,
   statusOf,
 } from "./Tailnet.ts";
+import { fromText } from "./TailnetDirectory.ts";
 
 // Evaluates a PAC script the way Chromium does, with its one helper this script uses.
 const findProxy = (script: string, host: string): string => {
@@ -211,6 +212,32 @@ describe("servingTailnet", () => {
     assert.isUndefined(servingTailnet(tailnets, "not an address"));
     assert.isUndefined(servingTailnet([], "https://launchpad.bob.example-org.lazurio.io/"));
   });
+});
+
+describe("the PAC script of a directory", () => {
+  it.effect("builds for what a mixed directory joins, a suffix outside ASCII among them", () =>
+    Effect.gen(function* () {
+      const directory = yield* fromText(
+        JSON.stringify([
+          {
+            tailnet: "accent",
+            controlUrl: "https://headscale.org.lazurio.io",
+            domains: ["ž.lazurio.io"],
+          },
+          {
+            tailnet: "org",
+            controlUrl: "https://headscale.org.lazurio.io",
+            domains: ["org.lazurio.io"],
+          },
+        ]),
+        "Desk",
+      );
+      const domains = directory.tailnets.flatMap((tailnet) => tailnet.domains);
+      const url = pacDataUrl(pacScript(domains, { host: "127.0.0.1", port: 1 }));
+      assert.isTrue(url.startsWith("data:application/x-ns-proxy-autoconfig;base64,"));
+      assert.deepStrictEqual(domains, ["org.lazurio.io"]);
+    }),
+  );
 });
 
 describe("proxyForHost", () => {
