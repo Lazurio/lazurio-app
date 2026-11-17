@@ -15,6 +15,8 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 
+	"github.com/Lazurio/lazurio-app/helpers/tailnet/internal/nodepolicy"
+
 	tailnetv1 "github.com/Lazurio/lazurio-app/helpers/tailnet/gen/lazurio/app/tailnet/v1"
 )
 
@@ -35,11 +37,12 @@ type node struct {
 }
 
 // NewNodes makes an empty set of nodes that reports each change of state through emit.
-// No node sends its log to Tailscale's log server (disableLogUploads) or asks the router to open
-// a port (disableRouterPortMapping).
+// No node sends its log to Tailscale's log server (disableLogUploads), asks the router to open a
+// port (disableRouterPortMapping) or accepts a connection from its tailnet (nodepolicy).
 func NewNodes(emit func(*tailnetv1.NodeState), logger *slog.Logger) *Nodes {
 	disableLogUploads()
 	disableRouterPortMapping()
+	nodepolicy.Install()
 	return &Nodes{nodes: map[string]*node{}, emit: emit, logger: logger}
 }
 

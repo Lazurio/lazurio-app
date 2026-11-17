@@ -52,10 +52,10 @@ var disableRouterPortMapping = sync.OnceFunc(func() {
 	envknob.Setenv("TS_DISABLE_PORTMAPPER", "true")
 })
 
-// shieldsUp makes the node refuse every connection its tailnet opens to it, while its own
-// connections to the Environments work as before. tsnet starts each node with its own preferences,
-// which leave shields up off, so the helper turns it on again after every start; until the node has
-// its first map from the control server it accepts nothing anyway.
+// shieldsUp checks that the node refuses every connection its tailnet opens to it, while its own
+// connections to the Environments work as before. The node policy (nodepolicy) turns shields up on
+// when the node's backend starts, before its first map; this asks for it once more and stops a node
+// that runs without it. Inside `go test`, where nodes get no policy, it is what turns it on.
 func shieldsUp(ctx context.Context, server *tsnet.Server) error {
 	client, err := server.LocalClient()
 	if err != nil {
