@@ -26,6 +26,32 @@ export interface Text {
   readonly keyUnreadable: Advice;
   readonly stateUnreadable: Advice;
   readonly updates: UpdatesText;
+  readonly device: DeviceText;
+}
+
+// Agent Desktop in the window's column (docs/adr/0006, point 5). "{tool}", "{application}",
+// "{reason}" and "{label}" stand for what the Device helper reports.
+export interface DeviceText {
+  readonly title: string;
+  readonly pairingLater: string;
+  readonly starting: string;
+  readonly failed: string;
+  // The connection to the helper was lost: whether an agent works is unknown, or the helper had
+  // confirmed that every agent's work ended.
+  readonly lost: string;
+  readonly lostConfirmed: string;
+  readonly unknown: string;
+  readonly environments: string;
+  readonly noEnvironments: string;
+  readonly off: string;
+  readonly connecting: string;
+  readonly connected: string;
+  readonly refused: string;
+  readonly working: string;
+  readonly workingIn: string;
+  readonly agentWorking: string;
+  readonly stop: string;
+  readonly stopFailed: string;
 }
 
 // The window's section about updates (docs/adr/0005). "{version}" stands for the version offered.
@@ -44,6 +70,9 @@ export interface UpdatesText {
   readonly ready: string;
   readonly install: string;
   readonly installing: string;
+  // While the app cannot reach the Device helper (its connection was lost).
+  readonly readyWaitsForDevice: string;
+  readonly installingWaitsForDevice: string;
   readonly restarting: string;
   readonly failed: string;
   readonly channelNotSaved: string;
@@ -96,10 +125,35 @@ const cs: Text = {
     install: "Restartovat a aktualizovat",
     installing:
       "Instaluje verzi {version}. Pokud na počítači zrovna pracuje agent, počká, až skončí.",
+    readyWaitsForDevice:
+      "Verze {version} je připravená. Spojení s Agent Desktop se přerušilo, proto se nainstaluje až po novém spuštění Lazurio App.",
+    installingWaitsForDevice:
+      "Instalace verze {version} čeká na Agent Desktop, se kterým se přerušilo spojení. Ukončete Lazurio App a spusťte ji znovu; aktualizace se nainstaluje později.",
     restarting: "Restartuje se do verze {version}…",
     failed: "Aktualizace se nepovedla. Lazurio App to zkusí znovu za hodinu.",
     channelNotSaved:
       "Kanál se nepodařilo změnit. Zkontrolujte, že do složky dat Lazurio App jde zapisovat, a zkuste to znovu.",
+  },
+  device: {
+    title: "Agent Desktop",
+    pairingLater: "Spárování s Prostředím přijde s přihlášením Lazurio.",
+    starting: "Spouští se…",
+    failed: "Agent Desktop se nespustil. Spusťte Lazurio App znovu.",
+    lost: "Spojení s Agent Desktop se přerušilo. Nevíme, jestli na tomto počítači ještě pracuje agent. Aktualizace se do té doby neinstaluje. Ukončete Lazurio App a spusťte ji znovu.",
+    lostConfirmed:
+      "Spojení s Agent Desktop se přerušilo. Předtím potvrdil, že práce každého agenta skončila. Aktualizace se neinstaluje, dokud Lazurio App neukončíte a nespustíte znovu.",
+    unknown: "Stav agenta neznámý",
+    environments: "Prostředí",
+    noEnvironments: "Zatím žádné Prostředí.",
+    off: "Vypnuto",
+    connecting: "Připojuje se",
+    connected: "Připojeno",
+    refused: "Odmítnuto ({reason})",
+    working: "Pracuje agent: {tool}",
+    workingIn: "Pracuje agent: {tool} v {application}",
+    agentWorking: "Na tomto počítači pracuje agent z Prostředí {label}.",
+    stop: "Zastavit",
+    stopFailed: "Agenta se nepodařilo zastavit. Zkuste to znovu.",
   },
 };
 
@@ -152,10 +206,35 @@ const en: Text = {
     install: "Restart and update",
     installing:
       "Installing version {version}. If an agent is working on the computer, it waits until the agent is done.",
+    readyWaitsForDevice:
+      "Version {version} is ready. The connection to Agent Desktop was lost, so it installs only after Lazurio App starts again.",
+    installingWaitsForDevice:
+      "Installing version {version} waits for Agent Desktop, whose connection was lost. Quit Lazurio App and start it again; the update installs later.",
     restarting: "Restarting into version {version}…",
     failed: "The update did not work. Lazurio App tries again in an hour.",
     channelNotSaved:
       "The channel could not be changed. Check that Lazurio App's data folder can be written, and try again.",
+  },
+  device: {
+    title: "Agent Desktop",
+    pairingLater: "Pairing with an Environment comes with the Lazurio sign-in.",
+    starting: "Starting…",
+    failed: "Agent Desktop did not start. Start Lazurio App again.",
+    lost: "The connection to Agent Desktop was lost. It is not known whether an agent is still working on this computer. Updates do not install until then. Quit Lazurio App and start it again.",
+    lostConfirmed:
+      "The connection to Agent Desktop was lost. Before that it confirmed that every agent's work had ended. Updates do not install until you quit Lazurio App and start it again.",
+    unknown: "Agent's state unknown",
+    environments: "Environments",
+    noEnvironments: "No Environment yet.",
+    off: "Off",
+    connecting: "Connecting",
+    connected: "Connected",
+    refused: "Refused ({reason})",
+    working: "An agent is working: {tool}",
+    workingIn: "An agent is working: {tool} in {application}",
+    agentWorking: "An agent from the Environment {label} is working on this computer.",
+    stop: "Stop",
+    stopFailed: "The agent could not be stopped. Try again.",
   },
 };
 

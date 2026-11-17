@@ -67,7 +67,7 @@ const fakeUpdater = (options: { readonly failInstall?: boolean } = {}) => {
 // The Device's activity, busy or idle as a test sets it, recording when the computer is held.
 const fakeActivity = Effect.gen(function* () {
   const changes = yield* PubSub.unbounded<boolean>();
-  const state = { idle: true, held: false };
+  const state = { idle: true, held: false, confirmed: true, reachable: true };
   const activity: DeviceActivityShape = {
     isIdle: Effect.sync(() => state.idle),
     idleChanges: Stream.fromPubSub(changes),
@@ -84,6 +84,8 @@ const fakeActivity = Effect.gen(function* () {
           ).pipe(Effect.as(true))
         : Effect.succeed(false),
     ),
+    confirmStopped: Effect.sync(() => state.confirmed),
+    reachable: Effect.sync(() => state.reachable),
   };
   const setIdle = (idle: boolean) =>
     Effect.sync(() => {
@@ -361,6 +363,89 @@ describe("Updates", () => {
         );
       }),
   );
+});
+
+describe("Updates after the helpers stopped", () => {
+  it.effect(
+    "installs nothing and starts the helpers again when the Device helper did not confirm that every engine ended",
+    () =>
+      Effect.gen(function* () {
+        const updater = fakeUpdater();
+        const { activity, state } = yield* fakeActivity;
+        state.confirmed = false;
+        const steps: Array<string> = [];
+        return yield* withUpdates(
+          {
+            updater,
+            activity,
+            options: {
+              stopHelpers: Effect.sync(() => steps.push("stop")),
+              restartHelpers: Effect.sync(() => steps.push("restart")),
+            },
+          },
+          (updates) =>
+            Effect.gen(function* () {
+              yield* updater.emit("update-available", { version: "0.1.1" });
+              yield* updater.emit("update-downloaded", { version: "0.1.1" });
+              yield* waitFor(updates, "ready");
+              assert.isFalse(yield* updates.install);
+              assert.deepStrictEqual(steps, ["stop", "restart"]);
+              assert.isFalse(updater.calls.some((call) => call.startsWith("install ")));
+              assert.notInclude(updater.calls, "quitForUpdate");
+              assert.strictEqual(updates.current().state.phase, "failed");
+            }),
+        );
+      }),
+  );
+});
+
+describe("Updates when the Device helper cannot be reached", () => {
+  it.effect(
+    "lets a quit end the app without installing or waiting, and installs once a stop is confirmed",
+    () =>
+      Effect.gen(function* () {
+        const updater = fakeUpdater();
+        const { activity, state } = yield* fakeActivity;
+        // The connection to the helper was lost: the computer is not idle and never becomes so.
+        state.idle = false;
+        state.reachable = false;
+        const steps: Array<string> = [];
+        return yield* withUpdates(
+          {
+            updater,
+            activity,
+            options: {
+              stopHelpers: Effect.sync(() => steps.push("stop")),
+              restartHelpers: Effect.sync(() => steps.push("restart")),
+            },
+          },
+          (updates) =>
+            Effect.gen(function* () {
+              yield* updater.emit("update-available", { version: "0.1.1" });
+              yield* updater.emit("update-downloaded", { version: "0.1.1" });
+              yield* waitFor(updates, "ready");
+              assert.strictEqual(quitDecision("ready", false), "quit");
+              // The quit's own install answers at once: the app quits, the update stays ready.
+              assert.isFalse(yield* updates.installOnQuit);
+              assert.deepStrictEqual(steps, []);
+              assert.isFalse(updater.calls.some((call) => call.startsWith("install ")));
+              assert.strictEqual(updates.current().state.phase, "ready");
+              // After the app's restart a helper answers and confirms its stop: it installs.
+              state.reachable = true;
+              state.idle = true;
+              assert.isTrue(yield* updates.installOnQuit);
+              assert.deepStrictEqual(steps, ["stop"]);
+              assert.include(updater.calls, "install silent=true runAfter=true");
+            }),
+        );
+      }),
+  );
+
+  it("quits instead of joining an install that waits for an unreachable helper", () => {
+    assert.strictEqual(quitDecision("installing", false), "quit");
+    assert.strictEqual(quitDecision("installing", true), "wait");
+    assert.strictEqual(quitDecision("ready", true), "install");
+  });
 });
 
 describe("Updates while an install waits", () => {

@@ -3,10 +3,9 @@ import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
-// Whether an agent works on this computer through the Device helper (LZD-0018, docs/adr/0006),
-// as the updater needs it: an update never installs while an agent holds the computer
-// (docs/adr/0005, point 5). The Device helper's layer replaces this reference; until it exists,
-// the computer is always idle.
+// Whether an agent works on this computer through the Device helper, as the updater needs it: an
+// update never installs while an agent holds the computer (docs/adr/0006, point 7). DeviceService
+// replaces this reference while the Device helper runs; without it, the computer is always idle.
 
 export interface DeviceActivityShape {
   readonly isIdle: Effect.Effect<boolean>;
@@ -15,12 +14,21 @@ export interface DeviceActivityShape {
   // `true` only when the computer is idle; until the scope closes, the Device helper then refuses
   // every new call of a tool. On `false`, wait for the next `true` of `idleChanges` and ask again.
   readonly holdForUpdate: Effect.Effect<boolean, never, Scope.Scope>;
+  // After the helpers stopped, right before an install: `true` only when the updater's hold was
+  // still granted by the helper's last word on the lock, the Device helper said DeviceStopped with
+  // every engine ended, and it exited within two seconds. On `false` nothing installs.
+  readonly confirmStopped: Effect.Effect<boolean>;
+  // `false` once the app lost its connection to the Device helper: unlike a busy computer, this
+  // never changes until the app starts its helpers again, so a quit must not wait for it.
+  readonly reachable: Effect.Effect<boolean>;
 }
 
 const alwaysIdle: DeviceActivityShape = {
   isIdle: Effect.succeed(true),
   idleChanges: Stream.empty,
   holdForUpdate: Effect.succeed(true),
+  confirmStopped: Effect.succeed(true),
+  reachable: Effect.succeed(true),
 };
 
 export const DeviceActivity = Context.Reference<DeviceActivityShape>(

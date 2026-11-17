@@ -137,8 +137,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
       # bash on every runner: the default shell on Windows reads the job's VERSION as $env:VERSION.
+      # gh downloads and verifies the engine of helpers/device/engine.lock (docs/adr/0006).
       - name: Helpers at the release's version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: pnpm build:helpers --release --app-version "$VERSION"
       - run: pnpm --filter @lazurio/app-desktop build
       # The channel is set, not left to electron-builder, which with --publish never writes latest*.yml

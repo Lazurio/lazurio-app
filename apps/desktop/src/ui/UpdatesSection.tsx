@@ -10,14 +10,17 @@ export function UpdatesSection({
   updates,
   appVersion,
   text,
+  deviceUnreachable,
 }: {
   readonly updates: UpdatesStatus;
   readonly appVersion: string;
   readonly text: UpdatesText;
+  // The app lost its connection to the Device helper, so an install waits for its restart.
+  readonly deviceUnreachable: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [notSaved, setNotSaved] = useState(false);
-  const label = updateLabel(updates, appVersion, text);
+  const label = updateLabel(updates, appVersion, text, deviceUnreachable);
   // While an install runs, the main process refuses a change of channel; the radios say so too.
   const installing = updates.state.phase === "installing" || updates.state.phase === "restarting";
   const pick = (channel: UpdateChannelName) => {
@@ -36,6 +39,7 @@ export function UpdatesSection({
       data-updates-phase={updates.state.phase}
       data-updates-channel={updates.channel}
       data-updates-reason={updates.state.phase === "off" ? updates.state.reason : undefined}
+      data-updates-device={deviceUnreachable ? "unreachable" : undefined}
     >
       <h2>{text.title}</h2>
       <p className="shell__state">{label.text}</p>

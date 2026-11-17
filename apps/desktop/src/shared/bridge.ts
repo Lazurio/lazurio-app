@@ -7,6 +7,10 @@ export const STATUS_CHANGED_CHANNEL = "lazurio:status-changed";
 // The person picks the update channel and installs a downloaded update (docs/adr/0005, point 4).
 export const SET_UPDATE_CHANNEL_CHANNEL = "lazurio:set-update-channel";
 export const INSTALL_UPDATE_CHANNEL = "lazurio:install-update";
+// Agent Desktop (docs/adr/0006, point 5): its state, every change of it, and Stop.
+export const DEVICE_STATE_CHANNEL = "lazurio:device-state";
+export const DEVICE_STATE_CHANGED_CHANNEL = "lazurio:device-state-changed";
+export const DEVICE_STOP_CHANNEL = "lazurio:device-stop";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -61,6 +65,35 @@ export interface UpdatesStatus {
   readonly state: UpdateState;
 }
 
+// The channel of one Environment's agents to this computer, as the Device helper reports it.
+export type DeviceChannelState =
+  | { readonly state: "off" }
+  | { readonly state: "connecting"; readonly failedAttempts: number }
+  | { readonly state: "connected" }
+  // The Environment refused the computer, with the helper's code for why.
+  | { readonly state: "refused"; readonly reason: string }
+  // An agent works through it: the tool's name and the application, when the engine names one.
+  | { readonly state: "working"; readonly tool: string; readonly application: string }
+  // The connection to the helper was lost: nobody knows the channel's state any more.
+  | { readonly state: "unknown" };
+
+export interface DeviceEnvironmentStatus {
+  readonly environmentId: string;
+  readonly label: string;
+  readonly channel: DeviceChannelState;
+}
+
+// Agent Desktop on this computer (docs/adr/0006). "absent": this build runs no Device helper;
+// "failed": the helper did not start or refused its configuration; "lost": the app lost its
+// connection to the helper without stopping it, and cannot reach it any more.
+export interface DeviceStatus {
+  readonly state: "absent" | "starting" | "ready" | "failed" | "lost";
+  readonly environments: ReadonlyArray<DeviceEnvironmentStatus>;
+  // The Environment whose agent works on the computer now, if one does; "unknown" once the
+  // connection was lost and nothing confirmed that every agent's work ended.
+  readonly agent: { readonly environmentId: string; readonly label: string } | null | "unknown";
+}
+
 export interface AppStatus {
   readonly appVersion: string;
   readonly generation: "GEN4";
@@ -76,4 +109,14 @@ export interface LazurioBridge {
   readonly setUpdateChannel: (channel: UpdateChannelName) => Promise<void>;
   // Installs a downloaded update: the app restarts once no agent works on the computer.
   readonly installUpdate: () => Promise<void>;
+  // Agent Desktop. Only the app's local windows have it, never a remote page.
+  readonly device: DeviceBridge;
+}
+
+interface DeviceBridge {
+  readonly getState: () => Promise<DeviceStatus>;
+  // Calls the listener with the whole state after every change; the result stops it.
+  readonly subscribe: (listener: (status: DeviceStatus) => void) => () => void;
+  // Stop: ends the work of the agent that holds the computer now.
+  readonly stop: () => Promise<void>;
 }

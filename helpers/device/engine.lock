@@ -1,0 +1,21 @@
+{
+  "status": "pending",
+  "pending": "The release v1.3.1-lazurio.1 of Lazurio/agent-desktop does not exist yet (candidate Lazurio/agent-desktop#2). Until it does, `pnpm build:helpers` builds without the engine. Pin it with `node scripts/pin-engine.ts`.",
+  "repository": "Lazurio/agent-desktop",
+  "tag": "v1.3.1-lazurio.1",
+  "signerWorkflow": "Lazurio/agent-desktop/.github/workflows/lazurio-release.yml",
+  "targets": {
+    "aarch64-apple-darwin": {
+      "archive": "agent-desktop-v1.3.1-lazurio.1-aarch64-apple-darwin.tar.gz",
+      "files": ["agent-desktop", "agent-desktop-macos-helper"]
+    },
+    "x86_64-apple-darwin": {
+      "archive": "agent-desktop-v1.3.1-lazurio.1-x86_64-apple-darwin.tar.gz",
+      "files": ["agent-desktop", "agent-desktop-macos-helper"]
+    },
+    "x86_64-pc-windows-msvc": {
+      "archive": "agent-desktop-v1.3.1-lazurio.1-x86_64-pc-windows-msvc.tar.gz",
+      "files": ["agent-desktop.exe"]
+    }
+  }
+}

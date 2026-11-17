@@ -26,6 +26,10 @@ extraResources:
     filter:
       - lazurio-device
       - lazurio-device.exe
+      # The engine next to it, from the release of helpers/device/engine.lock (docs/adr/0006).
+      - agent-desktop
+      - agent-desktop-macos-helper
+      - agent-desktop.exe
   # The tailnets a packaged app joins (docs/adr/0008).
   - from: tailnets
     to: tailnets

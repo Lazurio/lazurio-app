@@ -1,6 +1,7 @@
 import { use, useEffect, useState } from "react";
 
-import type { AppStatus } from "../shared/bridge.ts";
+import type { AppStatus, DeviceStatus } from "../shared/bridge.ts";
+import { AgentDesktopSection } from "./AgentDesktopSection.tsx";
 import { localeOf, messages } from "./messages.ts";
 import { tailnetLabel } from "./tailnetLabel.ts";
 import { UpdatesSection } from "./UpdatesSection.tsx";
@@ -17,6 +18,14 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
       setCurrent(latest);
       setLive(true);
     });
+    return stop;
+  }, []);
+  // Agent Desktop's state, for its section and for the updates' section: every later change comes
+  // from the main process, and reading it once more after subscribing covers a change between.
+  const [device, setDevice] = useState<DeviceStatus | null>(null);
+  useEffect(() => {
+    const stop = window.lazurio.device.subscribe(setDevice);
+    void window.lazurio.device.getState().then(setDevice);
     return stop;
   }, []);
   const text = messages[localeOf(navigator.language)];
@@ -82,7 +91,9 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
         updates={current.updates}
         appVersion={current.appVersion}
         text={text.updates}
+        deviceUnreachable={device?.state === "lost"}
       />
+      <AgentDesktopSection status={device} text={text.device} />
     </main>
   );
 }

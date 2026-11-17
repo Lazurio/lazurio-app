@@ -132,7 +132,8 @@ body {
   user-select: all;
 }
 
-.shell__updates button {
+.shell__updates button,
+.shell__agent button {
   margin: 4px 0 12px;
   padding: 6px 12px;
   border: 1px solid var(--line);
@@ -167,4 +168,20 @@ body {
 .shell__problem {
   color: var(--problem);
   font-size: 13px;
+}
+
+.shell__device h3 {
+  margin: 12px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.shell__agent p {
+  margin: 0 0 4px;
+}
+
+.shell__agent button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
