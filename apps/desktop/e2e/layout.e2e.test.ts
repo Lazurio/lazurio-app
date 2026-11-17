@@ -1,7 +1,9 @@
 // End-to-end: with a remote page open, as a packaged app always has, the local window's tailnet
 // status and update controls stay beside the page, not under it, and work (the review of
 // Lazurio/lazurio-app#36). The remote view's bounds come from the main process; the controls'
-// boxes from the local window, at the same scale.
+// boxes from the local window, at the same scale. The page must also be shown and paint: on
+// Windows it loaded but stayed blank, hidden to its renderer, until something forced a repaint
+// (the trial of the proof of concept on 2026-11-17).
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A plain HTTP server serves the remote page.
 import * as NodeHttp from "node:http";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the app on disk.
@@ -73,5 +75,36 @@ describe("Lazurio App GEN4 with a remote page", () => {
     }
     await shell.locator('input[name="update-channel"][value="nightly"]').click();
     await shell.locator('section[data-updates-channel="nightly"]').waitFor();
+  });
+
+  it("shows the page and paints it without a forced repaint", async () => {
+    const shown = await app.evaluate(async ({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      const view = window?.contentView.children.find(
+        (child): child is Electron.WebContentsView => "webContents" in child,
+      );
+      if (view === undefined) return { found: false };
+      const contents = view.webContents;
+      // A page hidden to its renderer reports "hidden" and runs no animation frame.
+      const page = (await contents.executeJavaScript(
+        `new Promise((resolve) => {
+          const timer = setTimeout(() => resolve({ visibility: document.visibilityState, frame: false }), 3000);
+          requestAnimationFrame(() => { clearTimeout(timer); resolve({ visibility: document.visibilityState, frame: true }); });
+        })`,
+      )) as { visibility: string; frame: boolean };
+      return {
+        found: true,
+        windowVisible: window?.isVisible() ?? false,
+        viewVisible: view.getVisible(),
+        ...page,
+      };
+    });
+    assert.deepStrictEqual(shown, {
+      found: true,
+      windowVisible: true,
+      viewVisible: true,
+      visibility: "visible",
+      frame: true,
+    });
   });
 });
