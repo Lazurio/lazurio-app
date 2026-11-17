@@ -71,6 +71,7 @@ Decision 0248 puts the Device's capabilities into Lazurio App GEN4 as a Rust hel
      - `LockState` keeps reporting the holder and never idle, so the updater's `holdForUpdate` is refused rather than granted while a tool may run.
 
      The history records one `unconfirmed` entry, without content. Restarting Lazurio App, an update's restart included, ends the helper and with it the state.
+
    - **No `unsafe` in the helper's own code; established crates make the platform calls** (decided on 2026-11-17 by the owning thread of step 3b-2, in Lazurio/lazurio-app#37):
      - on macOS and Linux the engine starts in a process group of its own (`CommandExt::process_group(0)`). The helper sends SIGKILL to the group, reaps the engine and polls `kill(-pgid, None)` until `ESRCH`, with [`nix`](https://crates.io/crates/nix);
      - on Windows the engine is assigned, right after its start and before it gets any message, to a job object that kills on close, nested in a second job that only watches, with [`win32job`](https://crates.io/crates/win32job). The helper closes the first job and waits until the second lists no process. `win32job` has no call that terminates a job, and calling `TerminateJobObject` directly would need `unsafe`, hence the two jobs.
