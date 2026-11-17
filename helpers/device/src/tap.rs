@@ -63,8 +63,6 @@ pub enum FromEngine {
 pub struct OpenCall {
     pub id: Value,
     pub tool: String,
-    /// The channel's count of Stops when the call took the lock.
-    pub epoch: u64,
 }
 
 /// What the tap knows about one session.
@@ -146,9 +144,9 @@ impl Tap {
         }
     }
 
-    /// The tool call `id` took the lock in `epoch` and goes to the engine.
-    pub fn call_started(&mut self, id: Value, tool: String, epoch: u64) {
-        self.open.insert(key(&id), OpenCall { id, tool, epoch });
+    /// The tool call `id` took the lock and goes to the engine.
+    pub fn call_started(&mut self, id: Value, tool: String) {
+        self.open.insert(key(&id), OpenCall { id, tool });
     }
 
     /// Sorts one line from the engine.
@@ -311,7 +309,7 @@ mod tests {
         let FromEnvironment::ToolCall { id, tool, .. } = tap.sort_environment(call) else {
             panic!("a tool call");
         };
-        tap.call_started(id, tool, 0);
+        tap.call_started(id, tool);
         let FromEnvironment::Answer(answer) = tap.sort_environment(call) else {
             panic!("a refusal");
         };

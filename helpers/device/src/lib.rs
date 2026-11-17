@@ -68,7 +68,8 @@ const CHANNELS_CLOSE_WITHIN: Duration = Duration::from_millis(1500);
 
 /// Speaks the helper protocol: sends Hello first, then answers each `AppMessage` until Shutdown
 /// or the end of the input. Each message is framed by its length as a varint. The channels send
-/// their changes of state on their own, with `request_id` 0, between the answers. Before it
+/// their changes of state, and who holds the computer when the end of a Stop changes it, on their
+/// own, with `request_id` 0, between the answers. Before it
 /// returns, every channel is closed.
 ///
 /// # Errors
@@ -110,7 +111,18 @@ fn serve_with<R: Read, W: Write + Send>(
                 }));
             }
         };
-        let mut device = device.with_channel_report(Arc::new(report), helper_version);
+        let lock_report = {
+            let outbox = outbox.clone();
+            move |state| {
+                let _ = outbox.send(Outgoing::Message(HelperMessage {
+                    request_id: 0,
+                    kind: Some(helper_message::Kind::LockState(state)),
+                }));
+            }
+        };
+        let mut device = device
+            .with_channel_report(Arc::new(report), helper_version)
+            .with_lock_report(Arc::new(lock_report));
         let served = answer_requests(input, &outbox, &mut device, helper_version);
         device.shutdown(Instant::now() + CHANNELS_CLOSE_WITHIN);
         drop(device);

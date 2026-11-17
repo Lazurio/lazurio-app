@@ -6,7 +6,7 @@
 //! the history keeps no content.
 //!
 //! An [`Engine`] ends its process when it is dropped: it kills the child by its handle and waits
-//! for it.
+//! for it. [`Engine::end`] first closes the engine's input and gives it a grace to exit.
 //
 // TODO(ADR 0006 point 8): end the engine with everything it started, in a process group on macOS
 // and a job object on Windows. Today only the engine's own process ends; whatever it started is
@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
+use std::time::{Duration, Instant};
 
 /// How the engine is started.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +126,26 @@ impl Engine {
         }
     }
 }
+
+impl Engine {
+    /// Ends the engine: closes its input, lets it exit by itself for at most `grace`, then kills
+    /// it, and returns once it was waited for.
+    pub fn end(mut self, grace: Duration) {
+        self.input = None;
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            match self.child.try_wait() {
+                Ok(None) => thread::sleep(GRACE_CHECK.min(deadline - Instant::now())),
+                // Exited, or it cannot be asked: either way the kill below settles it.
+                Ok(Some(_)) | Err(_) => break,
+            }
+        }
+        // Dropping kills (a no-op for an exited child) and waits.
+    }
+}
+
+/// How often an ending engine is checked during its grace.
+const GRACE_CHECK: Duration = Duration::from_millis(5);
 
 impl Drop for Engine {
     fn drop(&mut self) {

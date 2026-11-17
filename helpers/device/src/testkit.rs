@@ -54,6 +54,7 @@ pub fn quick_timing() -> Timing {
         first_retry: Duration::from_millis(1),
         longest_retry: Duration::from_millis(4),
         attached_grace: Duration::from_secs(120),
+        engine_grace: Duration::ZERO,
     }
 }
 
@@ -82,6 +83,8 @@ pub enum Event {
     Pings(usize),
     /// The computer's side of the connection ended.
     Closed,
+    /// A scripted session stopped reading on the test's order.
+    Paused,
     /// The proxy's request line and whether its credentials matched.
     Proxy {
         request_line: String,
@@ -219,6 +222,8 @@ pub enum Order {
     Send(Value),
     /// Close the session.
     Close,
+    /// Stop reading the computer, and keep the connection open, until the next order.
+    Pause,
 }
 
 impl Session {
@@ -228,20 +233,32 @@ impl Session {
         let tcp = self.socket.get_ref().get_ref();
         tcp.set_read_timeout(Some(Duration::from_millis(5)))
             .expect("a read timeout");
+        let mut paused = false;
         loop {
             loop {
-                match orders.try_recv() {
-                    Ok(Order::Send(message)) => {
+                let order = if paused {
+                    // A paused session waits for the test's next order; without one it closes.
+                    Some(orders.recv().unwrap_or(Order::Close))
+                } else {
+                    orders.try_recv().ok()
+                };
+                match order {
+                    Some(Order::Send(message)) => {
+                        paused = false;
                         self.send(&message);
                     }
-                    Ok(Order::Close) => {
+                    Some(Order::Close) => {
                         let _ = self.socket.close(None);
                         let _ = self.socket.flush();
                         let _ = self.socket.get_ref().get_ref().shutdown(Shutdown::Both);
                         let _ = self.events.send(Event::Closed);
                         return;
                     }
-                    Err(_) => break,
+                    Some(Order::Pause) => {
+                        paused = true;
+                        let _ = self.events.send(Event::Paused);
+                    }
+                    None => break,
                 }
             }
             match self.socket.read() {
@@ -268,19 +285,30 @@ impl Session {
 /// wait until closed.
 #[must_use]
 pub fn scripted_environment() -> (FakeEnvironment, Sender<Order>) {
-    let (orders, inbox) = mpsc::channel();
-    let inbox = Mutex::new(Some(inbox));
+    let (environment, mut orders) = scripted_sessions(1);
+    (environment, orders.remove(0))
+}
+
+/// A fake Environment whose first `count` sessions, in the order they authenticate, each follow
+/// their own orders, and whose later sessions wait until closed.
+#[must_use]
+pub fn scripted_sessions(count: usize) -> (FakeEnvironment, Vec<Sender<Order>>) {
+    let (senders, inboxes): (Vec<_>, Vec<_>) = (0..count).map(|_| mpsc::channel()).unzip();
+    let inboxes = Mutex::new(std::collections::VecDeque::from(inboxes));
     let environment = FakeEnvironment::start(move |session: &mut Session| {
         if !session.authenticate() {
             return;
         }
-        let first = inbox.lock().unwrap_or_else(PoisonError::into_inner).take();
-        match first {
+        let next = inboxes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front();
+        match next {
             Some(orders) => session.follow(&orders),
             None => session.until_closed(),
         }
     });
-    (environment, orders)
+    (environment, senders)
 }
 
 /// Checks an `auth` answer the way the Environment does: type, version, device, and a base64url

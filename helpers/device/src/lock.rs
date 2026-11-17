@@ -18,6 +18,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::lazurio::app::device::v1::LockState;
+
 /// How long the computer stays with an Environment after its last tool call (contract v1).
 pub const HOLD_AFTER_LAST_CALL: Duration = Duration::from_secs(20);
 
@@ -59,6 +61,8 @@ impl Busy {
 struct Hold {
     holder: Holder,
     active: u32,
+    /// After Stop, how many of the holder's engines have yet to end before the hold does.
+    stopping: u32,
     last: Instant,
     /// The open lock file while this process holds the device lock.
     _device_lock: File,
@@ -124,6 +128,7 @@ impl DeviceLock {
                 since_unix_ms: now_unix_ms,
             },
             active: 1,
+            stopping: 0,
             last: now,
             _device_lock: device_lock,
         });
@@ -159,11 +164,43 @@ impl DeviceLock {
         self.hold = None;
     }
 
+    /// Stop, while `engines` more engines of the holder may still run a tool: the hold, and with
+    /// it the device lock, lasts until each of them reported its end with
+    /// [`DeviceLock::engine_ended`]. With none, the hold ends now.
+    pub fn stop(&mut self, engines: u32) {
+        if let Some(hold) = &mut self.hold {
+            hold.stopping = hold.stopping.saturating_add(engines);
+            if hold.stopping == 0 {
+                self.hold = None;
+            }
+        }
+    }
+
+    /// An engine of `environment_id` that Stop waited for has ended (killed and waited for).
+    /// Returns whether that ended the hold.
+    pub fn engine_ended(&mut self, environment_id: &str) -> bool {
+        let Some(hold) = self
+            .hold
+            .as_mut()
+            .filter(|hold| hold.holder.environment_id == environment_id && hold.stopping > 0)
+        else {
+            return false;
+        };
+        hold.stopping -= 1;
+        if hold.stopping == 0 {
+            self.hold = None;
+            return true;
+        }
+        false
+    }
+
     /// Ends a hold whose time has passed, releasing the device lock, so the other process does
     /// not wait for this one's next request. Returns whether the holder changed.
     pub fn expire(&mut self, now: Instant) -> bool {
         let expired = self.hold.as_ref().is_some_and(|hold| {
-            hold.active == 0 && now.saturating_duration_since(hold.last) >= self.linger
+            hold.active == 0
+                && hold.stopping == 0
+                && now.saturating_duration_since(hold.last) >= self.linger
         });
         if expired {
             self.hold = None;
@@ -202,13 +239,32 @@ impl DeviceLock {
         self.update_hold
     }
 
-    /// When the current hold ends if no call comes: `None` while a call runs or nobody holds.
+    /// When the current hold ends if no call comes: `None` while a call runs, while Stop waits
+    /// for an engine to end, or when nobody holds.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
         self.hold
             .as_ref()
-            .filter(|hold| hold.active == 0)
+            .filter(|hold| hold.active == 0 && hold.stopping == 0)
             .map(|hold| hold.last + self.linger)
+    }
+
+    /// Who holds the computer, for the main process, after expiring a passed hold.
+    pub fn state(&mut self, now: Instant) -> LockState {
+        let holder = self.holder(now);
+        LockState {
+            idle: holder.is_none(),
+            holder_environment_id: holder
+                .as_ref()
+                .map(|holder| holder.environment_id.clone())
+                .unwrap_or_default(),
+            holder_environment_label: holder
+                .as_ref()
+                .map(|holder| holder.environment_label.clone())
+                .unwrap_or_default(),
+            since_unix_ms: holder.map_or(0, |holder| holder.since_unix_ms),
+            update_hold: self.update_hold,
+        }
     }
 }
 
@@ -439,6 +495,47 @@ mod tests {
         lock.try_begin("a", "A", start, 1).expect("A starts");
         lock.release_any();
         lock.try_begin("b", "B", start, 2).expect("B after Stop");
+    }
+
+    #[test]
+    fn stop_keeps_the_hold_until_every_engine_it_waits_for_has_ended() {
+        let _forks = in_process();
+        let directory = scratch("stopping");
+        let mut lock = lock_in(&directory);
+        let mut other = lock_in(&directory);
+        let start = Instant::now();
+        lock.try_begin("a", "A", start, 1).expect("A starts");
+        lock.end_call("a", start);
+        lock.stop(2);
+        let later = start + LINGER * 10;
+        assert_eq!(lock.deadline(), None, "no linger while Stop waits");
+        assert!(matches!(
+            lock.try_begin("b", "B", later, 2),
+            Err(Busy::Environment(_))
+        ));
+        assert!(!lock.hold_for_update(true, later), "the updater waits");
+        assert_eq!(
+            other.try_begin("b", "B", later, 2),
+            Err(Busy::OtherApplication)
+        );
+        assert!(!lock.engine_ended("b"), "only the holder's engines count");
+        assert!(!lock.engine_ended("a"));
+        assert!(lock.holder(later).is_some(), "one engine is left");
+        assert!(lock.engine_ended("a"), "the last engine ends the hold");
+        assert_eq!(lock.holder(later), None);
+        other
+            .try_begin("b", "B", later, 3)
+            .expect("another process after the engines ended");
+        lock.try_begin("a", "A", later, 4)
+            .expect_err("the other process holds it now");
+        other.release("b");
+        lock.try_begin("a", "A", later, 5).expect("A again");
+        lock.stop(0);
+        assert_eq!(
+            lock.holder(later),
+            None,
+            "with no engine to wait for, Stop is done"
+        );
     }
 
     #[test]

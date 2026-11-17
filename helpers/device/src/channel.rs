@@ -24,12 +24,12 @@ use zeroize::Zeroizing;
 use crate::engine::{self, Engine, EngineSpec};
 use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
-    ChannelState, Connected, Connecting, Off, Refused, Working, channel_state,
+    ChannelState, Connected, Connecting, LockState, Off, Refused, Working, channel_state,
 };
 use crate::lock::SharedLock;
 use crate::mcp_stub;
 use crate::secret_start::StartRequest;
-use crate::tap::{self, FromEngine, FromEnvironment, OpenCall, Tap};
+use crate::tap::{self, FromEngine, FromEnvironment, Tap};
 use crate::wire::{self, Connector, Socket, Target, WireError};
 
 /// The durations of contract v1; tests shorten them.
@@ -50,6 +50,10 @@ pub struct Timing {
     /// Environment ends a dead session after its own 45 s of silence, so the default leaves room
     /// for that. A denial that lasts longer is another session of this device and is reported.
     pub attached_grace: Duration,
+    /// How long an engine that is to end gets to exit by itself after its input closed, before
+    /// it is killed. None by default, so a running tool stops at once; tests lengthen it, so an
+    /// engine's end is an event they control.
+    pub engine_grace: Duration,
 }
 
 /// The denial with which the Environment answers while it still holds a session of this device.
@@ -64,6 +68,7 @@ impl Default for Timing {
             first_retry: Duration::from_secs(1),
             longest_retry: Duration::from_secs(60),
             attached_grace: Duration::from_secs(120),
+            engine_grace: Duration::ZERO,
         }
     }
 }
@@ -84,6 +89,10 @@ pub fn retry_delay(failed_attempts: u32, timing: &Timing) -> Duration {
 /// holds its control lock, so it must return at once (sending on a channel is fine).
 pub type Report = Arc<dyn Fn(ChannelState) + Send + Sync>;
 
+/// Receives who holds the computer when a channel changes it on its own, such as the end of a
+/// Stop. The same rules as for [`Report`] apply.
+pub type LockReport = Arc<dyn Fn(LockState) + Send + Sync>;
+
 /// What a supervisor needs, its secrets among them.
 pub struct Channel {
     pub request: StartRequest,
@@ -98,11 +107,14 @@ pub struct Channel {
     pub engine: Option<EngineSpec>,
     /// The lock of one agent, shared by every channel of the helper.
     pub lock: Arc<SharedLock>,
+    /// Who holds the computer, when this channel's engine ends a Stop.
+    pub lock_report: LockReport,
 }
 
 /// One Environment's channel thread. Dropping it stops the channel without waiting.
 pub struct Supervisor {
     control: Arc<Control>,
+    environment_id: String,
 }
 
 impl Supervisor {
@@ -113,6 +125,7 @@ impl Supervisor {
     /// Fails when the system gives no thread; the channel's secrets are then dropped, wiped.
     pub fn spawn(channel: Channel) -> std::io::Result<Self> {
         let control = Arc::new(Control::default());
+        let environment_id = channel.request.environment_id.clone();
         let worker = Worker {
             control: Arc::clone(&control),
             channel,
@@ -123,7 +136,10 @@ impl Supervisor {
                 let _ended = EndedOnDrop(Arc::clone(&worker.control));
                 worker.run();
             })?;
-        Ok(Self { control })
+        Ok(Self {
+            control,
+            environment_id,
+        })
     }
 
     /// Stops the channel at once: no further state is reported, the session's connection is
@@ -139,12 +155,25 @@ impl Supervisor {
         self.control.wait_ended(deadline)
     }
 
-    /// Stop of the agent released this Environment's hold: the session ends its engine, so a
-    /// running tool stops, and starts a new one. Tool calls that began before this are not ended
-    /// on the lock again, since the release ended them. Call it inside [`SharedLock::with`],
-    /// together with the release, so a tool call is either before both or after both.
-    pub fn end_engine(&self) {
-        self.control.lock().stop_epoch += 1;
+    /// The Environment whose channel this is.
+    #[must_use]
+    pub fn environment_id(&self) -> &str {
+        &self.environment_id
+    }
+
+    /// Stop of the agent: the session ends its engine, so a running tool stops, then reports the
+    /// end with [`DeviceLock::engine_ended`](crate::lock::DeviceLock::engine_ended) and starts a
+    /// new engine. Returns whether Stop has to wait for that: only while an engine runs and no
+    /// Stop already waits for it. Call it inside [`SharedLock::with`], so an engine's start and
+    /// end are each before it or after it.
+    #[must_use]
+    pub fn request_stop(&self) -> bool {
+        let mut state = self.control.lock();
+        let waits = state.engine == EngineState::Running;
+        if waits {
+            state.engine = EngineState::Stopping;
+        }
+        waits
     }
 
     /// Whether the thread has ended, for example after a refusal.
@@ -173,8 +202,19 @@ struct ControlState {
     ended: bool,
     /// A clone of the current session's TCP stream, to shut it down on stop.
     stream: Option<TcpStream>,
-    /// How many times Stop of the agent released this Environment ([`Supervisor::end_engine`]).
-    stop_epoch: u64,
+    /// The session's engine, from its start until it was killed and waited for.
+    engine: EngineState,
+}
+
+/// Where the session's engine is, as Stop sees it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum EngineState {
+    /// No engine runs.
+    #[default]
+    None,
+    Running,
+    /// It runs, and Stop waits for its end ([`Supervisor::request_stop`]).
+    Stopping,
 }
 
 impl Control {
@@ -217,8 +257,17 @@ impl Control {
         self.lock().stream = None;
     }
 
-    fn stop_epoch(&self) -> u64 {
-        self.lock().stop_epoch
+    fn stop_pending(&self) -> bool {
+        self.lock().engine == EngineState::Stopping
+    }
+
+    fn engine_started(&self) {
+        self.lock().engine = EngineState::Running;
+    }
+
+    /// The engine was killed and waited for. Returns whether Stop waited for that.
+    fn engine_gone(&self) -> bool {
+        std::mem::take(&mut self.lock().engine) == EngineState::Stopping
     }
 
     /// Reports `state` unless the channel was stopped. The lock is held while reporting, so a
@@ -299,8 +348,6 @@ fn send(socket: &mut Socket, text: String) -> Result<(), SessionEnded> {
 struct Served {
     engine: Option<Engine>,
     tap: Tap,
-    /// The count of Stops this session has handled.
-    epoch: u64,
 }
 
 /// How a session ended.
@@ -477,21 +524,45 @@ impl Worker {
         let mut served = Served {
             engine: self.start_engine(),
             tap: Tap::default(),
-            epoch: self.control.stop_epoch(),
         };
         self.serve_messages(socket, &mut served);
-        drop(served.engine.take());
-        for call in served.tap.take_open() {
-            self.end_call(&call);
-        }
+        let open = served.tap.take_open();
+        self.end_engine(&mut served, open.len());
     }
 
     fn start_engine(&self) -> Option<Engine> {
         // Without the engine the session still serves, with the stub.
-        self.channel
+        let engine = self
+            .channel
             .engine
             .as_ref()
-            .and_then(|spec| Engine::start(spec).ok())
+            .and_then(|spec| Engine::start(spec).ok())?;
+        self.control.engine_started();
+        Some(engine)
+    }
+
+    /// Ends the session's engine: closes its input, gives it the grace of [`Timing`], kills it
+    /// and waits for it. Only then does the lock hear of it: the end a Stop waits for, or else
+    /// the end of the `open` tool calls no engine answers any more.
+    fn end_engine(&self, served: &mut Served, open: usize) {
+        if let Some(engine) = served.engine.take() {
+            engine.end(self.channel.timing.engine_grace);
+        }
+        let environment_id = &self.channel.request.environment_id;
+        let released = self.channel.lock.with(|lock| {
+            if self.control.engine_gone() {
+                lock.engine_ended(environment_id)
+                    .then(|| lock.state(Instant::now()))
+            } else {
+                for _ in 0..open {
+                    lock.end_call(environment_id, Instant::now());
+                }
+                None
+            }
+        });
+        if let Some(state) = released {
+            (self.channel.lock_report)(state);
+        }
     }
 
     fn serve_messages(&self, socket: &mut Socket, served: &mut Served) {
@@ -499,12 +570,8 @@ impl Worker {
         let mut last_heard = Instant::now();
         let mut next_ping = last_heard + timing.ping_every;
         while !self.control.stopped() {
-            let epoch = self.control.stop_epoch();
-            if epoch != served.epoch {
-                served.epoch = epoch;
-                if self.restart_engine(socket, served).is_err() {
-                    return;
-                }
+            if self.control.stop_pending() && self.restart_engine(socket, served).is_err() {
+                return;
             }
             if self.pass_engine_output(socket, served).is_err() {
                 return;
@@ -569,20 +636,17 @@ impl Worker {
             FromEnvironment::Drop => {}
             FromEnvironment::ToolCall { id, tool, line } => {
                 let request = &self.channel.request;
-                // The epoch is read inside the lock, as Stop bumps it inside the lock.
                 let begun = self.channel.lock.with(|lock| {
-                    let epoch = self.control.stop_epoch();
                     lock.try_begin(
                         &request.environment_id,
                         &request.environment_label,
                         Instant::now(),
                         history::now_unix_ms(),
                     )
-                    .map(|()| epoch)
                 });
                 match begun {
-                    Ok(epoch) => {
-                        served.tap.call_started(id, tool.clone(), epoch);
+                    Ok(()) => {
+                        served.tap.call_started(id, tool.clone());
                         engine.send(line);
                         self.report(channel_state::State::Working(Working {
                             tool,
@@ -620,8 +684,9 @@ impl Worker {
                 FromEngine::Forward(line) => send(socket, line)?,
                 FromEngine::Swallow => {}
                 FromEngine::Finished { line, call } => {
-                    send(socket, line)?;
-                    self.end_call(&call);
+                    // The call ended whether or not its answer reaches the Environment: on the
+                    // lock, in the history and in the state first, then the answer.
+                    self.end_call();
                     // The history is a record for the person; a failed write never stops the
                     // channel. Only the tool's name, never its arguments or result.
                     let _ = self.channel.history.record(
@@ -633,46 +698,42 @@ impl Worker {
                     if !served.tap.calls_open() {
                         self.report(channel_state::State::Connected(Connected {}));
                     }
+                    send(socket, line)?;
                 }
             }
         }
         Ok(())
     }
 
-    /// Stop released this Environment's hold: the engine ends, so a running tool stops, its open
+    /// Stop: the engine ends, so a running tool stops, and only then does the hold end. The open
     /// calls are answered as stopped, and a new engine starts right away and gets the
     /// Environment's `initialize` again. Starting it now rather than at the next tool call keeps
     /// the engine's start in one place, after `ready` or after Stop.
     fn restart_engine(&self, socket: &mut Socket, served: &mut Served) -> Result<(), SessionEnded> {
-        if served.engine.is_none() {
-            return Ok(());
-        }
-        drop(served.engine.take());
         let open = served.tap.take_open();
-        for call in &open {
-            self.end_call(call);
-            send(socket, tap::tool_error(&call.id, tap::STOPPED))?;
-        }
-        if !open.is_empty() {
-            self.report(channel_state::State::Connected(Connected {}));
-        }
+        // The calls of the ended engine never end on the lock: Stop's end of the hold ends them.
+        self.end_engine(served, 0);
         served.engine = self.start_engine();
         if let Some(engine) = &served.engine {
             for line in served.tap.replay() {
                 engine.send(line);
             }
         }
+        if !open.is_empty() {
+            self.report(channel_state::State::Connected(Connected {}));
+        }
+        for call in &open {
+            send(socket, tap::tool_error(&call.id, tap::STOPPED))?;
+        }
         Ok(())
     }
 
-    /// Ends `call` on the lock, unless Stop released the hold it began in: the release ended it.
-    fn end_call(&self, call: &OpenCall) {
+    /// Ends one tool call of this Environment on the lock.
+    fn end_call(&self) {
         let environment_id = &self.channel.request.environment_id;
-        self.channel.lock.with(|lock| {
-            if call.epoch == self.control.stop_epoch() {
-                lock.end_call(environment_id, Instant::now());
-            }
-        });
+        self.channel
+            .lock
+            .with(|lock| lock.end_call(environment_id, Instant::now()));
     }
 
     /// Closes the session, briefly: a stopped or dead connection fails at once.
@@ -790,6 +851,7 @@ mod tests {
             helper_version: "1.2.3".to_owned(),
             engine,
             lock: Arc::clone(lock),
+            lock_report: Arc::new(|_| {}),
         })
         .expect("a thread");
         Running {
@@ -1224,11 +1286,15 @@ mod tests {
 
     impl Tapped {
         fn start(id: &str, label: &str, lock: &Arc<SharedLock>) -> Self {
+            Self::start_with(id, label, lock, quick_timing())
+        }
+
+        fn start_with(id: &str, label: &str, lock: &Arc<SharedLock>, timing: Timing) -> Self {
             let (environment, orders) = scripted_environment();
             let engines = FakeEngines::start();
             let running = run_with(
                 environment.connector(),
-                quick_timing(),
+                timing,
                 request_of(id, label, None),
                 Some(engines.spec()),
                 lock,
@@ -1456,6 +1522,71 @@ mod tests {
             tapped.running.kinds(),
             [kind::CONNECTED, kind::DISCONNECTED],
             "no history entry for the unanswered call"
+        );
+        tapped.running.supervisor.stop();
+    }
+
+    #[test]
+    fn a_call_whose_answer_cannot_be_sent_still_ends_on_the_lock() {
+        let _forks = spawning();
+        let (expired, expiries) = mpsc::channel();
+        let lock = Arc::new(SharedLock::new(
+            DeviceLock::with_linger(scratch("lock").join("agent.lock"), Duration::from_millis(1)),
+            move |holder: Holder| {
+                let _ = expired.send(holder.environment_id);
+            },
+        ));
+        // Only the engine's answer is sent: no ping and no silence end the session first.
+        let timing = Timing {
+            ping_every: Duration::from_secs(3600),
+            silent_after: Duration::from_secs(3600),
+            ..quick_timing()
+        };
+        let tapped = Tapped::start_with("env-a", "Environment A", &lock, timing);
+        tapped.send(tool_call(8, "desktop_wait"));
+        tapped.engines.until(
+            |event| matches!(event, EngineEvent::Got { tool, .. } if tool == "desktop_wait"),
+        );
+        tapped
+            .orders
+            .send(Order::Pause)
+            .expect("the session pauses");
+        assert_eq!(
+            tapped.environment.until(|event| *event == Event::Paused),
+            Event::Paused
+        );
+        // The computer can no longer send; it still reads, and the paused Environment is quiet.
+        tapped
+            .running
+            .supervisor
+            .control
+            .lock()
+            .stream
+            .as_ref()
+            .expect("the session's stream")
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shut down for writing");
+
+        tapped.engines.release(1);
+        assert_eq!(
+            expiries
+                .recv_timeout(PATIENCE)
+                .expect("the call ended on the lock, so the hold ends after the linger"),
+            "env-a"
+        );
+        lock.with(|lock| lock.try_begin("env-b", "Environment B", Instant::now(), 1))
+            .expect("another Environment takes the computer");
+        loop {
+            match tapped.running.next() {
+                channel_state::State::Connecting(_) => break,
+                channel_state::State::Working(_) | channel_state::State::Connected(_) => {}
+                other => panic!("the session ended, not {other:?}"),
+            }
+        }
+        assert_eq!(
+            tapped.running.kinds(),
+            [kind::CONNECTED, kind::TOOL, kind::DISCONNECTED],
+            "the tool ran, so the history has it"
         );
         tapped.running.supervisor.stop();
     }
