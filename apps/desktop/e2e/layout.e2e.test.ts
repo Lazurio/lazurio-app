@@ -11,6 +11,8 @@ import * as NodePath from "node:path";
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
+import { APP_NAME } from "../src/shared/appName.ts";
+import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../src/shared/bridge.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 let server: NodeHttp.Server;
@@ -170,5 +172,61 @@ describe("Lazurio App GEN4 with a remote page", () => {
       green > 120 && red < 80 && blue < 80,
       `the window shows rgb(${red}, ${green}, ${blue}) where the remote page is (${sample.found})`,
     );
+  });
+
+  // The column's names stay on one line however long a nightly's version and a node's addresses
+  // are: those go on lines of their own (task 649, the first nightly on 2026-11-17).
+  it("keeps the app's name and every row's name on one line with a nightly's long version", async () => {
+    const version = "0.1.0-nightly.20261117.8";
+    const long: AppStatus = {
+      appVersion: version,
+      generation: "GEN4",
+      helpers: [
+        { name: "lazurio-tailnet", state: "ready", version },
+        { name: "lazurio-device", state: "ready", version },
+      ],
+      tailnets: [
+        {
+          tailnet: "lazurioexampleorganization",
+          state: "running",
+          addresses: ["100.64.0.12", "fd7a:115c:a1e0:ab12:4843:cd96:6240:c"],
+        },
+      ],
+      updates: { channel: "nightly", state: { phase: "off", reason: "unpackaged" } },
+    };
+    await app.evaluate(
+      ({ webContents }, { channel, status }) => {
+        for (const contents of webContents.getAllWebContents())
+          if (contents.getURL().startsWith("lazurio-app:")) contents.send(channel, status);
+      },
+      { channel: STATUS_CHANGED_CHANNEL, status: long },
+    );
+    await shell
+      .locator('[data-tailnet="lazurioexampleorganization"][data-state="running"]')
+      .waitFor();
+    const lines = await shell.evaluate(() => {
+      // An element's text on one line has one line box, whatever its width.
+      const lineCount = (element: Element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+      };
+      const names = [...document.querySelectorAll(".shell__helpers li > span:first-child")];
+      const title = document.querySelector(".shell__header h1");
+      return {
+        title: title === null ? 0 : lineCount(title),
+        titleText: title?.textContent ?? "",
+        names: names.map((name) => [name.textContent ?? "", lineCount(name)] as const),
+      };
+    });
+    assert.deepStrictEqual(lines, {
+      title: 1,
+      titleText: APP_NAME,
+      names: [
+        ["lazurio-tailnet", 1],
+        ["lazurio-device", 1],
+        ["lazurioexampleorganization", 1],
+      ],
+    });
   });
 });

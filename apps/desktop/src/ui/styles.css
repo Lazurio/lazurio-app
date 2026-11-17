@@ -34,10 +34,12 @@ body {
   padding: 24px;
 }
 
+/* The name above its facts: in a column of 360 px they do not fit side by side once the name is
+   Lazurio App (Alpha) and the version a nightly's. */
 .shell__header {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 8px;
   border-bottom: 1px solid var(--line);
   padding-bottom: 12px;
 }
@@ -59,6 +61,17 @@ body {
 .shell__facts dd {
   margin: 0;
   color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* A helper's version or a node's address: its own line below the row, so the name and the state
+   keep their width however long it is. */
+.shell__detail {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .shell__helpers {

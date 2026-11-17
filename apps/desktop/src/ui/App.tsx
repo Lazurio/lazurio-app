@@ -1,5 +1,6 @@
 import { use, useEffect, useState } from "react";
 
+import { APP_NAME } from "../shared/appName.ts";
 import type { AppStatus, DeviceStatus } from "../shared/bridge.ts";
 import { AgentDesktopSection } from "./AgentDesktopSection.tsx";
 import { localeOf, messages } from "./messages.ts";
@@ -32,7 +33,7 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
   return (
     <main className="shell" data-status={live ? "live" : "initial"}>
       <header className="shell__header">
-        <h1>Lazurio App</h1>
+        <h1>{APP_NAME}</h1>
         <dl className="shell__facts">
           <dt>{text.generation}</dt>
           <dd>{current.generation}</dd>
@@ -46,9 +47,10 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
           {current.helpers.map((helper) => (
             <li key={helper.name} data-helper={helper.name} data-state={helper.state}>
               <span>{helper.name}</span>
-              <span>
-                {helper.state === "ready" ? `${text.ready} · ${helper.version}` : text.failed}
-              </span>
+              <span>{helper.state === "ready" ? text.ready : text.failed}</span>
+              {helper.state === "ready" ? (
+                <span className="shell__detail">{helper.version}</span>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -70,6 +72,11 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
                 >
                   <span>{tailnet.tailnet}</span>
                   <span className="shell__state">{label.state}</span>
+                  {label.addresses?.map((address) => (
+                    <span key={address} className="shell__detail">
+                      {address}
+                    </span>
+                  ))}
                   {label.detail === undefined ? null : (
                     <div className="shell__reason">
                       <p>{label.detail.text}</p>

@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
+import { APP_NAME } from "../shared/appName.ts";
 import { STATUS_CHANNEL, type AppStatus } from "../shared/bridge.ts";
 import { hardenSession, registerView } from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
@@ -132,7 +133,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
           width: 1280,
           height: 800,
           show: false,
-          title: "Lazurio App",
+          title: APP_NAME,
           backgroundColor: WINDOW_BACKGROUND,
         }),
     ),

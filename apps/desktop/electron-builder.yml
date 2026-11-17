@@ -47,6 +47,10 @@ electronFuses:
   grantFileProtocolExtraPrivileges: false
 mac:
   category: public.app-category.productivity
+  # The name Finder and the Dock show (src/shared/appName.ts). The bundle keeps the product's name
+  # (Lazurio App.app), and with it the Keychain item that seals the tailnets' keys.
+  extendInfo:
+    CFBundleDisplayName: Lazurio App (Alpha)
   hardenedRuntime: true
   target:
     - dmg
@@ -67,6 +71,12 @@ nsis:
   oneClick: true
   perMachine: false
   artifactName: Lazurio-App-Setup-${version}.${ext}
+  # The name a person sees (src/shared/appName.ts) on the Start menu's and desktop's shortcut and in
+  # the installed apps. The files keep the product's name: Lazurio App.exe and Uninstall Lazurio
+  # App.exe. An update renames an earlier shortcut instead of adding a second one (NSIS template,
+  # oldShortcutName), and the installed app keeps its one entry, keyed by appId.
+  shortcutName: Lazurio App (Alpha)
+  uninstallDisplayName: Lazurio App (Alpha)
 # macOS and Windows show the product's name (Lazurio App.app, Lazurio App.exe); Linux uses a
 # command-line name.
 linux:
