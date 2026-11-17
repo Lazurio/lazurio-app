@@ -1,7 +1,6 @@
-// Tests only (Helpers.test.ts runs it through Node, by path): the handshake of the helper protocol
-// as lazurio-device speaks it, and its last message after Shutdown. Its argument says what it does
-// then: "stop" sends DeviceStopped and exits, as the real helper does; "linger" sends
-// DeviceStopped and never exits, so its end is not confirmed in time.
+// Tests only (Helpers.test.ts runs it through Node, by path): lazurio-device's handshake. After
+// Shutdown, "stop" sends DeviceStopped and exits, "linger" sends it and never exits; "crash" exits
+// at its first request after Ping without an answer.
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { decodeFrames, encodeFrame } from "@lazurio/app-contracts/framing";
 import { AppMessageSchema, HelperMessageSchema } from "@lazurio/app-contracts/helper/v1";
@@ -40,5 +39,7 @@ for await (const message of decodeFrames(AppMessageSchema, process.stdin)) {
   } else if (message.kind.case === "shutdown") {
     stopped();
     break;
+  } else if (afterShutdown === "crash") {
+    process.exit(1);
   }
 }

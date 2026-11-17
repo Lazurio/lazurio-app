@@ -172,6 +172,27 @@ describe("Lazurio App GEN4", () => {
     assert.strictEqual(await shell.locator('[data-device-problem="stop-failed"]').count(), 0);
   });
 
+  // After the tests of Agent Desktop's other states: it ends the Device helper.
+  it("says in its local window when the Device helper ends on its own", async () => {
+    const pid: unknown = await app.evaluate(() =>
+      Reflect.get(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}, "lazurio-device"),
+    );
+    if (typeof pid !== "number") return assert.fail("the app named no PID of its Device helper");
+    process.kill(pid, "SIGKILL");
+    await shell.locator('[data-device-state="ended"] [data-device-problem="ended"]').waitFor();
+    assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
+    const state = await shell.evaluate(() => window.lazurio.device.getState());
+    assert.deepStrictEqual(state, { state: "ended", environments: [], agent: null });
+    // Stop answers at once instead of waiting for a helper that is gone.
+    const stopped = await shell.evaluate(() =>
+      window.lazurio.device.stop().then(
+        () => "answered",
+        () => "refused",
+      ),
+    );
+    assert.strictEqual(stopped, "refused");
+  });
+
   it("lets a remote page open no window and get no permission", async () => {
     const opened = await inRemotePage(`window.open("https://example.com/") === null`);
     assert.isTrue(opened);

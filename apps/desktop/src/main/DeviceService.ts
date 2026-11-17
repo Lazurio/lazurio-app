@@ -123,12 +123,19 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   // DeviceStopped, the helper's last message, and whether its events ended after it.
   let allEnginesEnded: Option.Option<boolean> = Option.none();
   const drained = yield* Deferred.make<void>();
+  // The helper's output ended while the app was not stopping it: the helper died or its output
+  // failed. Its channels and its agent are gone with it.
+  let lost = false;
 
   const listeners = new Set<() => void>();
   const changed = () => {
     for (const listener of listeners) listener();
   };
-  const idleNow = () => Option.match(lock, { onNone: () => true, onSome: (held) => held.idle });
+  // A helper that died without DeviceStopped leaves no proof that its engine's process tree ended,
+  // so the computer counts as busy and no update holds it until the app starts its helpers again
+  // (docs/adr/0006, points 7 and 8).
+  const idleNow = () =>
+    !lost && Option.match(lock, { onNone: () => true, onSome: (held) => held.idle });
   const idleChanges = yield* PubSub.unbounded<boolean>();
 
   const applyLock = (next: LockState) =>
@@ -169,15 +176,38 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
         return Effect.void;
     }
   };
+  // Runs only when the events end, not when the service's scope interrupts their reader.
+  const afterEnd = Effect.gen(function* () {
+    if (yield* connection.stopping) return;
+    const wasIdle = idleNow();
+    lost = true;
+    channels.clear();
+    state = "ended";
+    yield* Effect.logWarning("the Device helper ended without being stopped", {
+      deviceStopped: Option.getOrElse(allEnginesEnded, () => "missing"),
+    });
+    changed();
+    if (wasIdle) yield* PubSub.publish(idleChanges, false);
+  });
   yield* connection.events.pipe(
     Stream.runForEach(apply),
+    Effect.andThen(afterEnd),
     Effect.ensuring(Deferred.succeed(drained, undefined)),
     Effect.forkScoped,
   );
 
   const ask = (request: string, kind: Parameters<HelperConnection["request"]>[0]) =>
-    connection.request(kind).pipe(
-      Effect.mapError((error) => new DeviceRequestError({ request, problem: error.message })),
+    Effect.suspend(() =>
+      lost
+        ? Effect.fail(new DeviceRequestError({ request, problem: "the helper is not running" }))
+        : connection
+            .request(kind)
+            .pipe(
+              Effect.mapError(
+                (error) => new DeviceRequestError({ request, problem: error.message }),
+              ),
+            ),
+    ).pipe(
       Effect.filterOrFail(
         (reply) => reply.kind.case !== "failure",
         (reply) =>
@@ -274,7 +304,7 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   // the helper said DeviceStopped with every engine ended, and it exited in time with its output
   // read to the end. A helper still running confirms nothing.
   const confirmStopped = Effect.gen(function* () {
-    if (!(yield* connection.stopped)) return false;
+    if (lost || !(yield* connection.stopped)) return false;
     yield* Deferred.await(drained);
     return holdGranted() && Option.getOrElse(allEnginesEnded, () => false);
   }).pipe(
@@ -308,7 +338,10 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   };
 
   const service: DeviceService = {
-    current: () => ({ state, environments: environments(), agent: agent() }),
+    current: () =>
+      lost
+        ? { state, environments: [], agent: null }
+        : { state, environments: environments(), agent: agent() },
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

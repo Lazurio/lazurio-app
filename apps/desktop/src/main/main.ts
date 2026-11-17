@@ -49,6 +49,7 @@ const testHooks = Effect.gen(function* () {
       observer: Hardening.electronObserver,
       remoteUrl: Option.none<string>(),
       tailnetHelper: Option.none<Helpers.HelperBinary>(),
+      helperStarted: (_name: string, _pid: number) => {},
     };
   }
   // A launch may keep its data apart from the development profile, before the app is ready.
@@ -74,7 +75,15 @@ const testHooks = Effect.gen(function* () {
       process.stdout.write(`lazurio-app-e2e refused ${frame} ${url}\n`);
     },
   };
-  return { observer, remoteUrl, tailnetHelper };
+  // A test ends a helper by the PID the app started, never by its name. It reads the PIDs from
+  // the main process (Playwright's evaluate), because the app starts its helpers before a test
+  // can listen to its output.
+  const helperPids: Record<string, number> = {};
+  Reflect.set(globalThis, "lazurioAppE2eHelperPids", helperPids);
+  const helperStarted = (name: string, pid: number) => {
+    helperPids[name] = pid;
+  };
+  return { observer, remoteUrl, tailnetHelper, helperStarted };
 });
 
 // Development only, and never in a packaged app: the tailnets to join, as a JSON array of
@@ -201,6 +210,11 @@ const program = Effect.gen(function* () {
   const helpers = yield* Helpers.startAll(yield* helperBinaries(hooks.tailnetHelper)).pipe(
     Scope.provide(helpersScope),
   );
+  for (const helper of helpers) {
+    if (Option.isSome(helper.connection)) {
+      hooks.helperStarted(helper.status.name, helper.connection.value.pid);
+    }
+  }
   const fileSystem = yield* FileSystem.FileSystem;
   const keystore = keystoreOn(yield* HostProcess.Platform, !Electron.app.isPackaged);
   yield* KeystoreCheck.run({

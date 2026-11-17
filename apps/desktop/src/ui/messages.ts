@@ -36,6 +36,7 @@ export interface DeviceText {
   readonly pairingLater: string;
   readonly starting: string;
   readonly failed: string;
+  readonly ended: string;
   readonly environments: string;
   readonly noEnvironments: string;
   readonly off: string;
@@ -127,6 +128,8 @@ const cs: Text = {
     pairingLater: "Spárování s Prostředím přijde s přihlášením Lazurio.",
     starting: "Spouští se…",
     failed: "Agent Desktop se nespustil. Spusťte Lazurio App znovu.",
+    ended:
+      "Agent Desktop neběží: jeho proces skončil. Spusťte Lazurio App znovu. Do té doby agenti na tomto počítači nepracují a aktualizace se neinstaluje.",
     environments: "Prostředí",
     noEnvironments: "Zatím žádné Prostředí.",
     off: "Vypnuto",
@@ -200,6 +203,8 @@ const en: Text = {
     pairingLater: "Pairing with an Environment comes with the Lazurio sign-in.",
     starting: "Starting…",
     failed: "Agent Desktop did not start. Start Lazurio App again.",
+    ended:
+      "Agent Desktop is not running: its process ended. Start Lazurio App again. Until then no agent works on this computer and no update installs.",
     environments: "Environments",
     noEnvironments: "No Environment yet.",
     off: "Off",

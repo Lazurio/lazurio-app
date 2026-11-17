@@ -31,9 +31,9 @@ export function AgentDesktopSection({ text }: { readonly text: DeviceText }) {
     <section aria-label={text.title} className="shell__device" data-device-state={status.state}>
       <h2>{text.title}</h2>
       {status.state === "starting" ? <p className="shell__state">{text.starting}</p> : null}
-      {status.state === "failed" ? (
-        <p className="shell__problem" role="alert">
-          {text.failed}
+      {status.state === "failed" || status.state === "ended" ? (
+        <p className="shell__problem" role="alert" data-device-problem={status.state}>
+          {status.state === "failed" ? text.failed : text.ended}
         </p>
       ) : null}
       {status.agent === null ? null : (

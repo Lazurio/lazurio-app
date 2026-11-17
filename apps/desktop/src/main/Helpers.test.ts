@@ -32,7 +32,9 @@ const runFake = (afterShutdown: "stop" | "linger") =>
       Stream.runCollect,
       Effect.forkScoped,
     );
+    assert.isFalse(yield* connection.stopping);
     yield* Scope.close(helpersScope, Exit.void);
+    assert.isTrue(yield* connection.stopping);
     const stopped = yield* connection.stopped;
     // The events end once the helper's output ended; a helper still running keeps them open.
     const received = stopped ? [...(yield* Fiber.join(reading))] : [];
@@ -55,5 +57,31 @@ describe("Helpers", () => {
       const { stopped } = yield* runFake("linger");
       assert.isFalse(stopped);
     }),
+  );
+
+  it.live(
+    "fails a request at once when the helper's output ends, and never says the app stopped it",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fake = path.join(import.meta.dirname, "fake-device-helper.ts");
+        const [helper] = yield* startAll([
+          { name: "lazurio-device", path: process.execPath, args: [fake, "crash"] },
+        ]);
+        if (helper === undefined || Option.isNone(helper.connection)) {
+          return assert.fail(`the fake helper did not start: ${JSON.stringify(helper?.status)}`);
+        }
+        const connection = helper.connection.value;
+        assert.isNumber(connection.pid);
+        const ending = yield* connection.events.pipe(Stream.runDrain, Effect.forkScoped);
+        const answer = yield* connection
+          .request({ case: "stopAgent", value: {} })
+          .pipe(Effect.flip);
+        assert.include(answer.message, "its output ended");
+        yield* Fiber.join(ending);
+        const again = yield* connection.request({ case: "stopAgent", value: {} }).pipe(Effect.flip);
+        assert.include(again.message, "its output ended");
+        assert.isFalse(yield* connection.stopping);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

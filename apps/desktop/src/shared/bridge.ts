@@ -82,9 +82,10 @@ export interface DeviceEnvironmentStatus {
 }
 
 // Agent Desktop on this computer (docs/adr/0006). "absent": this build runs no Device helper;
-// "failed": the helper did not start or refused its configuration.
+// "failed": the helper did not start or refused its configuration; "ended": it ran and ended
+// without the app stopping it.
 export interface DeviceStatus {
-  readonly state: "absent" | "starting" | "ready" | "failed";
+  readonly state: "absent" | "starting" | "ready" | "failed" | "ended";
   readonly environments: ReadonlyArray<DeviceEnvironmentStatus>;
   // The Environment whose agent works on the computer now, if one does.
   readonly agent: { readonly environmentId: string; readonly label: string } | null;

@@ -49,13 +49,17 @@ class HelperProtocolError extends Schema.TaggedError<HelperProtocolError>()("Hel
 export interface HelperConnection {
   readonly name: string;
   readonly version: string;
-  // Sends a request and waits for the helper's reply to it.
+  // The process the app started, for end-to-end tests that end it by its PID.
+  readonly pid: number;
+  // Sends a request and waits for the helper's reply to it; fails at once once its output ended.
   readonly request: (kind: RequestKind) => Effect.Effect<HelperMessage, HelperProtocolError>;
   // The messages the helper sends on its own, after its Hello. They end with the helper's output.
   readonly events: Stream.Stream<HelperMessage>;
   // Waits until the helper's scope closed: true when, after Shutdown, the helper exited and its
   // output ended within two seconds, so every message it sent is among the events.
   readonly stopped: Effect.Effect<boolean>;
+  // Whether the app began to stop the helper; an end of its output before that is unexpected.
+  readonly stopping: Effect.Effect<boolean>;
 }
 
 const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -97,7 +101,18 @@ const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
   }
 
   const events = yield* Queue.unbounded<HelperMessage, Cause.Done>();
-  const pending = new Map<bigint, Deferred.Deferred<HelperMessage>>();
+  const pending = new Map<bigint, Deferred.Deferred<HelperMessage, HelperProtocolError>>();
+  // Once the output ended, no reply can come: every waiting request fails at once, and so does
+  // every later one.
+  let outputEnded = false;
+  const endOutput = Effect.suspend(() => {
+    outputEnded = true;
+    const waiting = [...pending.values()];
+    pending.clear();
+    return Effect.forEach(waiting, (reply) =>
+      Deferred.fail(reply, failure("its output ended")),
+    ).pipe(Effect.andThen(Queue.end(events)));
+  });
   const reader = yield* Stream.fromAsyncIterable(replies, () =>
     failure("its output could not be read"),
   ).pipe(
@@ -108,7 +123,7 @@ const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
       return waiting === undefined ? Effect.void : Deferred.succeed(waiting, message);
     }),
     Effect.ignore,
-    Effect.ensuring(Queue.end(events)),
+    Effect.ensuring(endOutput),
     Effect.forkScoped,
   );
 
@@ -116,8 +131,12 @@ const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
   const request = Effect.fn("Helpers.request")(function* (kind: RequestKind) {
     const requestId = nextRequestId;
     nextRequestId += 1n;
-    const reply = yield* Deferred.make<HelperMessage>();
+    const reply = yield* Deferred.make<HelperMessage, HelperProtocolError>();
     pending.set(requestId, reply);
+    if (outputEnded) {
+      pending.delete(requestId);
+      return yield* failure("its output ended");
+    }
     yield* send(requestId, kind);
     return yield* Deferred.await(reply).pipe(
       Effect.timeoutOrElse({
@@ -130,8 +149,10 @@ const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
   // Shutdown, the end of the helper's input, and then its exit and the end of its output, which
   // the reader takes in before the scope ends it.
   const stopped = yield* Deferred.make<boolean>();
+  const stopping = yield* Deferred.make<void>();
   yield* Effect.addFinalizer(() =>
-    send(nextRequestId, { case: "shutdown", value: {} }).pipe(
+    Deferred.succeed(stopping, undefined).pipe(
+      Effect.andThen(send(nextRequestId, { case: "shutdown", value: {} })),
       Effect.andThen(Queue.end(outbox)),
       Effect.andThen(
         Effect.all([child.exitCode, Fiber.await(reader)]).pipe(Effect.timeout(STOP_WITHIN)),
@@ -154,6 +175,8 @@ const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
     request,
     events: Stream.fromQueue(events),
     stopped: Deferred.await(stopped),
+    stopping: Deferred.isDone(stopping),
+    pid: child.pid,
   };
   return connection;
 });
