@@ -26,6 +26,27 @@ export interface Text {
   readonly keyUnreadable: Advice;
   readonly stateUnreadable: Advice;
   readonly updates: UpdatesText;
+  readonly device: DeviceText;
+}
+
+// Agent Desktop in the window's column (docs/adr/0006, point 5). "{tool}", "{application}",
+// "{reason}" and "{label}" stand for what the Device helper reports.
+export interface DeviceText {
+  readonly title: string;
+  readonly pairingLater: string;
+  readonly starting: string;
+  readonly failed: string;
+  readonly environments: string;
+  readonly noEnvironments: string;
+  readonly off: string;
+  readonly connecting: string;
+  readonly connected: string;
+  readonly refused: string;
+  readonly working: string;
+  readonly workingIn: string;
+  readonly agentWorking: string;
+  readonly stop: string;
+  readonly stopFailed: string;
 }
 
 // The window's section about updates (docs/adr/0005). "{version}" stands for the version offered.
@@ -101,6 +122,23 @@ const cs: Text = {
     channelNotSaved:
       "Kanál se nepodařilo změnit. Zkontrolujte, že do složky dat Lazurio App jde zapisovat, a zkuste to znovu.",
   },
+  device: {
+    title: "Agent Desktop",
+    pairingLater: "Spárování s Prostředím přijde s přihlášením Lazurio.",
+    starting: "Spouští se…",
+    failed: "Agent Desktop se nespustil. Spusťte Lazurio App znovu.",
+    environments: "Prostředí",
+    noEnvironments: "Zatím žádné Prostředí.",
+    off: "Vypnuto",
+    connecting: "Připojuje se",
+    connected: "Připojeno",
+    refused: "Odmítnuto ({reason})",
+    working: "Pracuje agent: {tool}",
+    workingIn: "Pracuje agent: {tool} v {application}",
+    agentWorking: "Na tomto počítači pracuje agent z Prostředí {label}.",
+    stop: "Zastavit",
+    stopFailed: "Agenta se nepodařilo zastavit. Zkuste to znovu.",
+  },
 };
 
 const en: Text = {
@@ -156,6 +194,23 @@ const en: Text = {
     failed: "The update did not work. Lazurio App tries again in an hour.",
     channelNotSaved:
       "The channel could not be changed. Check that Lazurio App's data folder can be written, and try again.",
+  },
+  device: {
+    title: "Agent Desktop",
+    pairingLater: "Pairing with an Environment comes with the Lazurio sign-in.",
+    starting: "Starting…",
+    failed: "Agent Desktop did not start. Start Lazurio App again.",
+    environments: "Environments",
+    noEnvironments: "No Environment yet.",
+    off: "Off",
+    connecting: "Connecting",
+    connected: "Connected",
+    refused: "Refused ({reason})",
+    working: "An agent is working: {tool}",
+    workingIn: "An agent is working: {tool} in {application}",
+    agentWorking: "An agent from the Environment {label} is working on this computer.",
+    stop: "Stop",
+    stopFailed: "The agent could not be stopped. Try again.",
   },
 };
 

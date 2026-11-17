@@ -1,6 +1,7 @@
 import { use, useEffect, useState } from "react";
 
 import type { AppStatus } from "../shared/bridge.ts";
+import { AgentDesktopSection } from "./AgentDesktopSection.tsx";
 import { localeOf, messages } from "./messages.ts";
 import { tailnetLabel } from "./tailnetLabel.ts";
 import { UpdatesSection } from "./UpdatesSection.tsx";
@@ -83,6 +84,7 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
         appVersion={current.appVersion}
         text={text.updates}
       />
+      <AgentDesktopSection text={text.device} />
     </main>
   );
 }

@@ -9,7 +9,12 @@ import * as NodePath from "node:path";
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
-import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../src/shared/bridge.ts";
+import {
+  DEVICE_STATE_CHANGED_CHANNEL,
+  STATUS_CHANGED_CHANNEL,
+  type AppStatus,
+  type DeviceStatus,
+} from "../src/shared/bridge.ts";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
@@ -117,6 +122,54 @@ describe("Lazurio App GEN4", () => {
       `[typeof window.lazurio, typeof globalThis.require, typeof globalThis.process, typeof globalThis.electron]`,
     );
     assert.deepStrictEqual(globals, ["undefined", "undefined", "undefined", "undefined"]);
+  });
+
+  it("gives a remote page none of Agent Desktop, by any name", async () => {
+    const reached = await inRemotePage(
+      `[typeof window.lazurio?.device, typeof globalThis.ipcRenderer, Object.getOwnPropertyNames(window).filter((name) => /lazurio|ipc|electron/iu.test(name))]`,
+    );
+    assert.deepStrictEqual(reached, ["undefined", "undefined", []]);
+  });
+
+  it("shows Agent Desktop in its local window with only the calls the window needs", async () => {
+    await shell.locator('[data-device-state="ready"]').waitFor();
+    await shell.locator('[data-device-environments="none"]').waitFor();
+    await shell.locator('[data-device-pairing="later"]').waitFor();
+    assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
+    const bridge = await shell.evaluate(async () => ({
+      calls: Object.keys(window.lazurio.device).toSorted(),
+      state: await window.lazurio.device.getState(),
+    }));
+    assert.deepStrictEqual(bridge, {
+      calls: ["getState", "stop", "subscribe"],
+      state: { state: "ready", environments: [], agent: null },
+    });
+  });
+
+  it("offers Stop while an agent works, and Stop reaches the Device helper", async () => {
+    const working: DeviceStatus = {
+      state: "ready",
+      environments: [
+        {
+          environmentId: "e2e",
+          label: "E2E",
+          channel: { state: "working", tool: "click", application: "Outlook" },
+        },
+      ],
+      agent: { environmentId: "e2e", label: "E2E" },
+    };
+    await app.evaluate(
+      ({ webContents }, { channel, status }) => {
+        for (const contents of webContents.getAllWebContents())
+          if (contents.getURL().startsWith("lazurio-app:")) contents.send(channel, status);
+      },
+      { channel: DEVICE_STATE_CHANGED_CHANNEL, status: working },
+    );
+    await shell.locator('[data-device-environment="e2e"][data-state="working"]').waitFor();
+    // The helper answers Stop with who holds the computer, and the window follows its answer.
+    await shell.locator('[data-action="device-stop"]').click();
+    await shell.locator('[data-action="device-stop"]').waitFor({ state: "detached" });
+    assert.strictEqual(await shell.locator('[data-device-problem="stop-failed"]').count(), 0);
   });
 
   it("lets a remote page open no window and get no permission", async () => {
