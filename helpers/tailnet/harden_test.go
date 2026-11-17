@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -164,13 +165,22 @@ func pingUntilAnswered(ctx context.Context, t *testing.T, from *tsnet.Server, to
 	}
 	for {
 		attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
-		_, err := client.Ping(attempt, to, tailcfg.PingDisco)
+		result, err := client.Ping(attempt, to, tailcfg.PingDisco)
 		cancel()
-		if err == nil {
+		// A ping that fails can still return no Go error and carry its failure in the result, such
+		// as "no matching peer" before the node has the other one in its map.
+		if err == nil && result != nil && result.Err == "" {
 			return
+		}
+		if err == nil && result != nil {
+			err = errors.New(result.Err)
 		}
 		if ctx.Err() != nil {
 			t.Fatalf("%s gets no disco answer from %s: %v", from.Hostname, to, err)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 }
