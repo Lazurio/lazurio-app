@@ -3,8 +3,6 @@ package nodepolicy
 import (
 	"context"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +24,11 @@ func TestNodesStartWithShieldsUpAlsoAfterARestart(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "run", "./testdata/restart")
+	goTool, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("no go tool on the path: %v", err)
+	}
+	command := exec.CommandContext(ctx, goTool, "run", "./testdata/restart") //nolint:gosec // The go tool on the path, and a fixed package.
 	output, err := command.CombinedOutput()
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if last := lines[len(lines)-1]; err != nil || last != "ok" {
