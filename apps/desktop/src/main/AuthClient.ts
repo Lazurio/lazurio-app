@@ -22,6 +22,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import type { Locale } from "../ui/messages.ts";
+import { LAZURIO_AUTH_ISSUER } from "./Navigation.ts";
 import { NO_KEYSTORE, type Keystore } from "./NodeKeys.ts";
 import { SIGN_IN_PAGE_HEADERS, signInPage, type SignInOutcome } from "./SignInPage.ts";
 
@@ -125,9 +126,9 @@ export interface HandOver {
 }
 
 export interface AuthClientOptions {
-  // `https://<Lazurio Auth's host>` and the realm's path, without a trailing slash. Only a
-  // loopback issuer may use plain HTTP, for tests.
-  readonly issuer: string;
+  // Tests only: another issuer, `https://<host>` and the realm's path without a trailing slash,
+  // or a loopback one over plain HTTP. The app always uses LAZURIO_AUTH_ISSUER (docs/adr/0008).
+  readonly issuer?: string;
   readonly keystore: Keystore;
   // Where the sealed session lives, in the app's userData.
   readonly sessionPath: string;
@@ -329,7 +330,7 @@ export const layer = (options: AuthClientOptions) =>
   Layer.effect(
     AuthClient,
     Effect.gen(function* () {
-      const issuer = yield* Effect.fromResult(issuerOf(options.issuer));
+      const issuer = yield* Effect.fromResult(issuerOf(options.issuer ?? LAZURIO_AUTH_ISSUER));
       const http = yield* HttpClient.HttpClient;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
