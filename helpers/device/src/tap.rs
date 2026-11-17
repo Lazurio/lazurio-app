@@ -43,6 +43,9 @@ const REINITIALIZE_ID: &str = "lazurio-device:reinitialize";
 /// JSON-RPC's code for an invalid request.
 const INVALID_REQUEST: i64 = -32600;
 
+/// JSON-RPC's code for an error inside the server.
+const INTERNAL_ERROR: i64 = -32603;
+
 /// What to do with a message from the Environment.
 #[derive(Debug, PartialEq)]
 pub enum FromEnvironment {
@@ -95,6 +98,9 @@ pub struct Tap {
     reinitializing: bool,
     /// Open tool calls by their id's JSON.
     open: HashMap<String, OpenCall>,
+    /// Every other request passed on to the engine and not answered yet: its method by its
+    /// id's JSON. Each answer is matched to the request it answers.
+    forwarded: HashMap<String, String>,
 }
 
 impl Tap {
@@ -127,7 +133,7 @@ impl Tap {
         let method = object.get("method").and_then(Value::as_str);
         let id = object.get("id");
         if let (Some(_), Some(id)) = (method, id) {
-            // An id the helper uses itself, or one an open tool call uses, would make the
+            // An id the helper uses itself, or one an unanswered request uses, would make the
             // engine's answers ambiguous.
             if id
                 .as_str()
@@ -135,10 +141,11 @@ impl Tap {
             {
                 return FromEnvironment::Answer(error(id, "This id is reserved."));
             }
-            if self.open.contains_key(&key(id)) {
+            let id = key(id);
+            if self.open.contains_key(&id) || self.forwarded.contains_key(&id) {
                 return FromEnvironment::Answer(error(
-                    id,
-                    "The id is in use by an open tool call.",
+                    object.get("id").unwrap_or(&Value::Null),
+                    "The id is in use by a request still waiting for its answer.",
                 ));
             }
         }
@@ -170,11 +177,16 @@ impl Tap {
             (Some("tools/call"), None) => FromEnvironment::Drop,
             (Some("initialize"), Some(id)) => {
                 self.initialize_pending = Some(key(id));
+                self.forwarded.insert(key(id), "initialize".to_owned());
                 self.initialize = Some(object);
                 FromEnvironment::Forward(line)
             }
             (Some("notifications/initialized"), None) => {
                 self.initialized = Some(line.clone());
+                FromEnvironment::Forward(line)
+            }
+            (Some(method), Some(id)) => {
+                self.forwarded.insert(key(id), method.to_owned());
                 FromEnvironment::Forward(line)
             }
             _ => FromEnvironment::Forward(line),
@@ -200,7 +212,11 @@ impl Tap {
             self.reinitializing = false;
             return FromEngine::Swallow;
         }
-        if self.initialize_pending.as_deref() == Some(id.as_str()) {
+        if let Some(method) = self.forwarded.remove(&id) {
+            // The answer to a request that is no tool call ends none.
+            if method != "initialize" || self.initialize_pending.as_deref() != Some(id.as_str()) {
+                return FromEngine::Forward(line.to_owned());
+            }
             self.initialize_pending = None;
             if let Some(Value::Object(result)) = object.get_mut("result") {
                 let meta = result
@@ -239,6 +255,33 @@ impl Tap {
         self.open.drain().map(|(_, call)| call).collect()
     }
 
+    /// Error answers for the other requests an ended engine will never answer, except the
+    /// Environment's `initialize`, which [`Tap::replay`] sends again under its own id.
+    pub fn take_unanswered(&mut self) -> Vec<String> {
+        let pending = self.initialize_pending.clone();
+        let unanswered: Vec<String> = self
+            .forwarded
+            .keys()
+            .filter(|id| Some(*id) != pending.as_ref())
+            .cloned()
+            .collect();
+        unanswered
+            .into_iter()
+            .filter_map(|id| {
+                self.forwarded.remove(&id);
+                let id: Value = serde_json::from_str(&id).ok()?;
+                Some(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": INTERNAL_ERROR, "message": "The engine restarted; try again."},
+                    })
+                    .to_string(),
+                )
+            })
+            .collect()
+    }
+
     /// The lines that bring an engine started again to where the Environment left the first
     /// one: its `initialize`, under the tap's own id once the first engine answered it, and its
     /// `notifications/initialized`.
@@ -254,6 +297,18 @@ impl Tap {
         lines.extend(self.initialized.clone());
         lines
     }
+}
+
+/// The id of `frame` when it is a tool call with an id.
+#[must_use]
+pub fn tool_call_id(frame: &str) -> Option<Value> {
+    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(frame) else {
+        return None;
+    };
+    if object.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return None;
+    }
+    object.get("id").cloned()
 }
 
 /// The answer to a tool call that did not run, with `text` for the agent.
@@ -391,6 +446,57 @@ mod tests {
             ),
             "the tool's answer still ends the call"
         );
+    }
+
+    #[test]
+    fn a_tool_call_never_reuses_the_id_of_another_outstanding_request() {
+        let mut tap = Tap::default();
+        let ping = r#"{"jsonrpc": "2.0", "id": 5, "method": "ping"}"#;
+        assert_eq!(
+            tap.sort_environment(ping),
+            FromEnvironment::Forward(ping.to_owned())
+        );
+        let FromEnvironment::Answer(answer) = tap.sort_environment(
+            r#"{"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "x"}}"#,
+        ) else {
+            panic!("refused while the ping waits for its answer");
+        };
+        assert_eq!(parse(&answer)["error"]["code"], INVALID_REQUEST);
+        let its_answer = r#"{"jsonrpc": "2.0", "id": 5, "result": {}}"#;
+        assert_eq!(
+            tap.sort_engine(its_answer, "1.2.3"),
+            FromEngine::Forward(its_answer.to_owned()),
+            "the ping's answer ends no tool call"
+        );
+        assert!(!tap.calls_open());
+        assert!(
+            matches!(
+                tap.sort_environment(
+                    r#"{"id": 5, "method": "tools/call", "params": {"name": "x"}}"#
+                ),
+                FromEnvironment::ToolCall { .. }
+            ),
+            "the id is free again once answered"
+        );
+    }
+
+    #[test]
+    fn requests_an_ended_engine_never_answers_get_an_error() {
+        let mut tap = Tap::default();
+        tap.sort_environment(r#"{"id": "i0", "method": "initialize"}"#);
+        tap.sort_environment(r#"{"id": 3, "method": "tools/list"}"#);
+        let errors = tap.take_unanswered();
+        assert_eq!(
+            errors.len(),
+            1,
+            "the initialize is sent again instead: {errors:?}"
+        );
+        assert_eq!(parse(&errors[0])["id"], 3);
+        assert_eq!(parse(&errors[0])["error"]["code"], INTERNAL_ERROR);
+        assert!(matches!(
+            tap.sort_environment(r#"{"id": 3, "method": "ping"}"#),
+            FromEnvironment::Forward(_)
+        ));
     }
 
     #[test]

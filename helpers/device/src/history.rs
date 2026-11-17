@@ -32,6 +32,9 @@ pub mod kind {
     pub const REFUSED: &str = "refused";
     pub const TOOL: &str = "tool";
     pub const STOPPED: &str = "stopped";
+    /// The helper could not confirm that an engine's process tree ended; it keeps the computer
+    /// until it ends itself.
+    pub const UNCONFIRMED: &str = "unconfirmed";
 }
 
 /// Unix milliseconds now, or 0 before 1970.

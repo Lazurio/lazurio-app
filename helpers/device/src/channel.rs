@@ -26,7 +26,7 @@ use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
     ChannelState, Connected, Connecting, LockState, Off, Refused, Working, channel_state,
 };
-use crate::lock::SharedLock;
+use crate::lock::{Busy, SharedLock};
 use crate::mcp_stub;
 use crate::secret_start::StartRequest;
 use crate::tap::{self, FromEngine, FromEnvironment, Tap};
@@ -109,7 +109,12 @@ pub struct Channel {
     pub lock: Arc<SharedLock>,
     /// Who holds the computer, when this channel's engine ends a Stop.
     pub lock_report: LockReport,
+    /// Ends an engine with its process tree and says whether the tree is gone; [`Engine::end`].
+    pub ender: Ender,
 }
+
+/// How a session ends its engine: [`Engine::end`], or a stand-in in tests.
+pub type Ender = fn(Engine, Duration) -> bool;
 
 /// One Environment's channel thread. Dropping it stops the channel without waiting.
 pub struct Supervisor {
@@ -539,6 +544,10 @@ impl Worker {
     }
 
     fn start_engine(&self) -> Option<Engine> {
+        // Once a tree could not be confirmed gone, no engine starts for tool work again.
+        if self.channel.lock.with(|lock| lock.unconfirmed()) {
+            return None;
+        }
         // Without the engine the session still serves, with the stub.
         let engine = self
             .channel
@@ -554,14 +563,26 @@ impl Worker {
     /// end a Stop waits for, or else the end of the `open` tool calls no engine answers any more.
     fn end_engine(&self, served: &mut Served, open: usize) {
         let grace = self.channel.timing.engine_grace;
-        let gone = served.engine.take().is_none_or(|engine| engine.end(grace));
-        let environment_id = &self.channel.request.environment_id;
-        let released = self.channel.lock.with(|lock| {
+        let gone = served
+            .engine
+            .take()
+            .is_none_or(|engine| (self.channel.ender)(engine, grace));
+        let request = &self.channel.request;
+        let environment_id = &request.environment_id;
+        let mut newly_unconfirmed = false;
+        let changed = self.channel.lock.with(|lock| {
             let stop_waited = self.control.engine_gone();
             if !gone {
-                // A process of the engine outlived its kill and may still work: the computer
-                // stays held, and the device lock with it, until the helper ends.
-                return None;
+                // A process of the engine outlived its kill and may still work: for the rest
+                // of the helper's life the computer stays held, the device lock with it, and
+                // every tool call is refused.
+                newly_unconfirmed = lock.hold_unconfirmed(
+                    environment_id,
+                    &request.environment_label,
+                    Instant::now(),
+                    history::now_unix_ms(),
+                );
+                return Some(lock.state(Instant::now()));
             }
             if stop_waited {
                 lock.engine_ended(environment_id)
@@ -573,7 +594,16 @@ impl Worker {
                 None
             }
         });
-        if let Some(state) = released {
+        if newly_unconfirmed {
+            // Once for the helper's life, without content.
+            let _ = self.channel.history.record(
+                history::now_unix_ms(),
+                environment_id,
+                history::kind::UNCONFIRMED,
+                None,
+            );
+        }
+        if let Some(state) = changed {
             (self.channel.lock_report)(state);
         }
     }
@@ -640,6 +670,11 @@ impl Worker {
         text: &str,
     ) -> Result<(), SessionEnded> {
         let Some(engine) = &served.engine else {
+            if let Some(id) = tap::tool_call_id(text)
+                && self.channel.lock.with(|lock| lock.unconfirmed())
+            {
+                return send(socket, tap::tool_error(&id, &Busy::Unconfirmed.message()));
+            }
             return match mcp_stub::answer(text, &self.channel.helper_version) {
                 Some(answer) => send(socket, answer),
                 None => Ok(()),
@@ -741,6 +776,7 @@ impl Worker {
         why: &Restart,
     ) -> Result<(), SessionEnded> {
         let open = served.tap.take_open();
+        let unanswered = served.tap.take_unanswered();
         let cancelled = match why {
             Restart::Stop => None,
             Restart::Cancel(id) => Some(id),
@@ -766,6 +802,9 @@ impl Worker {
         }
         if !open.is_empty() {
             self.report(channel_state::State::Connected(Connected {}));
+        }
+        for answer in unanswered {
+            send(socket, answer)?;
         }
         for call in &open {
             match cancelled {
@@ -882,6 +921,17 @@ mod tests {
         engine: Option<EngineSpec>,
         lock: &Arc<SharedLock>,
     ) -> Running {
+        run_ending(connector, timing, request, engine, lock, Engine::end)
+    }
+
+    fn run_ending(
+        connector: Connector,
+        timing: Timing,
+        request: StartRequest,
+        engine: Option<EngineSpec>,
+        lock: &Arc<SharedLock>,
+        ender: Ender,
+    ) -> Running {
         let (sender, states) = mpsc::channel();
         let sender = std::sync::Mutex::new(sender);
         let history_directory = scratch("history");
@@ -907,6 +957,7 @@ mod tests {
             lock_report: Arc::new(move |state| {
                 let _ = lock_sender.lock().expect("the test's sender").send(state);
             }),
+            ender,
         })
         .expect("a thread");
         Running {
@@ -1346,14 +1397,25 @@ mod tests {
         }
 
         fn start_with(id: &str, label: &str, lock: &Arc<SharedLock>, timing: Timing) -> Self {
+            Self::start_ending(id, label, lock, timing, Engine::end)
+        }
+
+        fn start_ending(
+            id: &str,
+            label: &str,
+            lock: &Arc<SharedLock>,
+            timing: Timing,
+            ender: Ender,
+        ) -> Self {
             let (environment, orders) = scripted_environment();
             let engines = FakeEngines::start();
-            let running = run_with(
+            let running = run_ending(
                 environment.connector(),
                 timing,
                 request_of(id, label, None),
                 Some(engines.spec()),
                 lock,
+                ender,
             );
             let tapped = Self {
                 running,
@@ -1782,6 +1844,112 @@ mod tests {
             "the cancelled call is a tool entry, without content"
         );
         tapped.running.supervisor.stop();
+    }
+
+    /// Ends the engine and its tree for real, but reports that it could not confirm it.
+    fn unconfirmed(engine: Engine, grace: Duration) -> bool {
+        let _ = engine.end(grace);
+        false
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story, from the unconfirmed end on"
+    )]
+    fn an_unconfirmed_tree_keeps_the_computer_until_the_helper_ends() {
+        let _forks = spawning();
+        let lock = a_lock();
+        let mut tapped =
+            Tapped::start_ending("env-a", "Environment A", &lock, quick_timing(), unconfirmed);
+        tapped.send(tool_call(1, "desktop_wait"));
+        tapped.engines.until(
+            |event| matches!(event, EngineEvent::Got { tool, .. } if tool == "desktop_wait"),
+        );
+
+        // The agent cancels; the engine's tree cannot be confirmed gone.
+        tapped.send(
+            json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                           "params": {"requestId": 1}}),
+        );
+        let held = tapped
+            .running
+            .lock_states
+            .recv_timeout(PATIENCE)
+            .expect("the helper reports who holds the computer");
+        assert!(
+            !held.idle && held.holder_environment_id == "env-a",
+            "the computer stays held: {held:?}"
+        );
+        let unconfirmed = Busy::Unconfirmed.message();
+
+        // No tool call of anybody, the same Environment included, and no updater.
+        tapped.send(tool_call(2, "desktop_click"));
+        assert_eq!(
+            tool_text(&tapped.environment.answer(&json!(2)).0),
+            (unconfirmed.as_str(), true)
+        );
+        assert_eq!(
+            lock.with(|lock| lock.try_begin("env-b", "Environment B", Instant::now(), 1)),
+            Err(Busy::Unconfirmed)
+        );
+        assert!(!lock.with(|lock| lock.hold_for_update(true, Instant::now())));
+        // No engine serves the session any more: the tools come from the helper's stub.
+        tapped.send(json!({"jsonrpc": "2.0", "id": "l1", "method": "tools/list"}));
+        assert_eq!(
+            tapped.environment.answer(&json!("l1")).0["result"],
+            json!({"tools": []})
+        );
+
+        // Neither Stop nor the end of the hold's time frees it.
+        lock.with(|lock| {
+            lock.stop(0);
+            assert!(!lock.engine_ended("env-a"));
+            lock.release_any();
+            lock.release("env-a");
+        });
+        let later = Instant::now() + Duration::from_secs(3600);
+        assert_eq!(lock.with(|lock| lock.deadline()), None);
+        let state = lock.with(|lock| lock.state(later));
+        assert!(
+            !state.idle && state.holder_environment_id == "env-a",
+            "{state:?}"
+        );
+
+        // A new session after a disconnect starts no engine either.
+        tapped
+            .orders
+            .send(Order::Close)
+            .expect("the session closes");
+        loop {
+            if tapped.running.next() == connected() {
+                break;
+            }
+        }
+        assert_eq!(
+            lock.with(|lock| lock.try_begin("env-a", "Environment A", later, 2)),
+            Err(Busy::Unconfirmed)
+        );
+        let kinds = tapped.running.kinds();
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|kind| *kind == history::kind::UNCONFIRMED)
+                .count(),
+            1,
+            "one entry, without content: {kinds:?}"
+        );
+        tapped.running.supervisor.stop();
+        assert!(
+            tapped
+                .running
+                .supervisor
+                .wait_ended(Instant::now() + PATIENCE)
+        );
+        assert!(
+            !lock.with(|lock| lock.state(later)).idle,
+            "the computer stays held after the channel stopped"
+        );
     }
 
     #[test]

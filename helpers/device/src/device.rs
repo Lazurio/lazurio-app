@@ -211,6 +211,7 @@ impl Device {
             history: Arc::clone(&runtime.history),
             report: Arc::clone(&self.channels.report),
             lock_report: Arc::clone(&self.channels.lock_report),
+            ender: crate::engine::Engine::end,
             helper_version: self.channels.helper_version.clone(),
             engine: self.channels.engine.clone(),
             lock: Arc::clone(&runtime.lock),
