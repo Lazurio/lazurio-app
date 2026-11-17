@@ -1,9 +1,8 @@
 // End-to-end: with a remote page open, as a packaged app always has, the local window's tailnet
 // status and update controls stay beside the page, not under it, and work (the review of
 // Lazurio/lazurio-app#36). The remote view's bounds come from the main process; the controls'
-// boxes from the local window, at the same scale. The page must also be shown and paint: on
-// Windows it loaded but stayed blank, hidden to its renderer, until something forced a repaint
-// (the trial of the proof of concept on 2026-11-17).
+// boxes from the local window, at the same scale. The page must also be visible to its renderer,
+// paint, and show in the window's composed pixels.
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A plain HTTP server serves the remote page.
 import * as NodeHttp from "node:http";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the app on disk.
@@ -83,7 +82,7 @@ describe("Lazurio App GEN4 with a remote page", () => {
     await shell.locator('section[data-updates-channel="nightly"]').waitFor();
   });
 
-  it("shows the page and paints it without a forced repaint", async () => {
+  it("shows the page to its renderer and paints it", async () => {
     const shown = await app.evaluate(async ({ BaseWindow }) => {
       const window = BaseWindow.getAllWindows()[0];
       const view = window?.contentView.children
@@ -114,9 +113,8 @@ describe("Lazurio App GEN4 with a remote page", () => {
     });
   });
 
-  // What the system composes into the window, not what the page drew for itself: on Windows the
-  // page painted and still the window showed the local page's background in its place (the trial of
-  // 2026-11-17). The remote page is green, the local window dark.
+  // What the system composes into the window, not only what the page drew for itself. The remote
+  // page is green, the local window dark.
   it("shows the remote page in the window's own pixels", async (context) => {
     const sample = await app.evaluate(
       async ({ BaseWindow, desktopCapturer, screen, systemPreferences }) => {
