@@ -2,9 +2,10 @@ import * as Option from "effect/Option";
 
 import { destinationOf } from "./Navigation.ts";
 
-// The page of the web Lazurio the main window shows. A packaged app takes neither setting. Else the
-// end-to-end tests' page comes first, then the development page, as an address of Lazurio over
-// HTTPS only. No page leaves the main window with the app's own view alone.
+// The page of the web Lazurio the main window shows. A packaged app takes neither setting and opens
+// the Dashboard, where the person signs in with their Lazurio account and opens an Environment
+// (docs/adr/0008). Else the end-to-end tests' page comes first, then the development page, as an
+// address of Lazurio over HTTPS only. No page leaves the main window with the app's own view alone.
 interface RemoteUrlSettings {
   readonly packaged: boolean;
   readonly test: Option.Option<string>;
@@ -17,10 +18,14 @@ interface RemoteUrlChoice {
   readonly developmentRefused: boolean;
 }
 
+export const PACKAGED_FIRST_PAGE = "https://dashboard.lazurio.ai/";
+
 const noPage: RemoteUrlChoice = { remoteUrl: Option.none(), developmentRefused: false };
 
 export const choose = (settings: RemoteUrlSettings): RemoteUrlChoice => {
-  if (settings.packaged) return noPage;
+  if (settings.packaged) {
+    return { remoteUrl: Option.some(PACKAGED_FIRST_PAGE), developmentRefused: false };
+  }
   if (Option.isSome(settings.test)) return { remoteUrl: settings.test, developmentRefused: false };
   if (Option.isNone(settings.development)) return noPage;
   return destinationOf(settings.development.value)._tag === "Lazurio"

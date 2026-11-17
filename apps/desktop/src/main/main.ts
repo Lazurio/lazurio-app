@@ -1,3 +1,5 @@
+import * as NodeOS from "node:os";
+
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@lazurio/app-shared/HostProcess";
@@ -23,6 +25,7 @@ import * as MainWindow from "./MainWindow.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
 import * as Tailnet from "./Tailnet.ts";
+import * as TailnetDirectory from "./TailnetDirectory.ts";
 import * as Updates from "./Updates.ts";
 import * as UpdatesIpc from "./UpdatesIpc.ts";
 
@@ -73,8 +76,16 @@ const testHooks = Effect.gen(function* () {
 
 // Development only, and never in a packaged app: the tailnets to join, as a JSON array of
 // Tailnet.TailnetConfig. A released app gets them from the person's Lazurio account.
-const developmentTailnets = Effect.gen(function* () {
-  if (Electron.app.isPackaged) return [];
+// The tailnets to join: a packaged app's come from its directory (TailnetDirectory, ADR 0008);
+// development may set them as a JSON array of Tailnet.TailnetConfig, and joins none otherwise.
+const tailnetsToJoin = Effect.gen(function* () {
+  if (Electron.app.isPackaged) {
+    const path = yield* Path.Path;
+    return yield* TailnetDirectory.fromFile(
+      path.join(process.resourcesPath, "tailnets", "directory.json"),
+      NodeOS.hostname(),
+    );
+  }
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
   return Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [];
 });
@@ -191,7 +202,7 @@ const program = Effect.gen(function* () {
     tailnetHelper !== undefined && Option.isSome(tailnetHelper.connection)
       ? yield* Tailnet.run({
           connection: tailnetHelper.connection.value,
-          tailnets: yield* developmentTailnets,
+          tailnets: yield* tailnetsToJoin,
           session: Electron.session.fromPartition(MainWindow.REMOTE_PARTITION),
           observer: hooks.observer,
           stateRoot,

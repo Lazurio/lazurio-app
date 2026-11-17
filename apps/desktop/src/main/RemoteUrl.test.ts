@@ -50,13 +50,16 @@ describe("the main window's page of the web Lazurio", () => {
     }
   });
 
-  it("takes neither setting in a packaged app", () => {
+  it("opens the Dashboard in a packaged app and takes neither setting there", () => {
     for (const settings of [
       { test: Option.none<string>(), development: Option.some(development) },
       { test: Option.some(test), development: Option.some(development) },
       { test: Option.some(test), development: Option.none<string>() },
     ]) {
-      assert.deepStrictEqual(RemoteUrl.choose({ packaged: true, ...settings }), noPage);
+      assert.deepStrictEqual(
+        RemoteUrl.choose({ packaged: true, ...settings }),
+        shows(RemoteUrl.PACKAGED_FIRST_PAGE),
+      );
     }
   });
 
