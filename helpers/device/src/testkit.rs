@@ -1,6 +1,7 @@
-//! Test doubles for the attach channel: a fake Environment over real TLS with a certificate that
-//! only the tests trust, a fake tailnet proxy, a server that never answers, and pipes for `serve`.
-//! Every double reports what it saw as events, so tests wait for events and never for time.
+//! Test doubles for the attach channel: a fake Environment of contract v3 (its gateway and its
+//! Launchpad) over real TLS with a certificate that only the tests trust, a fake tailnet proxy, a
+//! server that never answers, and pipes for `serve`. Every double reports what it saw as events, so
+//! tests wait for events and never for time.
 
 #![allow(
     clippy::expect_used,
@@ -18,13 +19,14 @@ use std::thread;
 use std::time::Duration;
 
 use base64::Engine;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use ed25519_dalek::{Signature, SigningKey, Verifier};
+use base64::engine::general_purpose::STANDARD;
 use prost::Message as _;
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use serde_json::{Value, json};
-use tungstenite::handshake::server::{Request, Response};
+use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::protocol::CloseFrame;
+use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::{Message, WebSocket};
 
 use crate::channel::Timing;
@@ -38,13 +40,18 @@ pub const PATIENCE: Duration = Duration::from_secs(30);
 /// The fake Environment's host, the name in its certificate.
 pub const HOST: &str = "launchpad.test";
 pub const ATTACH_URL: &str = "wss://launchpad.test/.lazurio/computers/attach";
-pub const DEVICE_ID: &str = "work-laptop";
-/// The fake Environment's id, the challenge's `environment`.
-pub const ENVIRONMENT: &str = "env-under-test";
-/// A test seed, never a real key.
-pub const SEED: [u8; 32] = [0x5A; 32];
+/// A test hand-over in the form Lazurio Auth gives one (43 characters of base64url), never a real
+/// one.
+pub const HAND_OVER: &[u8] = b"hX7qR2mK9vT4wL1pZ8nB3cF6yJ0sD5gA2eU7iO4kQ9r";
 
-/// Timing for tests: retries at once, pings rare unless a test wants them.
+/// Another test hand-over, for each new `StartChannel` against one fake Environment, whose gateway
+/// takes a hand-over once.
+#[must_use]
+pub fn hand_over(number: usize) -> Vec<u8> {
+    format!("{}{number}", String::from_utf8_lossy(&HAND_OVER[..40])).into_bytes()
+}
+
+/// Timing for tests: short retry pauses, pings rare unless a test wants them.
 #[must_use]
 pub fn quick_timing() -> Timing {
     Timing {
@@ -73,10 +80,15 @@ pub fn scratch(name: &str) -> std::path::PathBuf {
 pub enum Event {
     /// A TCP connection arrived.
     Tcp,
-    /// The WebSocket upgrade succeeded for this request path with query.
-    Upgraded { path: String },
-    /// The computer's `auth` answer and whether its signature verified.
-    Auth { answer: Value, verified: bool },
+    /// The gateway let the WebSocket upgrade through: its path with query, its hand-over, and the
+    /// names of all its headers in lower case.
+    Upgraded {
+        path: String,
+        hand_over: Option<String>,
+        headers: Vec<String>,
+    },
+    /// The gateway refused the upgrade with this HTTP status.
+    UpgradeRefused(u16),
     /// A text frame from the computer.
     Text(Value),
     /// The computer sent this many pings on one session.
@@ -119,55 +131,27 @@ pub type ServerSocket = WebSocket<StreamOwned<ServerConnection, TcpStream>>;
 pub struct Session {
     pub socket: ServerSocket,
     pub events: Sender<Event>,
-    /// Counts the sessions of this Environment, from 1.
-    pub number: usize,
 }
 
 impl Session {
-    /// Sends the challenge of contract v1 and returns its signed bytes' parts.
-    pub fn challenge(&mut self) -> (String, String, i64) {
-        let nonce = URL_SAFE_NO_PAD.encode([u8::try_from(self.number % 256).unwrap_or(0); 32]);
-        let ts = 1_794_528_000_000_i64;
-        self.send(&json!({
-            "type": "challenge", "v": 1, "environment": ENVIRONMENT, "nonce": nonce, "ts": ts,
-        }));
-        (ENVIRONMENT.to_owned(), nonce, ts)
-    }
-
     pub fn send(&mut self, value: &Value) -> bool {
         self.socket.send(Message::text(value.to_string())).is_ok()
     }
 
-    /// The next text frame as JSON, or `None` when the connection ended.
-    pub fn read_json(&mut self) -> Option<Value> {
-        loop {
-            match self.socket.read() {
-                Ok(Message::Text(text)) => return serde_json::from_str(&text).ok(),
-                Ok(Message::Close(_)) | Err(_) => return None,
-                Ok(_) => {}
-            }
-        }
+    /// The Launchpad's `ready` of contract v3. Returns whether it was sent.
+    pub fn ready(&mut self) -> bool {
+        self.send(&json!({"type": "ready", "v": 3}))
     }
 
-    /// Challenge, check the answer as the Environment does (`verifyAttach` of attach-ws.ts),
-    /// then `ready`. Returns whether the computer is ready.
-    pub fn authenticate(&mut self) -> bool {
-        let (environment, nonce, ts) = self.challenge();
-        let Some(answer) = self.read_json() else {
-            let _ = self.events.send(Event::Closed);
-            return false;
-        };
-        let verified = verify_auth(&answer, &environment, &nonce, ts);
-        let _ = self.events.send(Event::Auth {
-            answer: answer.clone(),
-            verified,
-        });
-        if verified {
-            self.send(&json!({"type": "ready"}))
-        } else {
-            self.send(&json!({"type": "denied", "reason": "bad-signature"}));
-            false
-        }
+    /// The Launchpad's `denied` of contract v3 with `reason`, then its close with the same reason,
+    /// as `attach-ws.ts` does; reports `Closed` once the computer's side ended.
+    pub fn deny(&mut self, reason: &str) {
+        self.send(&json!({"type": "denied", "v": 3, "reason": reason}));
+        let _ = self.socket.close(Some(CloseFrame {
+            code: CloseCode::Policy,
+            reason: reason.into(),
+        }));
+        self.until_closed();
     }
 
     /// Reads (and so answers pings) until the computer's side ends, then reports it.
@@ -289,14 +273,14 @@ pub fn scripted_environment() -> (FakeEnvironment, Sender<Order>) {
     (environment, orders.remove(0))
 }
 
-/// A fake Environment whose first `count` sessions, in the order they authenticate, each follow
+/// A fake Environment whose first `count` sessions, in the order they get `ready`, each follow
 /// their own orders, and whose later sessions wait until closed.
 #[must_use]
 pub fn scripted_sessions(count: usize) -> (FakeEnvironment, Vec<Sender<Order>>) {
     let (senders, inboxes): (Vec<_>, Vec<_>) = (0..count).map(|_| mpsc::channel()).unzip();
     let inboxes = Mutex::new(std::collections::VecDeque::from(inboxes));
     let environment = FakeEnvironment::start(move |session: &mut Session| {
-        if !session.authenticate() {
+        if !session.ready() {
             return;
         }
         let next = inboxes
@@ -311,67 +295,101 @@ pub fn scripted_sessions(count: usize) -> (FakeEnvironment, Vec<Sender<Order>>) 
     (environment, senders)
 }
 
-/// Checks an `auth` answer the way the Environment does: type, version, device, and a base64url
-/// Ed25519 signature of 86 characters over the contract's bytes with the test seed's key.
-#[must_use]
-pub fn verify_auth(answer: &Value, environment: &str, nonce: &str, ts: i64) -> bool {
-    let Some(signature) = answer["signature"].as_str() else {
-        return false;
-    };
-    if answer["type"] != "auth"
-        || answer["v"] != 1
-        || answer["device"] != DEVICE_ID
-        || signature.len() != 86
-        || !signature
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    {
-        return false;
-    }
-    let Ok(bytes) = URL_SAFE_NO_PAD.decode(signature) else {
-        return false;
-    };
-    let Ok(signature) = Signature::from_slice(&bytes) else {
-        return false;
-    };
-    let message = format!("lazurio-computer-attach-v1\n{environment}\n{nonce}\n{ts}");
-    SigningKey::from_bytes(&SEED)
-        .verifying_key()
-        .verify(message.as_bytes(), &signature)
-        .is_ok()
-}
+/// What the fake gateway answers an upgrade: `None` lets it through.
+type Gateway = dyn Fn(&Request) -> Option<u16> + Send + Sync;
 
-/// A fake Environment: TLS with a certificate only [`FakeEnvironment::connector`] trusts, the
-/// WebSocket upgrade, then `behaviour` for each session.
+/// A fake Environment: TLS with a certificate only [`FakeEnvironment::connector`] trusts, its
+/// gateway's check of the upgrade, then `behaviour` for each session of its Launchpad.
 pub struct FakeEnvironment {
     pub address: SocketAddr,
     roots: RootCertStore,
     pub events: Receiver<Event>,
 }
 
+/// The gateway of contract v3 as Auth#108 describes it: an upgrade that carries `Origin` or
+/// `Cookie` is refused with 403; one without a hand-over, with `Authorization`, or with a hand-over
+/// it has seen before (one use) with 401.
+fn checking_gateway() -> Box<Gateway> {
+    let redeemed = Mutex::new(std::collections::HashSet::new());
+    Box::new(move |request: &Request| {
+        let headers = request.headers();
+        if headers.contains_key("origin") || headers.contains_key("cookie") {
+            return Some(403);
+        }
+        let hand_over = headers
+            .get("x-lazurio-device-hand-over")
+            .and_then(|value| value.to_str().ok());
+        match hand_over {
+            Some(value) if !headers.contains_key("authorization") => redeemed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(value.to_owned())
+                .then_some(())
+                .map_or(Some(401), |()| None),
+            _ => Some(401),
+        }
+    })
+}
+
 impl FakeEnvironment {
+    /// An Environment whose gateway checks each upgrade as contract v3 does.
     pub fn start(behaviour: impl Fn(&mut Session) + Send + Sync + 'static) -> Self {
+        Self::with_gateway(checking_gateway(), behaviour)
+    }
+
+    /// An Environment whose gateway refuses every upgrade with `status`.
+    pub fn refusing(status: u16, behaviour: impl Fn(&mut Session) + Send + Sync + 'static) -> Self {
+        Self::with_gateway(Box::new(move |_: &Request| Some(status)), behaviour)
+    }
+
+    fn with_gateway(
+        gateway: Box<Gateway>,
+        behaviour: impl Fn(&mut Session) + Send + Sync + 'static,
+    ) -> Self {
+        let gateway: Arc<Gateway> = Arc::from(gateway);
         let (server, roots) = tls();
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let address = listener.local_addr().expect("its address");
         let (sender, events) = mpsc::channel();
         let behaviour = Arc::new(behaviour);
         thread::spawn(move || {
-            let sessions = AtomicUsize::new(0);
             for tcp in listener.incoming() {
                 let Ok(tcp) = tcp else { continue };
                 let _ = sender.send(Event::Tcp);
-                let number = sessions.fetch_add(1, Ordering::SeqCst) + 1;
-                let (server, sender, behaviour) =
-                    (Arc::clone(&server), sender.clone(), Arc::clone(&behaviour));
+                let (server, sender, behaviour, gateway) = (
+                    Arc::clone(&server),
+                    sender.clone(),
+                    Arc::clone(&behaviour),
+                    Arc::clone(&gateway),
+                );
                 thread::spawn(move || {
                     let connection = ServerConnection::new(server).expect("a TLS session");
-                    let path = Mutex::new(String::new());
+                    let seen = Mutex::new(None);
                     let accepted = tungstenite::accept_hdr(
                         StreamOwned::new(connection, tcp),
                         |request: &Request, response: Response| {
-                            *path.lock().unwrap_or_else(PoisonError::into_inner) =
-                                request.uri().to_string();
+                            if let Some(status) = gateway(request) {
+                                let _ = sender.send(Event::UpgradeRefused(status));
+                                let mut refusal = ErrorResponse::new(None);
+                                *refusal.status_mut() =
+                                    tungstenite::http::StatusCode::from_u16(status)
+                                        .expect("a status");
+                                return Err(refusal);
+                            }
+                            *seen.lock().unwrap_or_else(PoisonError::into_inner) =
+                                Some(Event::Upgraded {
+                                    path: request.uri().to_string(),
+                                    hand_over: request
+                                        .headers()
+                                        .get("x-lazurio-device-hand-over")
+                                        .and_then(|value| value.to_str().ok())
+                                        .map(str::to_owned),
+                                    headers: request
+                                        .headers()
+                                        .keys()
+                                        .map(|name| name.as_str().to_owned())
+                                        .collect(),
+                                });
                             Ok(response)
                         },
                     );
@@ -379,12 +397,14 @@ impl FakeEnvironment {
                         let _ = sender.send(Event::Closed);
                         return;
                     };
-                    let path = path.into_inner().unwrap_or_else(PoisonError::into_inner);
-                    let _ = sender.send(Event::Upgraded { path });
+                    if let Some(upgraded) =
+                        seen.into_inner().unwrap_or_else(PoisonError::into_inner)
+                    {
+                        let _ = sender.send(upgraded);
+                    }
                     behaviour(&mut Session {
                         socket,
                         events: sender,
-                        number,
                     });
                 });
             }

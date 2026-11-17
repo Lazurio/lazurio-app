@@ -17,6 +17,17 @@ describe("channelLabel", () => {
     );
   });
 
+  it("says why a channel ended and waits for a new hand-over", () => {
+    assert.strictEqual(
+      channelLabel({ state: "needs-hand-over", reason: "expired" }, messages.cs.device),
+      "Odpojeno (expired)",
+    );
+    assert.strictEqual(
+      channelLabel({ state: "needs-hand-over", reason: "session_ended" }, messages.en.device),
+      "Disconnected (session_ended)",
+    );
+  });
+
   it("names the tool an agent runs and the application, when the engine names one", () => {
     assert.strictEqual(
       channelLabel({ state: "working", tool: "click", application: "Outlook" }, messages.cs.device),

@@ -25,8 +25,7 @@ describe("device protocol", () => {
           environmentId: "env-a",
           environmentLabel: "Environment A",
           attachUrl: "wss://launchpad.example.lazurio.io/.lazurio/computers/attach",
-          deviceId: "work-laptop",
-          keySeed: new Uint8Array(32).fill(7),
+          handOver: new TextEncoder().encode("hX7qR2mK9vT4wL1pZ8nB3cF6yJ0sD5gA2eU7iO4kQ9r"),
           proxy: { host: "127.0.0.1", port: 41_000, username: "u", password: "p" },
         },
       },
@@ -38,7 +37,7 @@ describe("device protocol", () => {
 
     assert.strictEqual(decoded?.kind.case, "startChannel");
     if (decoded?.kind.case !== "startChannel") return;
-    assert.strictEqual(decoded.kind.value.keySeed.length, 32);
+    assert.strictEqual(decoded.kind.value.handOver.length, 43);
     assert.strictEqual(decoded.kind.value.proxy?.host, "127.0.0.1");
   });
 

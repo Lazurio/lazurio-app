@@ -1,12 +1,17 @@
-//! The attach channel of one Environment (contract v1, ADR 0006 points 3 and 8).
+//! The attach channel of one Environment (contract v3, ADR 0006 points 3 and 8).
 //!
-//! A [`Supervisor`] runs on its own thread from `StartChannel` until `StopChannel`, `Shutdown` or
-//! a refusal. It owns the request's secrets, which wipe themselves when it ends. It keeps one
-//! session open: connect ([`wire::connect`]), answer the challenge, then serve MCP one message
-//! per text frame: through the [`tap`] with the session's own engine ([`engine`]), or with
-//! [`mcp_stub`] when the engine is missing or does not start. It pings every 15 s and ends a session
-//! after 45 s without a frame. While started, it reconnects after 1 s, doubling to at most 60 s,
-//! and starts again from 1 s after a session that got `ready`. A refusal is final until the next
+//! A [`Supervisor`] runs on its own thread from `StartChannel` until its one session ends,
+//! `StopChannel`, `Shutdown` or a refusal. It owns the request's secrets, which wipe themselves
+//! when it ends. Its session: connect with the hand-over ([`wire::connect`]), which is dropped
+//! right after that attempt, wait for `ready` of contract v3, then serve MCP one message per text
+//! frame: through the [`tap`] with the session's own engine ([`engine`]), or with [`mcp_stub`] when
+//! the engine is missing or does not start. It pings every 15 s and ends a session after 45 s
+//! without a frame, or on the Launchpad's `denied`.
+//!
+//! A hand-over is used once, so the channel never connects again by itself. When the session or
+//! the attempt ends, it reports `NeedsHandOver` with the pause before the next hand-over: 1 s after
+//! a session that got `ready`, doubling with each failed attempt to at most 60 s. The main process
+//! then sends a new `StartChannel` with a new hand-over. A refusal is final until the next
 //! `StartChannel`.
 //!
 //! Every change of state goes to [`Report`], never after the channel was stopped. Stopping shuts
@@ -24,7 +29,7 @@ use zeroize::Zeroizing;
 use crate::engine::{self, Engine, EngineSpec};
 use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
-    ChannelState, Connected, Connecting, LockState, Off, Refused, Working, channel_state,
+    ChannelState, Connected, LockState, NeedsHandOver, Off, Refused, Working, channel_state,
 };
 use crate::lock::{Busy, SharedLock};
 use crate::mcp_stub;
@@ -32,32 +37,49 @@ use crate::secret_start::StartRequest;
 use crate::tap::{self, FromEngine, FromEnvironment, Tap};
 use crate::wire::{self, Connector, Socket, Target, WireError};
 
-/// The durations of contract v1; tests shorten them.
+pub use crate::wire::ALREADY_ATTACHED;
+
+/// The refusal of an attach address the helper does not connect to.
+pub const INVALID_ATTACH_URL: &str = "invalid_attach_url";
+
+/// The refusal of an answer contract v3 does not know.
+pub const CONTRACT_MISMATCH: &str = "contract_mismatch";
+
+/// No `ready` came: the connection, the proxy, TLS or a timeout failed, or the session closed
+/// before `ready`.
+pub const CONNECTION_FAILED: &str = "connection_failed";
+
+/// The upgrade was answered with an HTTP status.
+pub const UPGRADE_REFUSED: &str = "upgrade_refused";
+
+/// A session that got `ready` ended otherwise than with `denied`.
+pub const SESSION_ENDED: &str = "session_ended";
+
+/// The durations of contract v3; tests shorten them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timing {
-    /// How long connecting, the proxy, TLS, the upgrade and the challenge may take.
+    /// How long connecting, the proxy, TLS, the upgrade and the wait for `ready` may take.
     pub connect_timeout: Duration,
     /// How often the computer pings the Environment.
     pub ping_every: Duration,
     /// How long a session lasts without any frame from the Environment.
     pub silent_after: Duration,
-    /// The pause before the first retry; it doubles with each failed attempt.
+    /// The pause before the next hand-over after a session that got `ready`; it doubles with each
+    /// failed attempt.
     pub first_retry: Duration,
-    /// The longest pause between attempts.
+    /// The longest pause before the next hand-over.
     pub longest_retry: Duration,
     /// How long `already-attached` counts as the Environment still letting go of this computer's
-    /// previous session, for example after a restart of the channel, and is retried. The
-    /// Environment ends a dead session after its own 45 s of silence, so the default leaves room
-    /// for that. A denial that lasts longer is another session of this device and is reported.
+    /// previous session, for example after a restart of the channel, and a new hand-over is asked
+    /// for. The Environment ends a dead session after its own 45 s of silence, so the default
+    /// leaves room for that. A denial that lasts longer is another session of this device and is
+    /// a refusal.
     pub attached_grace: Duration,
     /// How long an engine that is to end gets to exit by itself after its input closed, before
     /// it is killed. None by default, so a running tool stops at once; tests lengthen it, so an
     /// engine's end is an event they control.
     pub engine_grace: Duration,
 }
-
-/// The denial with which the Environment answers while it still holds a session of this device.
-pub const ALREADY_ATTACHED: &str = "already-attached";
 
 impl Default for Timing {
     fn default() -> Self {
@@ -73,7 +95,7 @@ impl Default for Timing {
     }
 }
 
-/// The pause before the next attempt after `failed_attempts` failed attempts in a row: the first
+/// The pause before the next hand-over after `failed_attempts` failed attempts in a row: the first
 /// retry's pause, doubled for each failure after the first, at most the longest pause. After a
 /// session that got `ready` (no failure), the first retry's pause.
 #[must_use]
@@ -95,9 +117,31 @@ pub type Report = Arc<dyn Fn(ChannelState) + Send + Sync>;
 /// lock (sending on a channel is fine).
 pub type LockReport = Arc<dyn Fn(u64, LockState) + Send + Sync>;
 
+/// The hand-overs of one Environment that ended without `ready`, kept across its `StartChannel`s
+/// until `StopChannel`, so the pause before the next hand-over grows.
+#[derive(Debug, Default)]
+pub struct Attempts {
+    failed: u32,
+    /// Since when the Environment answers `already-attached` without a break.
+    attached_since: Option<Instant>,
+}
+
+impl Attempts {
+    /// How many hand-overs in a row ended without `ready`.
+    #[must_use]
+    pub fn failed(&self) -> u32 {
+        self.failed
+    }
+}
+
+/// The attempts of one Environment, shared by its successive channels.
+pub type SharedAttempts = Arc<Mutex<Attempts>>;
+
 /// What a supervisor needs, its secrets among them.
 pub struct Channel {
     pub request: StartRequest,
+    /// The earlier hand-overs of this Environment.
+    pub attempts: SharedAttempts,
     pub connector: Arc<Connector>,
     pub timing: Timing,
     pub history: Arc<History>,
@@ -131,9 +175,9 @@ impl Supervisor {
     ///
     /// Fails when the system gives no thread; the channel's secrets are then dropped, wiped.
     pub fn spawn(channel: Channel) -> std::io::Result<Self> {
-        let control = Arc::new(Control::default());
         let environment_id = channel.request.environment_id.clone();
-        let worker = Worker {
+        let control = Arc::new(Control::new());
+        let mut worker = Worker {
             control: Arc::clone(&control),
             channel,
         };
@@ -183,7 +227,7 @@ impl Supervisor {
         waits
     }
 
-    /// Whether the thread has ended, for example after a refusal.
+    /// Whether the thread has ended, for example after its session or a refusal.
     #[must_use]
     pub fn ended(&self) -> bool {
         self.control.lock().ended
@@ -197,7 +241,6 @@ impl Drop for Supervisor {
 }
 
 /// The state shared by a supervisor's handle and its thread.
-#[derive(Default)]
 struct Control {
     state: Mutex<ControlState>,
     changed: Condvar,
@@ -225,6 +268,13 @@ enum EngineState {
 }
 
 impl Control {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(ControlState::default()),
+            changed: Condvar::new(),
+        }
+    }
+
     fn lock(&self) -> MutexGuard<'_, ControlState> {
         // Every step leaves the state valid, so a panic elsewhere never makes it unusable.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
@@ -289,24 +339,6 @@ impl Control {
         }
     }
 
-    /// Waits for `pause` or until stopped; returns whether the channel was stopped.
-    fn pause(&self, pause: Duration) -> bool {
-        let deadline = Instant::now() + pause;
-        let mut state = self.lock();
-        while !state.stopped {
-            let now = Instant::now();
-            if now >= deadline {
-                return false;
-            }
-            state = self
-                .changed
-                .wait_timeout(state, deadline - now)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
-        }
-        true
-    }
-
     fn mark_ended(&self) {
         let mut state = self.lock();
         state.ended = true;
@@ -365,18 +397,30 @@ struct Served {
     tap: Tap,
 }
 
-/// How a session ended.
+/// How a channel ended.
+#[derive(Clone, Copy)]
 enum Outcome {
-    /// It never got `ready`.
-    Failed,
-    /// It got `ready` and ended later.
-    Ended,
-    /// The Environment refused the computer, with this reason.
-    Refused(String),
-    /// The Environment still holds a session of this device (`already-attached`).
-    Attached,
     /// The channel was stopped.
     Stopped,
+    /// A refusal, final until the next `StartChannel`.
+    Refused(&'static str),
+    /// The hand-over is spent: the channel opens again with a new one.
+    NeedsHandOver {
+        reason: &'static str,
+        http_status: u16,
+        /// Whether the session got `ready`.
+        ready: bool,
+    },
+}
+
+/// How serving a session that got `ready` ended.
+enum SessionEnd {
+    /// The connection broke, went silent, closed, or the channel was stopped.
+    Ended,
+    /// The Launchpad's `denied` with this reason.
+    Denied(&'static str),
+    /// A message contract v3 does not know.
+    Mismatch,
 }
 
 struct Worker {
@@ -403,56 +447,77 @@ impl Worker {
         );
     }
 
-    fn run(&self) {
-        // StartChannel's answer already said Connecting with no failed attempt.
-        let mut failed_attempts = 0_u32;
-        let mut first = true;
-        // Since when the Environment answers `already-attached` without a break.
-        let mut attached_since: Option<std::time::Instant> = None;
-        loop {
-            if !first {
-                self.report(channel_state::State::Connecting(Connecting {
-                    failed_attempts,
-                }));
-                if self
-                    .control
-                    .pause(retry_delay(failed_attempts, &self.channel.timing))
-                {
-                    return;
-                }
+    fn run(&mut self) {
+        // The hand-over leaves the request now and is dropped, wiped, after the one attempt.
+        let hand_over = std::mem::take(&mut self.channel.request.hand_over);
+        let outcome = self.session(hand_over);
+        self.conclude(outcome);
+    }
+
+    /// Reports how the channel ended, unless it was stopped.
+    fn conclude(&self, outcome: Outcome) {
+        // A stopped channel reports nothing more and records no refusal.
+        if self.control.stopped() {
+            return;
+        }
+        match outcome {
+            Outcome::Stopped => {}
+            Outcome::Refused(reason) => {
+                *self.attempts() = Attempts::default();
+                self.refuse(reason);
             }
-            first = false;
-            let outcome = self.session();
-            if !matches!(outcome, Outcome::Attached) {
-                attached_since = None;
-            }
-            match outcome {
-                Outcome::Stopped => return,
-                Outcome::Attached => {
-                    let since = *attached_since.get_or_insert_with(std::time::Instant::now);
+            Outcome::NeedsHandOver {
+                reason,
+                http_status,
+                ready,
+            } => {
+                let mut attempts = self.attempts();
+                attempts.failed = if ready {
+                    0
+                } else {
+                    attempts.failed.saturating_add(1)
+                };
+                if reason == ALREADY_ATTACHED {
+                    let since = *attempts.attached_since.get_or_insert_with(Instant::now);
                     if since.elapsed() >= self.channel.timing.attached_grace {
-                        self.refuse(ALREADY_ATTACHED.to_owned());
+                        *attempts = Attempts::default();
+                        drop(attempts);
+                        self.refuse(ALREADY_ATTACHED);
                         return;
                     }
-                    failed_attempts = failed_attempts.saturating_add(1);
+                } else {
+                    attempts.attached_since = None;
                 }
-                Outcome::Refused(reason) => {
-                    self.refuse(reason);
-                    return;
-                }
-                Outcome::Failed => failed_attempts = failed_attempts.saturating_add(1),
-                Outcome::Ended => failed_attempts = 0,
+                let failed_attempts = attempts.failed;
+                drop(attempts);
+                let pause = retry_delay(failed_attempts, &self.channel.timing);
+                self.report(channel_state::State::NeedsHandOver(NeedsHandOver {
+                    reason: reason.to_owned(),
+                    failed_attempts,
+                    retry_after_ms: u64::try_from(pause.as_millis()).unwrap_or(u64::MAX),
+                    http_status: u32::from(http_status),
+                }));
             }
         }
     }
 
-    fn refuse(&self, reason: String) {
-        self.record(history::kind::REFUSED);
-        self.report(channel_state::State::Refused(Refused { reason }));
+    fn attempts(&self) -> MutexGuard<'_, Attempts> {
+        // Every step leaves the attempts valid, so a panic elsewhere never makes them unusable.
+        self.channel
+            .attempts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// One session, from connecting to its end.
-    fn session(&self) -> Outcome {
+    fn refuse(&self, reason: &str) {
+        self.record(history::kind::REFUSED);
+        self.report(channel_state::State::Refused(Refused {
+            reason: reason.to_owned(),
+        }));
+    }
+
+    /// The one session of this channel, from connecting with the hand-over to its end.
+    fn session(&self, hand_over: Zeroizing<Vec<u8>>) -> Outcome {
         let request = &self.channel.request;
         let timing = self.channel.timing;
         let Some(host) = request
@@ -460,50 +525,42 @@ impl Worker {
             .strip_prefix("wss://")
             .and_then(|rest| rest.strip_suffix(wire::ATTACH_PATH))
         else {
-            return Outcome::Refused("invalid_attach_url".to_owned());
-        };
-        let target = Target {
-            host,
-            device_id: &request.device_id,
-            proxy: request.proxy.as_ref(),
+            return Outcome::Refused(INVALID_ATTACH_URL);
         };
         let connected = wire::connect(
             &self.channel.connector,
-            &target,
+            &Target {
+                host,
+                hand_over: &hand_over,
+                proxy: request.proxy.as_ref(),
+            },
             timing.connect_timeout,
             |tcp| self.control.register(tcp),
         );
+        // The hand-over is spent with this attempt, whatever came of it.
+        drop(hand_over);
         let mut socket = match connected {
             Ok(socket) => socket,
             Err(WireError::Stopped) => return Outcome::Stopped,
+            Err(WireError::Http(status)) => {
+                self.control.forget_stream();
+                return Outcome::NeedsHandOver {
+                    reason: UPGRADE_REFUSED,
+                    http_status: status,
+                    ready: false,
+                };
+            }
             Err(_) => return self.failed(),
         };
-        let authenticated = {
-            let mut seed = Zeroizing::new([0_u8; 32]);
-            if request.key_seed.len() != seed.len() {
-                return Outcome::Refused("invalid_key".to_owned());
-            }
-            for (to, from) in seed.iter_mut().zip(request.key_seed.iter()) {
-                *to = *from;
-            }
-            wire::authenticate(
-                &mut socket,
-                &request.device_id,
-                &seed,
-                timing.connect_timeout,
-            )
-        };
-        match authenticated {
+        match wire::await_ready(&mut socket, timing.connect_timeout) {
             Ok(()) => {}
             Err(WireError::Denied(reason)) => {
                 self.close(&mut socket);
-                return if self.control.stopped() {
-                    Outcome::Stopped
-                } else if reason == ALREADY_ATTACHED {
-                    Outcome::Attached
-                } else {
-                    Outcome::Refused(reason)
-                };
+                return denied(reason, false);
+            }
+            Err(WireError::Protocol(_)) => {
+                self.close(&mut socket);
+                return Outcome::Refused(CONTRACT_MISMATCH);
             }
             Err(_) => {
                 self.close(&mut socket);
@@ -512,13 +569,20 @@ impl Worker {
         }
         self.record(history::kind::CONNECTED);
         self.report(channel_state::State::Connected(Connected {}));
-        self.serve(&mut socket);
+        let end = self.serve(&mut socket);
         self.close(&mut socket);
         self.record(history::kind::DISCONNECTED);
         if self.control.stopped() {
-            Outcome::Stopped
-        } else {
-            Outcome::Ended
+            return Outcome::Stopped;
+        }
+        match end {
+            SessionEnd::Ended => Outcome::NeedsHandOver {
+                reason: SESSION_ENDED,
+                http_status: 0,
+                ready: true,
+            },
+            SessionEnd::Denied(reason) => denied(reason, true),
+            SessionEnd::Mismatch => Outcome::Refused(CONTRACT_MISMATCH),
         }
     }
 
@@ -527,7 +591,11 @@ impl Worker {
         if self.control.stopped() {
             Outcome::Stopped
         } else {
-            Outcome::Failed
+            Outcome::NeedsHandOver {
+                reason: CONNECTION_FAILED,
+                http_status: 0,
+                ready: false,
+            }
         }
     }
 
@@ -535,14 +603,15 @@ impl Worker {
     /// the engine through the tap (or answers it with [`mcp_stub`] without an engine), pings, and
     /// ends after a silence. The engine ends with the session, and its open tool calls end on
     /// the lock.
-    fn serve(&self, socket: &mut Socket) {
+    fn serve(&self, socket: &mut Socket) -> SessionEnd {
         let mut served = Served {
             engine: self.start_engine(),
             tap: Tap::default(),
         };
-        self.serve_messages(socket, &mut served);
+        let end = self.serve_messages(socket, &mut served);
         let open = served.tap.take_open();
         self.end_engine(&mut served, open.len());
+        end
     }
 
     fn start_engine(&self) -> Option<Engine> {
@@ -609,7 +678,7 @@ impl Worker {
         }
     }
 
-    fn serve_messages(&self, socket: &mut Socket, served: &mut Served) {
+    fn serve_messages(&self, socket: &mut Socket, served: &mut Served) -> SessionEnd {
         let timing = self.channel.timing;
         let mut last_heard = Instant::now();
         let mut next_ping = last_heard + timing.ping_every;
@@ -617,19 +686,19 @@ impl Worker {
             if self.control.stop_pending()
                 && self.restart_engine(socket, served, &Restart::Stop).is_err()
             {
-                return;
+                return SessionEnd::Ended;
             }
             if self.pass_engine_output(socket, served).is_err() {
-                return;
+                return SessionEnd::Ended;
             }
             let now = Instant::now();
             let silent_at = last_heard + timing.silent_after;
             if now >= silent_at {
-                return;
+                return SessionEnd::Ended;
             }
             if now >= next_ping {
                 if socket.send(Message::Ping(Vec::new().into())).is_err() {
-                    return;
+                    return SessionEnd::Ended;
                 }
                 next_ping = now + timing.ping_every;
                 continue;
@@ -646,21 +715,28 @@ impl Worker {
                 .set_read_timeout(Some(wait.max(Duration::from_millis(1))))
                 .is_err()
             {
-                return;
+                return SessionEnd::Ended;
             }
             match socket.read() {
                 Ok(Message::Text(text)) => {
                     last_heard = Instant::now();
+                    if let Some(end) = contract_end(&text) {
+                        return end;
+                    }
                     if self.environment_said(socket, served, &text).is_err() {
-                        return;
+                        return SessionEnd::Ended;
                     }
                 }
-                Ok(Message::Close(_)) => return,
+                Ok(Message::Close(frame)) => {
+                    return wire::denial_of_close(frame.as_ref())
+                        .map_or(SessionEnd::Ended, SessionEnd::Denied);
+                }
                 Ok(_) => last_heard = Instant::now(),
                 Err(error) if wire::is_timeout(&error) => {}
-                Err(_) => return,
+                Err(_) => return SessionEnd::Ended,
             }
         }
+        SessionEnd::Ended
     }
 
     /// One MCP message from the Environment.
@@ -837,6 +913,29 @@ impl Worker {
     }
 }
 
+/// The Launchpad's `denied`, before or after `ready`.
+fn denied(reason: &'static str, ready: bool) -> Outcome {
+    Outcome::NeedsHandOver {
+        reason,
+        http_status: 0,
+        ready,
+    }
+}
+
+/// How a message of contract v3 itself ends a session that got `ready`, or `None` for MCP. Only a
+/// frame without `"jsonrpc"` is parsed here; the tap reads MCP.
+fn contract_end(text: &str) -> Option<SessionEnd> {
+    if text.contains("\"jsonrpc\"") {
+        return None;
+    }
+    let message = serde_json::from_str(text).ok()?;
+    match wire::contract_message(&message)? {
+        wire::Contract::Denied(reason) => Some(SessionEnd::Denied(reason)),
+        // A second `ready`, or anything else of the contract it does not know.
+        wire::Contract::Ready | wire::Contract::Unknown => Some(SessionEnd::Mismatch),
+    }
+}
+
 /// The state a stopped channel answers with.
 #[must_use]
 pub fn off(environment_id: &str) -> ChannelState {
@@ -856,12 +955,12 @@ mod tests {
 
     use super::*;
     use crate::history::kind;
-    use crate::lazurio::app::device::v1::{Connected, Connecting, Refused, Working, channel_state};
+    use crate::lazurio::app::device::v1::{Connected, Refused, Working, channel_state};
     use crate::lock::{Busy, DeviceLock, Holder};
     use crate::secret_start::ProxyRequest;
     use crate::testkit::{
-        ATTACH_URL, DEVICE_ID, EngineEvent, Event, FakeEngines, FakeEnvironment, FakeProxy, Order,
-        PATIENCE, SEED, Session, quick_timing, scratch, scripted_environment, spawning,
+        ATTACH_URL, EngineEvent, Event, FakeEngines, FakeEnvironment, FakeProxy, HAND_OVER, Order,
+        PATIENCE, Session, hand_over, quick_timing, scratch, scripted_environment, spawning,
     };
 
     fn request(proxy: Option<ProxyRequest>) -> StartRequest {
@@ -873,8 +972,7 @@ mod tests {
             environment_id: id.to_owned(),
             environment_label: label.to_owned(),
             attach_url: ATTACH_URL.to_owned(),
-            device_id: DEVICE_ID.to_owned(),
-            key_seed: Zeroizing::new(SEED.to_vec()),
+            hand_over: Zeroizing::new(HAND_OVER.to_vec()),
             proxy,
         }
     }
@@ -903,15 +1001,24 @@ mod tests {
     }
 
     fn run(connector: Connector, timing: Timing, proxy: Option<ProxyRequest>) -> Running {
-        run_with(
+        run_with(connector, timing, request(proxy), None, &a_lock())
+    }
+
+    /// A channel whose Environment's earlier hand-overs are `attempts`, as the Device keeps them.
+    fn run_after(
+        connector: Connector,
+        timing: Timing,
+        request: StartRequest,
+        attempts: &SharedAttempts,
+    ) -> Running {
+        run_full(
             connector,
             timing,
-            request(proxy),
+            request,
             None,
-            &Arc::new(SharedLock::new(
-                DeviceLock::new(scratch("lock").join("agent.lock")),
-                |_| {},
-            )),
+            &a_lock(),
+            Engine::end,
+            Arc::clone(attempts),
         )
     }
 
@@ -933,6 +1040,26 @@ mod tests {
         lock: &Arc<SharedLock>,
         ender: Ender,
     ) -> Running {
+        run_full(
+            connector,
+            timing,
+            request,
+            engine,
+            lock,
+            ender,
+            SharedAttempts::default(),
+        )
+    }
+
+    fn run_full(
+        connector: Connector,
+        timing: Timing,
+        request: StartRequest,
+        engine: Option<EngineSpec>,
+        lock: &Arc<SharedLock>,
+        ender: Ender,
+        attempts: SharedAttempts,
+    ) -> Running {
         let (sender, states) = mpsc::channel();
         let sender = std::sync::Mutex::new(sender);
         let history_directory = scratch("history");
@@ -940,8 +1067,12 @@ mod tests {
         let environment_id = request.environment_id.clone();
         let (lock_sender, lock_states) = mpsc::channel();
         let lock_sender = std::sync::Mutex::new(lock_sender);
+        let lock_report: LockReport = Arc::new(move |_, state| {
+            let _ = lock_sender.lock().expect("the test's sender").send(state);
+        });
         let supervisor = Supervisor::spawn(Channel {
             request,
+            attempts,
             connector: Arc::new(connector),
             timing,
             history: Arc::clone(&history),
@@ -955,9 +1086,7 @@ mod tests {
             helper_version: "1.2.3".to_owned(),
             engine,
             lock: Arc::clone(lock),
-            lock_report: Arc::new(move |_, state| {
-                let _ = lock_sender.lock().expect("the test's sender").send(state);
-            }),
+            lock_report,
             ender,
         })
         .expect("a thread");
@@ -970,12 +1099,41 @@ mod tests {
         }
     }
 
-    fn connecting(failed_attempts: u32) -> channel_state::State {
-        channel_state::State::Connecting(Connecting { failed_attempts })
-    }
-
     fn connected() -> channel_state::State {
         channel_state::State::Connected(Connected {})
+    }
+
+    fn needs_hand_over(
+        reason: &str,
+        failed_attempts: u32,
+        retry_after_ms: u64,
+    ) -> channel_state::State {
+        channel_state::State::NeedsHandOver(NeedsHandOver {
+            reason: reason.to_owned(),
+            failed_attempts,
+            retry_after_ms,
+            http_status: 0,
+        })
+    }
+
+    fn refused(reason: &str) -> channel_state::State {
+        channel_state::State::Refused(Refused {
+            reason: reason.to_owned(),
+        })
+    }
+
+    /// Every TCP connection and upgrade the fake Environment saw until now.
+    fn connections_and_upgrades(environment: &FakeEnvironment) -> (usize, Vec<Option<String>>) {
+        let mut connections = 0;
+        let mut hand_overs = Vec::new();
+        for event in environment.events.try_iter() {
+            match event {
+                Event::Tcp => connections += 1,
+                Event::Upgraded { hand_over, .. } => hand_overs.push(hand_over),
+                _ => {}
+            }
+        }
+        (connections, hand_overs)
     }
 
     #[test]
@@ -989,183 +1147,293 @@ mod tests {
     }
 
     #[test]
-    fn the_default_timing_is_contract_v1() {
+    fn the_default_timing_is_contract_v3s() {
         let timing = Timing::default();
         assert_eq!(timing.ping_every, Duration::from_secs(15));
         assert_eq!(timing.silent_after, Duration::from_secs(45));
     }
 
     #[test]
-    fn signs_the_challenge_and_reports_connected() {
+    fn ready_of_contract_v3_opens_the_channel_with_exactly_the_hand_over() {
         let environment = FakeEnvironment::start(|session: &mut Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.until_closed();
             }
         });
         let mut running = run(environment.connector(), quick_timing(), None);
 
-        assert_eq!(
-            environment.until(|event| matches!(event, Event::Upgraded { .. })),
-            Event::Upgraded {
-                path: "/.lazurio/computers/attach?device=work-laptop".to_owned()
-            }
-        );
-        let Event::Auth { answer, verified } = environment.next() else {
-            panic!("an auth answer");
+        let Event::Upgraded {
+            path,
+            hand_over,
+            mut headers,
+        } = environment.until(|event| matches!(event, Event::Upgraded { .. }))
+        else {
+            panic!("an upgrade");
         };
-        assert!(verified, "the Environment accepts the signature: {answer}");
+        assert_eq!(path, "/.lazurio/computers/attach", "no query, no device id");
+        assert_eq!(hand_over.as_deref().map(str::as_bytes), Some(HAND_OVER));
+        headers.sort();
+        assert_eq!(
+            headers,
+            [
+                "connection",
+                "host",
+                "sec-websocket-key",
+                "sec-websocket-version",
+                "upgrade",
+                "x-lazurio-device-hand-over"
+            ],
+            "no Authorization, Origin or Cookie"
+        );
         assert_eq!(running.next(), connected());
         assert_eq!(running.kinds(), [kind::CONNECTED]);
 
         running.supervisor.stop();
-        assert_eq!(environment.next(), Event::Closed);
-        assert!(
-            running
-                .supervisor
-                .wait_ended(std::time::Instant::now() + PATIENCE)
+        assert_eq!(
+            environment.until(|event| *event == Event::Closed),
+            Event::Closed
         );
+        assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
         assert_eq!(running.kinds(), [kind::CONNECTED, kind::DISCONNECTED]);
         assert!(
             running.states.try_recv().is_err(),
             "nothing is reported after stop"
         );
-    }
-
-    #[test]
-    fn a_denial_is_reported_once_and_never_retried() {
-        let environment = FakeEnvironment::start(|session: &mut Session| {
-            session.challenge();
-            let _ = session.read_json();
-            session.send(&json!({"type": "denied", "reason": "not-paired"}));
-        });
-        let mut running = run(environment.connector(), quick_timing(), None);
-
-        assert_eq!(
-            running.next(),
-            channel_state::State::Refused(Refused {
-                reason: "not-paired".to_owned()
-            })
-        );
-        assert!(
-            running
-                .supervisor
-                .wait_ended(std::time::Instant::now() + PATIENCE),
-            "the channel ends by itself"
-        );
-        let connections = environment
-            .events
-            .try_iter()
-            .filter(|event| *event == Event::Tcp)
-            .count();
-        assert_eq!(connections, 1, "one attempt, no retry");
-        assert_eq!(running.kinds(), [kind::REFUSED]);
-    }
-
-    #[test]
-    fn a_restart_waits_out_the_environment_letting_go_of_the_previous_session() {
-        // The Environment still holds this device's previous session: it answers
-        // `already-attached` until the test lets that session go, then accepts.
-        let (release, released) = std::sync::mpsc::channel::<()>();
-        let released = std::sync::Mutex::new(released);
-        let let_go = std::sync::atomic::AtomicBool::new(false);
-        let environment = FakeEnvironment::start(move |session: &mut Session| {
-            if !let_go.load(std::sync::atomic::Ordering::SeqCst) {
-                if released
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .try_recv()
-                    .is_ok()
-                {
-                    let_go.store(true, std::sync::atomic::Ordering::SeqCst);
-                } else {
-                    session.challenge();
-                    let _ = session.read_json();
-                    session.send(&json!({"type": "denied", "reason": "already-attached"}));
-                    return;
-                }
-            }
-            if session.authenticate() {
-                session.silent_until_closed();
-            }
-        });
-        let running = run(environment.connector(), quick_timing(), None);
-
-        assert_eq!(running.next(), connecting(1), "a retry, not a refusal");
-        assert_eq!(running.next(), connecting(2));
-        release.send(()).expect("the previous session lets go");
-        loop {
-            match running.next() {
-                channel_state::State::Connecting(_) => {}
-                channel_state::State::Connected(_) => break,
-                other => panic!("recovered to Connected, not {other:?}"),
-            }
+        for file in std::fs::read_dir(&running.history_directory).expect("the history") {
+            let bytes = std::fs::read(file.expect("a file").path()).expect("its bytes");
+            assert!(
+                !bytes
+                    .windows(HAND_OVER.len())
+                    .any(|window| window == HAND_OVER),
+                "no hand-over in the history"
+            );
         }
-        assert!(
-            !running
-                .kinds()
-                .iter()
-                .any(|kind| kind == history::kind::REFUSED),
-            "no refusal was recorded"
-        );
-        running.supervisor.stop();
     }
 
     #[test]
-    fn already_attached_beyond_the_grace_is_another_session_and_is_reported() {
+    fn the_hand_over_is_used_once_and_the_channel_never_connects_again_by_itself() {
+        // The session gets ready and the Environment closes it at once.
         let environment = FakeEnvironment::start(|session: &mut Session| {
-            session.challenge();
-            let _ = session.read_json();
-            session.send(&json!({"type": "denied", "reason": "already-attached"}));
-        });
-        let timing = Timing {
-            attached_grace: Duration::from_millis(30),
-            ..quick_timing()
-        };
-        let mut running = run(environment.connector(), timing, None);
-
-        loop {
-            match running.next() {
-                channel_state::State::Connecting(_) => {}
-                channel_state::State::Refused(Refused { reason }) => {
-                    assert_eq!(reason, "already-attached");
-                    break;
-                }
-                other => panic!("Connecting until Refused, not {other:?}"),
-            }
-        }
-        assert!(
-            running
-                .supervisor
-                .wait_ended(std::time::Instant::now() + PATIENCE),
-            "the channel ends after reporting"
-        );
-        assert_eq!(running.kinds(), [kind::REFUSED]);
-    }
-
-    #[test]
-    fn reconnects_with_back_off_and_resets_it_after_ready() {
-        // Sessions 1 and 2 drop before the challenge, 3 gets ready and then drops, the rest drop.
-        let environment = FakeEnvironment::start(|session: &mut Session| {
-            if session.number == 3 && session.authenticate() {
+            if session.ready() {
                 let _ = session.socket.close(None);
                 let _ = session.socket.flush();
             }
         });
-        let running = run(environment.connector(), quick_timing(), None);
+        let mut running = run(environment.connector(), quick_timing(), None);
 
-        assert_eq!(running.next(), connecting(1));
-        assert_eq!(running.next(), connecting(2));
         assert_eq!(running.next(), connected());
-        assert_eq!(running.next(), connecting(0));
-        assert_eq!(running.next(), connecting(1));
-        assert_eq!(running.next(), connecting(2));
-        running.supervisor.stop();
+        assert_eq!(
+            running.next(),
+            needs_hand_over(SESSION_ENDED, 0, 1),
+            "1 ms before the next hand-over after a session that got ready"
+        );
+        assert!(
+            running.supervisor.wait_ended(Instant::now() + PATIENCE),
+            "the channel ends by itself"
+        );
+        assert_eq!(
+            connections_and_upgrades(&environment),
+            (
+                1,
+                vec![Some(String::from_utf8_lossy(HAND_OVER).into_owned())]
+            ),
+            "one connection, one use of the hand-over"
+        );
+        assert!(running.states.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_failed_attempt_spends_the_hand_over_and_the_pause_grows_with_each_one() {
+        let attempts = SharedAttempts::default();
+        let unreachable = FakeEnvironment::start(|_: &mut Session| {});
+        let timing = Timing {
+            first_retry: Duration::from_millis(1_000),
+            longest_retry: Duration::from_millis(3_000),
+            ..quick_timing()
+        };
+        // Nothing listens there: the attempt fails before the upgrade.
+        for (number, pause) in [(1, 1_000), (2, 2_000), (3, 3_000)] {
+            let mut running = run_after(
+                unreachable.connector_to(closed_port()),
+                timing,
+                StartRequest {
+                    hand_over: Zeroizing::new(hand_over(number)),
+                    ..request(None)
+                },
+                &attempts,
+            );
+            assert_eq!(
+                running.next(),
+                needs_hand_over(
+                    CONNECTION_FAILED,
+                    u32::try_from(number).expect("small"),
+                    pause
+                )
+            );
+            assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+        }
+
+        // A session that gets ready starts the count again.
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            if session.ready() {
+                let _ = session.socket.close(None);
+                let _ = session.socket.flush();
+            }
+        });
+        let running = run_after(
+            environment.connector(),
+            timing,
+            StartRequest {
+                hand_over: Zeroizing::new(hand_over(4)),
+                ..request(None)
+            },
+            &attempts,
+        );
+        assert_eq!(running.next(), connected());
+        assert_eq!(running.next(), needs_hand_over(SESSION_ENDED, 0, 1_000));
+    }
+
+    #[test]
+    fn a_refused_upgrade_asks_for_a_new_hand_over_with_its_status() {
+        let environment = FakeEnvironment::refusing(401, |_: &mut Session| {});
+        let mut running = run(environment.connector(), quick_timing(), None);
+
+        assert_eq!(
+            running.next(),
+            channel_state::State::NeedsHandOver(NeedsHandOver {
+                reason: UPGRADE_REFUSED.to_owned(),
+                failed_attempts: 1,
+                retry_after_ms: 1,
+                http_status: 401,
+            })
+        );
+        assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+        assert_eq!(connections_and_upgrades(&environment).0, 1, "no retry");
+    }
+
+    #[test]
+    fn denied_already_attached_ends_the_channel_and_asks_for_a_new_hand_over() {
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            session.deny("already-attached");
+        });
+        let mut running = run(environment.connector(), quick_timing(), None);
+
+        assert_eq!(running.next(), needs_hand_over(ALREADY_ATTACHED, 1, 1));
+        assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+        assert_eq!(connections_and_upgrades(&environment).0, 1, "no retry");
+        assert!(
+            running.kinds().is_empty(),
+            "no refusal recorded while the Environment lets go of the previous session"
+        );
+    }
+
+    #[test]
+    fn already_attached_beyond_the_grace_is_another_session_and_a_refusal() {
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            session.deny("already-attached");
+        });
+        let attempts = SharedAttempts::default();
+        let timing = Timing {
+            attached_grace: Duration::from_millis(30),
+            ..quick_timing()
+        };
+        let mut first = run_after(environment.connector(), timing, request(None), &attempts);
+        assert_eq!(first.next(), needs_hand_over(ALREADY_ATTACHED, 1, 1));
+        assert!(first.supervisor.wait_ended(Instant::now() + PATIENCE));
+
+        // The next hand-over, once the grace has passed since the first denial.
+        let since = Instant::now();
+        while since.elapsed() < Duration::from_millis(40) {
+            thread::yield_now();
+        }
+        let mut second = run_after(
+            environment.connector(),
+            timing,
+            StartRequest {
+                hand_over: Zeroizing::new(hand_over(2)),
+                ..request(None)
+            },
+            &attempts,
+        );
+        assert_eq!(second.next(), refused(ALREADY_ATTACHED));
+        assert!(second.supervisor.wait_ended(Instant::now() + PATIENCE));
+        assert_eq!(second.kinds(), [kind::REFUSED]);
+        assert_eq!(
+            attempts.lock().expect("the attempts").failed(),
+            0,
+            "a refusal starts the count again"
+        );
+    }
+
+    #[test]
+    fn denied_expired_ends_the_session_and_asks_for_a_new_hand_over() {
+        let (environment, orders) = scripted_environment();
+        let running = run(environment.connector(), quick_timing(), None);
+        assert_eq!(running.next(), connected());
+
+        // The gateway no longer confirms the session: `denied` with `expired`, then the close.
+        orders
+            .send(Order::Send(
+                serde_json::json!({"type": "denied", "v": 3, "reason": "expired"}),
+            ))
+            .expect("the session follows orders");
+        assert_eq!(running.next(), needs_hand_over(wire::EXPIRED, 0, 1));
+        assert_eq!(
+            environment.until(|event| *event == Event::Closed),
+            Event::Closed
+        );
+        assert_eq!(running.kinds(), [kind::CONNECTED, kind::DISCONNECTED]);
+    }
+
+    #[test]
+    fn denied_expired_before_ready_asks_for_a_new_hand_over_too() {
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            session.deny("expired");
+        });
+        let mut running = run(environment.connector(), quick_timing(), None);
+        assert_eq!(running.next(), needs_hand_over(wire::EXPIRED, 1, 1));
+        assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+    }
+
+    #[test]
+    fn an_unknown_version_message_or_reason_is_a_contract_mismatch() {
+        for first in [
+            serde_json::json!({"type": "ready"}),
+            serde_json::json!({"type": "ready", "v": 4}),
+            serde_json::json!({"type": "challenge", "v": 1, "nonce": "n", "ts": 1}),
+            serde_json::json!({"type": "denied", "v": 3, "reason": "bad-token"}),
+        ] {
+            let message = first.clone();
+            let environment = FakeEnvironment::start(move |session: &mut Session| {
+                session.send(&message);
+                session.until_closed();
+            });
+            let mut running = run(environment.connector(), quick_timing(), None);
+            assert_eq!(running.next(), refused(CONTRACT_MISMATCH), "{first}");
+            assert!(running.supervisor.wait_ended(Instant::now() + PATIENCE));
+            assert_eq!(running.kinds(), [kind::REFUSED]);
+        }
+    }
+
+    #[test]
+    fn an_unknown_message_of_the_contract_after_ready_ends_the_session() {
+        let (environment, orders) = scripted_environment();
+        let running = run(environment.connector(), quick_timing(), None);
+        assert_eq!(running.next(), connected());
+        orders
+            .send(Order::Send(serde_json::json!({"type": "renew", "v": 3})))
+            .expect("the session follows orders");
+        assert_eq!(running.next(), refused(CONTRACT_MISMATCH));
+        assert_eq!(
+            environment.until(|event| *event == Event::Closed),
+            Event::Closed
+        );
     }
 
     #[test]
     fn a_silent_environment_ends_the_session() {
         let environment = FakeEnvironment::start(|session: &mut Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.silent_until_closed();
             }
         });
@@ -1179,7 +1447,7 @@ mod tests {
         assert_eq!(running.next(), connected());
         assert_eq!(
             running.next(),
-            connecting(0),
+            needs_hand_over(SESSION_ENDED, 0, 1),
             "the session ended without a word from the Environment"
         );
         assert_eq!(
@@ -1194,7 +1462,7 @@ mod tests {
     fn answered_pings_keep_the_session() {
         const PINGS: usize = 400;
         let environment = FakeEnvironment::start(|session: &mut Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.count_pings_until_closed(PINGS);
             }
         });
@@ -1229,7 +1497,7 @@ mod tests {
     #[test]
     fn goes_through_the_tailnet_proxy_with_its_credentials() {
         let environment = FakeEnvironment::start(|session: &mut Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.until_closed();
             }
         });
@@ -1272,7 +1540,7 @@ mod tests {
             &environment.connector(),
             &crate::wire::Target {
                 host: "launchpad.test",
-                device_id: DEVICE_ID,
+                hand_over: HAND_OVER,
                 proxy: Some(&wrong),
             },
             Duration::from_secs(10),
@@ -1281,7 +1549,7 @@ mod tests {
         assert_eq!(direct.err(), Some(crate::wire::WireError::Proxy(407)));
 
         let running = run(environment.connector(), quick_timing(), Some(wrong));
-        assert_eq!(running.next(), connecting(1));
+        assert_eq!(running.next(), needs_hand_over(CONNECTION_FAILED, 1, 1));
         assert!(
             environment.events.try_recv().is_err(),
             "nothing reached the Environment"
@@ -1292,7 +1560,7 @@ mod tests {
     #[test]
     fn the_mcp_stub_answers_the_environment() {
         let environment = FakeEnvironment::start(|session: &mut Session| {
-            if !session.authenticate() {
+            if !session.ready() {
                 return;
             }
             for message in [
@@ -1629,7 +1897,7 @@ mod tests {
         );
         loop {
             match tapped.running.next() {
-                channel_state::State::Connecting(_) => break,
+                channel_state::State::NeedsHandOver(_) => break,
                 channel_state::State::Working(_) => {}
                 other => panic!("the session ended, not {other:?}"),
             }
@@ -1698,7 +1966,7 @@ mod tests {
             .expect("another Environment takes the computer");
         loop {
             match tapped.running.next() {
-                channel_state::State::Connecting(_) => break,
+                channel_state::State::NeedsHandOver(_) => break,
                 channel_state::State::Working(_) | channel_state::State::Connected(_) => {}
                 other => panic!("the session ended, not {other:?}"),
             }
@@ -1917,20 +2185,42 @@ mod tests {
             "{state:?}"
         );
 
-        // A new session after a disconnect starts no engine either.
+        // A new session after a disconnect, with a new hand-over, starts no engine either.
         tapped
             .orders
             .send(Order::Close)
             .expect("the session closes");
         loop {
-            if tapped.running.next() == connected() {
+            if let channel_state::State::NeedsHandOver(_) = tapped.running.next() {
                 break;
             }
         }
+        let mut again = run_ending(
+            tapped.environment.connector(),
+            quick_timing(),
+            StartRequest {
+                hand_over: Zeroizing::new(hand_over(2)),
+                ..request_of("env-a", "Environment A", None)
+            },
+            Some(tapped.engines.spec()),
+            &lock,
+            crate::testkit::unconfirmed_end,
+        );
+        assert_eq!(again.next(), connected());
+        assert!(
+            !tapped
+                .engines
+                .events
+                .try_iter()
+                .any(|event| matches!(event, EngineEvent::Started(_))),
+            "no engine started for the new session"
+        );
         assert_eq!(
             lock.with(|lock| lock.try_begin("env-a", "Environment A", later, 2)),
             Err(Busy::Unconfirmed)
         );
+        again.supervisor.stop();
+        assert!(again.supervisor.wait_ended(Instant::now() + PATIENCE));
         let kinds = tapped.running.kinds();
         assert_eq!(
             kinds

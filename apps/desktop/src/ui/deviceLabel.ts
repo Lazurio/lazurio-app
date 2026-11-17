@@ -14,6 +14,8 @@ export const channelLabel = (channel: DeviceChannelState, text: DeviceText): str
       return text.unknown;
     case "refused":
       return text.refused.replace("{reason}", channel.reason);
+    case "needs-hand-over":
+      return text.needsHandOver.replace("{reason}", channel.reason);
     case "working":
       return channel.application === ""
         ? text.working.replace("{tool}", channel.tool)

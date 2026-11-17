@@ -70,8 +70,12 @@ export type DeviceChannelState =
   | { readonly state: "off" }
   | { readonly state: "connecting"; readonly failedAttempts: number }
   | { readonly state: "connected" }
-  // The Environment refused the computer, with the helper's code for why.
+  // The channel ended and opens again only after the person acts, with the helper's code for why
+  // (the Environment refused the computer).
   | { readonly state: "refused"; readonly reason: string }
+  // The channel ended and spent its hand-over; it opens again with a new one, with the helper's code
+  // for why.
+  | { readonly state: "needs-hand-over"; readonly reason: string }
   // An agent works through it: the tool's name and the application, when the engine names one.
   | { readonly state: "working"; readonly tool: string; readonly application: string }
   // The connection to the helper was lost: nobody knows the channel's state any more.
