@@ -6,8 +6,8 @@ import * as Path from "effect/Path";
 
 // The sign-in issuer can move without touching the app (docs/adr/0008, Matěj's approval of the
 // network section on 2026-11-17): a node signs in through its control server's login address, an
-// Environment through its gateway's redirects, and the issuer lives in two lines of Navigation.ts only: its host and, for the app's own
-// client, the issuer derived from it.
+// Environment through its gateway's redirects, and the issuer lives in two lines of Navigation.ts
+// only: its host and, for the app's own client, the issuer derived from it.
 
 const ISSUER = /auth\.lazurio\.ai|\/realms\/|openid-connect/u;
 
