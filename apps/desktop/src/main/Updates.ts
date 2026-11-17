@@ -36,6 +36,14 @@ class UpdateChannelBusy extends Schema.TaggedError<UpdateChannelBusy>()("UpdateC
   }
 }
 
+// The Device helper did not confirm, after the helpers stopped, that no tool can still run
+// (docs/adr/0006, point 7): nothing installs and the helpers start again.
+class DeviceNotStopped extends Schema.TaggedError<DeviceNotStopped>()("DeviceNotStopped", {}) {
+  override get message(): string {
+    return "the Device helper did not confirm that every agent's work ended";
+  }
+}
+
 class UpdateSettingsError extends Schema.TaggedError<UpdateSettingsError>()("UpdateSettingsError", {
   path: Schema.String,
   cause: Schema.Defect(),
@@ -182,6 +190,7 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
       Effect.gen(function* () {
         yield* holdComputer(activity);
         yield* options.stopHelpers;
+        if (!(yield* activity.confirmStopped)) return yield* new DeviceNotStopped();
         yield* updater.install({ isSilent: true, isForceRunAfter: true });
         yield* setState({ phase: "restarting", version });
         yield* updater.quitForUpdate;

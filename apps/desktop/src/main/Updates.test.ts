@@ -67,7 +67,7 @@ const fakeUpdater = (options: { readonly failInstall?: boolean } = {}) => {
 // The Device's activity, busy or idle as a test sets it, recording when the computer is held.
 const fakeActivity = Effect.gen(function* () {
   const changes = yield* PubSub.unbounded<boolean>();
-  const state = { idle: true, held: false };
+  const state = { idle: true, held: false, confirmed: true };
   const activity: DeviceActivityShape = {
     isIdle: Effect.sync(() => state.idle),
     idleChanges: Stream.fromPubSub(changes),
@@ -84,6 +84,7 @@ const fakeActivity = Effect.gen(function* () {
           ).pipe(Effect.as(true))
         : Effect.succeed(false),
     ),
+    confirmStopped: Effect.sync(() => state.confirmed),
   };
   const setIdle = (idle: boolean) =>
     Effect.sync(() => {
@@ -357,6 +358,40 @@ describe("Updates", () => {
                 ),
                 ["install silent=true runAfter=true", "quitForUpdate"],
               );
+            }),
+        );
+      }),
+  );
+});
+
+describe("Updates after the helpers stopped", () => {
+  it.effect(
+    "installs nothing and starts the helpers again when the Device helper did not confirm that every engine ended",
+    () =>
+      Effect.gen(function* () {
+        const updater = fakeUpdater();
+        const { activity, state } = yield* fakeActivity;
+        state.confirmed = false;
+        const steps: Array<string> = [];
+        return yield* withUpdates(
+          {
+            updater,
+            activity,
+            options: {
+              stopHelpers: Effect.sync(() => steps.push("stop")),
+              restartHelpers: Effect.sync(() => steps.push("restart")),
+            },
+          },
+          (updates) =>
+            Effect.gen(function* () {
+              yield* updater.emit("update-available", { version: "0.1.1" });
+              yield* updater.emit("update-downloaded", { version: "0.1.1" });
+              yield* waitFor(updates, "ready");
+              assert.isFalse(yield* updates.install);
+              assert.deepStrictEqual(steps, ["stop", "restart"]);
+              assert.isFalse(updater.calls.some((call) => call.startsWith("install ")));
+              assert.notInclude(updater.calls, "quitForUpdate");
+              assert.strictEqual(updates.current().state.phase, "failed");
             }),
         );
       }),
