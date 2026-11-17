@@ -50,14 +50,16 @@ describe("fromFile", () => {
             },
           ]);
         }),
-    ));
+    ),
+  );
 
   it.effect("refuses a directory that does not decode", () =>
     withDirectory('[{"tailnet":"example"}]', (path) =>
       Effect.gen(function* () {
         assert.isTrue(Exit.isFailure(yield* fromFile(path, "Desk").pipe(Effect.exit)));
       }),
-    ));
+    ),
+  );
 
   it.effect("ships a directory of Lazurio's own tailnet only", () =>
     Effect.gen(function* () {
