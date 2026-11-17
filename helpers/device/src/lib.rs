@@ -764,6 +764,64 @@ mod tests {
     }
 
     #[test]
+    fn a_second_configure_device_cannot_erase_an_unconfirmed_end() {
+        use super::lazurio::app::device::v1::ConfigureDevice;
+
+        let _forks = testkit::spawning();
+        let (environment, orders) = testkit::scripted_environment();
+        let engines = testkit::FakeEngines::start();
+        let (input, mut replies, thread) = serve_device(engine_device(
+            &environment,
+            &engines,
+            testkit::unconfirmed_end,
+        ));
+        connected_with_engine(&input, &mut replies, &engines);
+
+        // The session ends and its engine's tree cannot be confirmed gone: the helper reports
+        // the computer held for good.
+        orders
+            .send(testkit::Order::Close)
+            .expect("the session closes");
+        loop {
+            if let HelperMessage {
+                request_id: 0,
+                kind: Some(helper_message::Kind::LockState(state)),
+            } = replies.next()
+                && !state.idle
+            {
+                break;
+            }
+        }
+        // A second configuration is refused, so it cannot replace the lock and its state.
+        input
+            .send(frames(&[AppMessage {
+                request_id: 5,
+                kind: Some(app_message::Kind::ConfigureDevice(ConfigureDevice {
+                    data_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+                    computer_name: "Work laptop".to_owned(),
+                })),
+            }]))
+            .expect("reads");
+        loop {
+            let message = replies.next();
+            if message.request_id == 5 {
+                assert!(
+                    matches!(message.kind, Some(helper_message::Kind::Failure(ref failure)) if failure.code == "already_configured"),
+                    "refused: {message:?}"
+                );
+                break;
+            }
+        }
+        input.send(frames(&[shutdown(6)])).expect("reads");
+        thread.join().expect("serve ends").expect("cleanly");
+        assert_eq!(
+            replies.rest().last().and_then(device_stopped),
+            Some(false),
+            "the unconfirmed end still stops the updater"
+        );
+    }
+
+    #[test]
     fn lock_states_arrive_in_the_order_they_were_taken() {
         use super::lazurio::app::device::v1::{HoldForUpdate, LockState};
 

@@ -227,6 +227,15 @@ impl Device {
     }
 
     fn configure(&mut self, request: &ConfigureDevice) -> Result<helper_message::Kind, Failure> {
+        // Once per helper process: the runtime holds the device lock, its sequence of
+        // `LockState`s and the irreversible unconfirmed state, which a second configuration
+        // must not replace.
+        if self.runtime.is_some() {
+            return Err(Failure {
+                code: "already_configured".to_owned(),
+                message: "ConfigureDevice comes once per helper process".to_owned(),
+            });
+        }
         if !std::path::Path::new(&request.data_directory).is_absolute() {
             return Err(invalid("data_directory must be an absolute path"));
         }
@@ -535,6 +544,16 @@ mod tests {
         ] {
             assert_eq!(failure_code(device.answer(&kind)), "not_configured");
         }
+    }
+
+    #[test]
+    fn configure_device_comes_once() {
+        let mut device = configured();
+        let again = device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
+            data_directory: scratch("again").to_string_lossy().into_owned(),
+            computer_name: "Work laptop".to_owned(),
+        }));
+        assert_eq!(failure_code(again), "already_configured");
     }
 
     #[test]
