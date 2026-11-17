@@ -26,6 +26,7 @@ import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
 import * as Tailnet from "./Tailnet.ts";
 import * as TailnetDirectory from "./TailnetDirectory.ts";
+import * as TailnetPolicy from "./TailnetPolicy.ts";
 import * as Updates from "./Updates.ts";
 import * as UpdatesIpc from "./UpdatesIpc.ts";
 
@@ -74,17 +75,49 @@ const testHooks = Effect.gen(function* () {
   return { observer, remoteUrl, tailnetHelper };
 });
 
-// Development only, and never in a packaged app: the tailnets to join, as a JSON array of
-// Tailnet.TailnetConfig. A released app gets them from the person's Lazurio account.
-// The tailnets to join: a packaged app's come from its directory (TailnetDirectory, ADR 0008);
-// development may set them as a JSON array of Tailnet.TailnetConfig, and joins none otherwise.
+// The tailnets a packaged app joins (TailnetDirectory, ADR 0008): on Windows an IT policy, when the
+// computer's IT set one (TailnetPolicy, the alpha at a client), and the directory built into the
+// app otherwise. Development may set them as a JSON array of Tailnet.TailnetConfig in
+// LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
+const packagedDirectory = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const builtIn = path.join(process.resourcesPath, "tailnets", "directory.json");
+  if ((yield* HostProcess.Platform) !== "win32") {
+    return {
+      source: "built-in",
+      directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
+    };
+  }
+  const systemRoot = yield* Config.String("SystemRoot").pipe(Config.withDefault("C:\\Windows"));
+  const policy = yield* TailnetPolicy.readWindows(systemRoot).pipe(
+    Effect.tapError((error) => Effect.logWarning("cannot read the tailnet policy", error)),
+    Effect.orElseSucceed(() => Option.none<string>()),
+  );
+  if (Option.isNone(policy)) {
+    return {
+      source: "built-in",
+      directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
+    };
+  }
+  // A policy that IT set but that does not decode joins nothing, rather than the built-in directory.
+  const directory = yield* TailnetDirectory.fromText(policy.value, NodeOS.hostname()).pipe(
+    Effect.tapError((error) => Effect.logError("the tailnet policy does not decode", error)),
+    Effect.orElseSucceed((): TailnetDirectory.Directory => ({ tailnets: [], refused: [] })),
+  );
+  return { source: "policy", directory };
+});
+
 const tailnetsToJoin = Effect.gen(function* () {
   if (Electron.app.isPackaged) {
-    const path = yield* Path.Path;
-    return yield* TailnetDirectory.fromFile(
-      path.join(process.resourcesPath, "tailnets", "directory.json"),
-      NodeOS.hostname(),
-    );
+    const { source, directory } = yield* packagedDirectory;
+    for (const refused of directory.refused) {
+      yield* Effect.logWarning("tailnet refused", { source, ...refused });
+    }
+    yield* Effect.logInfo("tailnets", {
+      source,
+      tailnets: directory.tailnets.map((tailnet) => tailnet.tailnet),
+    });
+    return directory.tailnets;
   }
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
   return Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [];
