@@ -26,6 +26,11 @@ extraResources:
     filter:
       - lazurio-device
       - lazurio-device.exe
+  # The tailnets a packaged app joins (docs/adr/0008).
+  - from: tailnets
+    to: tailnets
+    filter:
+      - directory.json
 # Read back from the built app by `pnpm check:fuses` (scripts/check-fuses.ts).
 electronFuses:
   runAsNode: false

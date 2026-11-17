@@ -27,7 +27,10 @@ body {
   color: var(--text);
 }
 
+/* The local window is a column of 360 px beside a remote page (MainWindow.ts). */
 .shell {
+  box-sizing: border-box;
+  max-width: 360px;
   padding: 24px;
 }
 

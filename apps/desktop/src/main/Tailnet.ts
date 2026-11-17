@@ -29,7 +29,7 @@ const TailnetConfig = Schema.Struct({
   hostname: Schema.String,
   domains: Schema.Array(Schema.String),
 });
-type TailnetConfig = typeof TailnetConfig.Type;
+export type TailnetConfig = typeof TailnetConfig.Type;
 
 export const decodeTailnets = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(TailnetConfig)),
