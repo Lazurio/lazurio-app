@@ -1,6 +1,6 @@
 # Tailnets of Lazurio App set by IT (Windows)
 
-An Organization's IT can tell Lazurio App which of the Organization's tailnets to join on its Windows computers. This is a temporary path for an alpha at a client. It ends when Lazurio App gets a person's tailnets from their Lazurio account ([ADR 0008](../adr/0008-tailnets-from-a-directory.md), point 6).
+An Organization's IT can tell Lazurio App which of the Organization's tailnets to join on its Windows computers. This is a temporary path for Lazurio App (Alpha) at a client. It ends when Lazurio App gets a person's tailnets from their Lazurio account ([ADR 0008](../adr/0008-tailnets-from-a-directory.md), point 6).
 
 The policy only says where the tailnets are. It grants nobody access:
 

@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Proposed:** 2026-11-17, for the proof of concept of plan LZD-0017 (task 640)
-- **Amended:** 2026-11-17, with Matěj's decisions on the source of a person's tailnets, on the IT policy for the alpha at a client and on two sign-ins in the first version (points 6 and 7, open questions 1 and 2)
+- **Amended:** 2026-11-17, with Matěj's decisions on the source of a person's tailnets, on the IT policy for Lazurio App (Alpha) at a client and on two sign-ins in the first version (points 6 and 7, open questions 1 and 2)
 - **Related:** decision 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md), [ADR 0002](0002-sign-in-pages.md) (pages of a remote view), [ADR 0003](0003-node-state-sealed.md) (sealed node state), [ADR 0005](0005-installers-updates-and-channels.md) (updates)
 
 ## Context
@@ -44,7 +44,7 @@ What exists:
      - Memberships come only from what Auth stores. Control servers and DNS suffixes come from the registration of each tailnet's client, whose source is the Organization's `infra`.
      - The directory returns tailnets, each once, with the Organizations each serves, since one tailnet can serve several Organizations. The app never derives a control server from an Organization's name.
      - The app keeps the last valid list, so a computer already joined does not need the directory when it starts.
-   - **Until then, on Windows, an IT policy for the alpha at a client.** It is an exception to decision 1 of the network part, which assigns tailnets by account: the policy assigns them by computer.
+   - **Until then, on Windows, an IT policy for Lazurio App (Alpha) at a client.** It is an exception to decision 1 of the network part, which assigns tailnets by account: the policy assigns them by computer.
      - The Organization's IT writes the string value `Tailnets` under `HKLM\SOFTWARE\Policies\Lazurio\App`, in the built-in directory's JSON, through Group Policy or its device management. Only an administrator writes there. Lazurio App itself is installed per user, though, so a program with the person's rights can change the app as well as what it reads. The policy keeps the list of tailnets an administrator's setting; it does not protect an installation the person's own programs can change.
      - The app's own tailnet helper reads it through the registry's API (`lazurio-tailnet read-policy`, the 64-bit view) when the app starts, so neither the path nor the environment chooses the program that answers.
      - Where a policy exists it replaces the built-in directory. A policy that does not decode joins no tailnet rather than the built-in one.
@@ -63,7 +63,7 @@ What exists:
 - **The person signs in twice** with the same Lazurio account: once in the system's browser, for the tailnet node and the app's own client, and once in the app's view, for the Dashboard and the Environment. Matěj accepted this for the first version (point 7); one sign-in waits for Lazurio Auth.
 - **Approving a new Device stays a step of an Owner** in the Organization's Deployment Repo (approved Devices, plan, apply). The proof of concept on a person's computer needs that step for its Device.
 - **A directory built into a public repository names only Lazurio's own tailnets.** A customer Organization's control server never goes into this repository or into a published build. It reaches the app through the IT policy on the Organization's own computers, and later through the directory at Lazurio Auth.
-- **The IT policy assigns tailnets by computer.** Everyone who signs in on a computer with the policy gets its tailnets offered, and only members get past Lazurio Auth's check. It is accepted for the alpha at a client and ends with task 644.
+- **The IT policy assigns tailnets by computer.** Everyone who signs in on a computer with the policy gets its tailnets offered, and only members get past Lazurio Auth's check. It is accepted for Lazurio App (Alpha) at a client and ends with task 644.
 - **The directory gives only a control server and DNS suffixes**, which are no secrets: the names are public in DNS, and the control server admits only members.
 - **The app never names the sign-in issuer for its own sign-ins.** A node signs in through the login address its control server gives, and an Environment through its gateway's redirects. An issuer that moves therefore changes neither the node's nor the Environment's sign-in.
 - **The issuer's host appears in exactly one place:** `LAZURIO_AUTH_HOST` in `apps/desktop/src/main/Navigation.ts`. ADR 0002 uses it to let a remote view show the issuer and, only during a sign-in it answered, GitHub's sign-in pages.

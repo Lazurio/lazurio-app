@@ -76,7 +76,7 @@ const testHooks = Effect.gen(function* () {
 });
 
 // The tailnets a packaged app joins (TailnetDirectory, ADR 0008): on Windows an IT policy, when the
-// computer's IT set one (TailnetPolicy, the alpha at a client), and the directory built into the
+// computer's IT set one (TailnetPolicy, Lazurio App (Alpha) at a client), and the directory built into the
 // app otherwise. Development may set them as a JSON array of Tailnet.TailnetConfig in
 // LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
 const packagedDirectory = Effect.gen(function* () {
