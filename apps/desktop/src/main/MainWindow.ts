@@ -156,12 +156,17 @@ const waitForReachable = Effect.fn("MainWindow.waitForReachable")(function* (
     pending = undefined;
     showWaiting(false);
   });
+  // One attempt at a time: the next waits until the previous load has finished or failed, so a
+  // reachable Environment that answers slowly is not cancelled by the next attempt.
   yield* Effect.sleep(RETRY_EVERY).pipe(
     Effect.andThen(
-      Effect.sync(() => {
-        if (pending !== undefined && !remote.webContents.isDestroyed()) {
-          remote.webContents.loadURL(pending).catch(() => undefined);
-        }
+      Effect.suspend(() => {
+        const address = pending;
+        if (address === undefined || remote.webContents.isDestroyed()) return Effect.void;
+        return Effect.tryPromise({
+          try: () => remote.webContents.loadURL(address),
+          catch: (failure) => new RemoteLoadError({ code: codeOf(failure) }),
+        }).pipe(Effect.ignore);
       }),
     ),
     Effect.forever,

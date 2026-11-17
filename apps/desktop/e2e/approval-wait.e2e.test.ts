@@ -1,6 +1,6 @@
 // End-to-end: a page of a tailnet whose node cannot reach it yet, as before the Organization
 // approves the Device, shows the app's waiting page instead of a blank one, and loads by itself
-// once its tunnel works (plan LZD-0017, task 648). The fake tailnet helper refuses every tunnel
+// once its tunnel works, even when its server answers slower than the app retries (task 648). The fake tailnet helper refuses every tunnel
 // while the test's switch file exists; --ignore-certificate-errors lets the page's run-time
 // certificate through (this launch only).
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test's switch is a file on disk.
@@ -19,6 +19,8 @@ import { selfSigned } from "./certificate.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const PAGE = "https://launchpad.e2e.lazurio.io/";
+// Longer than MainWindow's five seconds between attempts.
+const SLOW_ANSWER_MS = 7000;
 
 let pageServer: NodeHttps.Server;
 let control: NodeHttp.Server;
@@ -34,8 +36,12 @@ beforeAll(async () => {
       response.end();
       return;
     }
-    response.writeHead(200, { "content-type": "text/html" });
-    response.end(`<!doctype html><title>Launchpad</title><p>launchpad</p>`);
+    // Slower than the app's interval between attempts: an attempt must not cancel the one before.
+    // @effect-diagnostics-next-line globalTimers:off - A plain HTTPS server answers late on purpose.
+    setTimeout(() => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html><title>Launchpad</title><p>launchpad</p>`);
+    }, SLOW_ANSWER_MS);
   });
   await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", resolve));
   const address = pageServer.address();
