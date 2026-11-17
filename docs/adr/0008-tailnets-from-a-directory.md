@@ -42,21 +42,25 @@ What exists:
 - **Approving a new Device stays a step of an Owner** in the Organization's Deployment Repo (approved Devices, plan, apply). The proof of concept on a person's computer needs that step for its Device.
 - **A directory built into a public repository names only Lazurio's own tailnets.** A customer Organization's control server never goes into this repository. A directory per account replaces the built-in one before any customer's tailnet is listed.
 - **The directory gives only a control server and DNS suffixes**, which are no secrets: the names are public in DNS, and the control server admits only members.
+- **The app never names the sign-in issuer for its own sign-ins.** A node signs in through the login address its control server gives, and an Environment through its gateway's redirects. An issuer that moves therefore changes neither the node's nor the Environment's sign-in.
+- **The issuer's host appears in exactly one place:** `LAZURIO_AUTH_HOST` in `apps/desktop/src/main/Navigation.ts`. ADR 0002 uses it to let a remote view show the issuer and, only during a sign-in it answered, GitHub's sign-in pages.
+  - An issuer on another subdomain of `lazurio.io` stays allowed as a page of Lazurio. The constant still has to name it for the GitHub exception.
+  - An issuer outside `lazurio.io` and `auth.lazurio.ai` needs that constant and an amendment of ADR 0002 and decision 0248.
 
 ## Open questions for Matěj
 
 1. **Where a person's tailnets come from after the proof of concept.** Two candidates:
    - the Dashboard's account API, which already knows the person's Environments and each Organization's control server but keeps the latter on the server;
-   - a claim or endpoint at Lazurio Auth, for a public client of the app.
+   - the sign-in issuer, which the refactoring of Lazurio's sign-in now under way (plan in shaping) may shape anew.
 
-   Recommendation: the Dashboard's account API, extended with the control server and DNS suffixes of the person's own Organizations. It needs the decision that this information may reach the person's app.
+   This proof of concept assumes neither and changes nothing at the issuer.
 
-2. **One sign-in for the app.** A public client for Lazurio App at Lazurio Auth (authorization code with PKCE and a loopback redirect) would let the app sign in once and ask for the person's tailnets. This touches Auth#108 (the Device's entry) and is not part of the proof of concept.
+2. **One sign-in for the app instead of two.** It would need a client of Lazurio App at the issuer, and possibly claims about the person's Organizations or tailnets in its token. That belongs to the refactoring of the sign-in, not to this proof of concept.
 
 ## Alternatives considered
 
-| Alternative                                                | Why not now                                                                                                                                                                         |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A new endpoint at Lazurio Auth before the proof of concept | It needs a public client and an endpoint at Auth, both undecided (Auth#108). That is more than this week allows, and the decision is Matěj's.                                       |
-| The Dashboard's account API now                            | Its control servers never leave the server today, and changing that is a decision. The app could also call it only through an Environment's gateway, which needs the tailnet first. |
-| Starting a node only when a page of its tailnet is opened  | Fewer sign-ins for a person with many Organizations. For one tailnet in the proof of concept it adds nothing, so it comes with a directory per account.                             |
+| Alternative                                                      | Why not now                                                                                                                                                                         |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A new endpoint at the sign-in issuer before the proof of concept | It needs a client and an endpoint at the issuer, both undecided, while the issuer itself is being refactored. That decision is Matěj's.                                             |
+| The Dashboard's account API now                                  | Its control servers never leave the server today, and changing that is a decision. The app could also call it only through an Environment's gateway, which needs the tailnet first. |
+| Starting a node only when a page of its tailnet is opened        | Fewer sign-ins for a person with many Organizations. For one tailnet in the proof of concept it adds nothing, so it comes with a directory per account.                             |
