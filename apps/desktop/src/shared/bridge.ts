@@ -11,6 +11,12 @@ export const INSTALL_UPDATE_CHANNEL = "lazurio:install-update";
 export const DEVICE_STATE_CHANNEL = "lazurio:device-state";
 export const DEVICE_STATE_CHANGED_CHANNEL = "lazurio:device-state-changed";
 export const DEVICE_STOP_CHANNEL = "lazurio:device-stop";
+// Agent Desktop's Environments and their switches (contract v3): a switch, adding the Environment
+// the main window shows, removing one, and signing out of the app's Lazurio account.
+export const DEVICE_SET_SWITCH_CHANNEL = "lazurio:device-set-switch";
+export const DEVICE_ADD_ENVIRONMENT_CHANNEL = "lazurio:device-add-environment";
+export const DEVICE_REMOVE_ENVIRONMENT_CHANNEL = "lazurio:device-remove-environment";
+export const DEVICE_SIGN_OUT_CHANNEL = "lazurio:device-sign-out";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -87,6 +93,45 @@ export interface DeviceEnvironmentStatus {
   readonly channel: DeviceChannelState;
 }
 
+// Why a switch went off by itself. From Lazurio Auth: the sign-in did not finish, the session ended,
+// or the hand-over was refused (404 an unknown Environment, 403 another person's, 409 an Environment
+// that cannot take a computer now, "rejected" anything else final). From the Device helper: its
+// Refused code. From the app: the Device helper could not take the channel.
+export type DeviceSwitchProblem =
+  | {
+      readonly from: "auth";
+      readonly reason:
+        | "sign-in-failed"
+        | "signed-out"
+        | "unknown-environment"
+        | "not-permitted"
+        | "environment-state-conflict"
+        | "rejected";
+    }
+  | { readonly from: "helper"; readonly reason: string; readonly httpStatus: number }
+  | { readonly from: "app"; readonly reason: "helper-unavailable" };
+
+// Where an Environment's switch is. It is on in every phase but "off".
+export type DeviceSwitchPhase =
+  | { readonly phase: "off"; readonly problem: DeviceSwitchProblem | null }
+  // The app waits for the person to sign in in the system's browser.
+  | { readonly phase: "signing-in" }
+  // The app asks Lazurio Auth for a hand-over.
+  | { readonly phase: "connecting" }
+  // The Device helper has the channel; its state tells the rest.
+  | { readonly phase: "channel" }
+  // The app tries again: Lazurio Auth did not answer, or the channel ended and needs a new
+  // hand-over.
+  | { readonly phase: "retrying"; readonly cause: "auth-unavailable" | "needs-hand-over" };
+
+export interface DeviceSwitchStatus {
+  // `https://<host>` of the Environment's Lazurio.
+  readonly origin: string;
+  readonly host: string;
+  readonly switch: DeviceSwitchPhase;
+  readonly channel: DeviceChannelState;
+}
+
 // Agent Desktop on this computer (docs/adr/0006). "absent": this build runs no Device helper;
 // "failed": the helper did not start or refused its configuration; "lost": the app lost its
 // connection to the helper without stopping it, and cannot reach it any more.
@@ -96,6 +141,12 @@ export interface DeviceStatus {
   // The Environment whose agent works on the computer now, if one does; "unknown" once the
   // connection was lost and nothing confirmed that every agent's work ended.
   readonly agent: { readonly environmentId: string; readonly label: string } | null | "unknown";
+  // The app's own Lazurio account (its sign-in with Lazurio Auth).
+  readonly account: "signed-in" | "signed-out";
+  // The Environments the person added, each with its switch, off after every start.
+  readonly switches: ReadonlyArray<DeviceSwitchStatus>;
+  // The origin of the Environment the main window shows, when it is not in the list yet.
+  readonly addable: string | null;
 }
 
 export interface AppStatus {
@@ -123,4 +174,11 @@ interface DeviceBridge {
   readonly subscribe: (listener: (status: DeviceStatus) => void) => () => void;
   // Stop: ends the work of the agent that holds the computer now.
   readonly stop: () => Promise<void>;
+  // Only a click in this native window turns a switch on (docs/adr/0006, point 5).
+  readonly setSwitch: (origin: string, on: boolean) => Promise<void>;
+  // Adds the Environment the main window shows; `origin` is the one this window offered.
+  readonly addEnvironment: (origin: string) => Promise<void>;
+  readonly removeEnvironment: (origin: string) => Promise<void>;
+  // Signs out of the app's Lazurio account and turns every switch off.
+  readonly signOut: () => Promise<void>;
 }

@@ -36,6 +36,7 @@ Decision 0248 puts the Device's capabilities into Lazurio App GEN4 as a Rust hel
    - **Decision 0248 wants this channel to carry a short-lived permission from Lazurio Auth, with no lasting key of the Device kept in the Environment.** That permission does not exist yet. On 2026-11-15 Matěj decided a pilot of named people now ([his answer](https://github.com/Lazurio/lazurio-app/pull/15#issuecomment-6900363040)): until the permission from Auth is deployed, pilot builds of Lazurio App for the people of a named pilot open the channel as the utility does, contract v1 with the Device's key in the Environment's registry (the pairing channel that 0247 names as an exception, as #943 records it), and move to the permission from Auth together with the Environment's side. Writing the exception into 0248 is proposed in [Lazurio/LazurioPlatform#1008](https://github.com/Lazurio/LazurioPlatform/pull/1008); until that addendum is merged, the register does not yet carry it, and no pilot build opens the channel on contract v1 before it is. The coordinator of the pilot keeps the list of its people outside the public repositories, and no build beyond that pilot opens the channel on contract v1.
 
 4. **Pairing follows #943 as it is, takes over the utility's pairing, and never turns a switch on.**
+   - **Superseded by contract v3** (see "Contract v3 in the app" below). The app does not pair and does not take over the utility's pairing, its keys or its keystore entries. Instead the Device helper opens no channel while the utility is paired, and the person removes the utility. The rest of this point describes the pilot of point 3 and is not built.
    - In the native window the person enters the address of their Environment's Lazurio. The main process makes the key, listens once on `127.0.0.1:<random port>` for at most ten minutes with a random `state`, and opens `/connect/computer?name&os&pubkey&callback&state` in the system's browser, where the person is signed in to Lazurio. It accepts exactly one answer with the same `state`, then closes the port. This listener belongs to the main process for the length of one pairing, not to a helper.
    - **A computer paired with the utility is not paired again.** The app reads the utility's list of Environments (`environments.json`, no secrets) and takes each Environment's key from the utility's keystore entry (service `io.lazurio.agent-desktop`): on Windows from the Credential Manager of the same signed-in person, on macOS after the person confirms the Keychain's prompt. It seals the key with `safeStorage` like its own. The Environment keeps the same device id and key, so no new approval on the Launchpad page is needed.
    - **One agent on the whole computer, across the utility and the app, enforced by the operating system.** The lock of one agent becomes a lock of the signed-in person's session, not of a process:
@@ -131,6 +132,24 @@ There is no device key in Auth and no Environment-side registry of computer keys
   - Stop and every other end of an engine ending its whole process tree (point 8).
 - **In, once contract v3 is set:** the app's sign-in and the token per Environment, each Environment's switch, and the Device helper's channel signing in with the token instead of v1's signature.
 - **Later:** the icon in the menu bar or notification area, showing the history (the helper keeps writing it), the macOS permission guide, the switch for commands, and macOS builds.
+
+### Contract v3 in the app (2026-11-17)
+
+How Lazurio App carries the three locks above (task-2026-11-17-936). There is no pairing, no key of the Device and no entry into the computer.
+
+- **Environments by origin.** An Environment is the origin of its Lazurio, `https://<host>`. The local window offers "Add this Environment" only for the page the main window shows, when that page is HTTPS on a name below `lazurio.io` (`Navigation.environmentOriginOf`). The list lives in `<userData>/agent-desktop-environments.json`. It holds no secret and no switch, and it is replaced whole on every change. Remove takes an Environment off the list. Only Lazurio Auth decides whether the origin is an Environment the person may use: its hand-over answers 404 for an unknown Environment and 403 for another person's.
+- **A switch for one run.** Every switch is off after each start of the app, because the consent lasts one run. Only a click in the app's local window turns one on (`DeviceIpc`), and no remote page has the bridge. The end-to-end tests check both.
+- **Sign-in and hand-over.** A switch turned on signs in with the app's own client (`AuthClient`, scope `lazurio-device-entry`) when the app has no session, or when the session it kept is no longer valid at that click. The sign-in opens in the system's browser. The app then asks for a hand-over for the origin and sends `StartChannel` with it, with the tailnet helper's proxy when the host lies in the app's tailnet, and directly otherwise. The hand-over lives only in the main process's memory as `Redacted`. It goes to the helper once, and the app's copy of its bytes is wiped after that. No state for the windows, log or error carries it.
+- **`NeedsHandOver`.** While the switch is on, the app asks for a new hand-over after the helper's `retry_after_ms` and sends a new `StartChannel`. This covers the end of a session after 8 hours and `expired`.
+- **`Refused` and final answers of Auth.** These turn the switch off, and the window says why in a sentence:
+  - the helper's `Refused`;
+  - Auth's 403, 404 and 409, or any other final answer of Auth;
+  - a refused refresh while the switch is on, which means the person is signed out.
+
+  A 503 or an unreachable Auth is temporary: the app asks again with a back-off from 1 s to 60 s and the switch stays on.
+
+- **Off and sign-out.** Turning a switch off sends `StopChannel`, and Stop still ends the agent's work. Signing out in the local window turns every switch off and ends the session.
+- **The guard against the utility replaces the takeover of point 4.** The helper opens no channel while the utility Lazurio Agent Desktop keeps an entry of `io.lazurio.agent-desktop` in the system's keystore, and stops an agent when one appears (`agent_desktop_paired`). The window tells the person what to do: remove every Environment in the utility and uninstall it, or, once it is uninstalled, delete those entries in Credential Manager or Keychain Access, then turn the switch on again. The app reads, takes and deletes nothing of the utility.
 
 ## Alternatives considered
 

@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   afterNavigation,
   destinationOf,
+  environmentOriginOf,
   mayLoad,
   newView,
   step,
@@ -362,5 +363,37 @@ describe("the guard's steps, in Electron's order", () => {
     const local = run([start(AUTH), show(AUTH), start(LOGIN), navigate(LOGIN)], track("Local"));
     assert.isFalse(local.tracked.shown.signingIn);
     assert.deepStrictEqual(local.refused, [`Navigate ${LOGIN}`]);
+  });
+});
+
+describe("environmentOriginOf", () => {
+  it("gives the origin of a page of an Environment's Lazurio", () => {
+    assert.strictEqual(
+      environmentOriginOf("https://launchpad.bob.example-org.lazurio.io/settings?tab=tools#x"),
+      "https://launchpad.bob.example-org.lazurio.io",
+    );
+    assert.strictEqual(
+      environmentOriginOf("https://Launchpad.Bob.lazurio.io./"),
+      "https://launchpad.bob.lazurio.io",
+    );
+  });
+
+  it("gives none for anything that is no Environment's page over HTTPS", () => {
+    for (const address of [
+      "https://lazurio.io/",
+      "https://evil-lazurio.io/",
+      "https://lazurio.io.attacker.example/",
+      "https://notes.example-org.lazurio.app/",
+      "https://auth.lazurio.ai/realms/workspace",
+      "https://dashboard.lazurio.ai/",
+      "http://launchpad.bob.lazurio.io/",
+      "https://launchpad.bob.lazurio.io:8443/",
+      "https://user:secret@launchpad.bob.lazurio.io/",
+      "lazurio-app://shell/index.html",
+      "about:blank",
+      "not an address",
+    ]) {
+      assert.isUndefined(environmentOriginOf(address), address);
+    }
   });
 });

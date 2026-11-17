@@ -7,6 +7,8 @@ import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
@@ -15,10 +17,14 @@ import * as Stream from "effect/Stream";
 import * as Electron from "electron";
 
 import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
+import { localeOf } from "../ui/messages.ts";
 
+import * as AuthClient from "./AuthClient.ts";
 import { DeviceActivity } from "./DeviceActivity.ts";
+import * as DeviceEnvironments from "./DeviceEnvironments.ts";
 import * as DeviceIpc from "./DeviceIpc.ts";
 import * as DeviceService from "./DeviceService.ts";
+import * as DeviceSwitches from "./DeviceSwitches.ts";
 import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
 import * as KeystoreCheck from "./KeystoreCheck.ts";
@@ -39,6 +45,13 @@ import * as UpdatesIpc from "./UpdatesIpc.ts";
 LocalScheme.registerPrivilegesSync();
 Electron.app.enableSandbox();
 
+// The app's sign-in opens in the system's browser (AuthClient, RFC 8252).
+const openInSystemBrowser = (address: string) =>
+  Effect.tryPromise({
+    try: () => Electron.shell.openExternal(address),
+    catch: () => new AuthClient.SignInError({ reason: "browser" }),
+  });
+
 // End-to-end tests only, and never in a packaged app: a remote page to load, and an observer
 // that records instead of opening the system's browser.
 const testHooks = Effect.gen(function* () {
@@ -50,6 +63,9 @@ const testHooks = Effect.gen(function* () {
       observer: Hardening.electronObserver,
       remoteUrl: Option.none<string>(),
       tailnetHelper: Option.none<Helpers.HelperBinary>(),
+      deviceHelper: Option.none<Helpers.HelperBinary>(),
+      authIssuer: Option.none<string>(),
+      openBrowser: openInSystemBrowser,
       helperStarted: (_name: string, _pid: number) => {},
     };
   }
@@ -68,6 +84,18 @@ const testHooks = Effect.gen(function* () {
           args: [fakeHelper.value],
         })
       : Option.none<Helpers.HelperBinary>();
+  // A Device helper of the tests (src/main/fake-device-helper.ts, contract v3), and a Lazurio Auth
+  // of the tests on the loopback for the app's sign-in and hand-overs.
+  const fakeDeviceHelper = yield* Config.option(Config.String("LAZURIO_APP_E2E_DEVICE_HELPER"));
+  const deviceHelper =
+    Option.isSome(fakeDeviceHelper) && Option.isSome(fakeNode)
+      ? Option.some<Helpers.HelperBinary>({
+          name: "lazurio-device",
+          path: fakeNode.value,
+          args: [fakeDeviceHelper.value, "v3"],
+        })
+      : Option.none<Helpers.HelperBinary>();
+  const authIssuer = yield* Config.option(Config.String("LAZURIO_APP_E2E_AUTH_ISSUER"));
   const observer: Hardening.NavigationObserver = {
     openExternally: (url) => {
       process.stdout.write(`lazurio-app-e2e system-browser ${url}\n`);
@@ -84,7 +112,16 @@ const testHooks = Effect.gen(function* () {
   const helperStarted = (name: string, pid: number) => {
     helperPids[name] = pid;
   };
-  return { observer, remoteUrl, tailnetHelper, helperStarted };
+  const openBrowser = (address: string) => Effect.sync(() => observer.openExternally(address));
+  return {
+    observer,
+    remoteUrl,
+    tailnetHelper,
+    deviceHelper,
+    authIssuer,
+    openBrowser,
+    helperStarted,
+  };
 });
 
 // The tailnets a packaged app joins (TailnetDirectory, ADR 0008): on Windows an IT policy, when the
@@ -152,6 +189,7 @@ const remoteUrlOf = Effect.fn("main.remoteUrlOf")(function* (testUrl: Option.Opt
 
 const helperBinaries = Effect.fn("main.helperBinaries")(function* (
   testTailnetHelper: Option.Option<Helpers.HelperBinary>,
+  testDeviceHelper: Option.Option<Helpers.HelperBinary>,
 ) {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
@@ -169,7 +207,7 @@ const helperBinaries = Effect.fn("main.helperBinaries")(function* (
       name: "lazurio-tailnet",
       path: path.join(repository, "helpers", "tailnet", "bin", executable("lazurio-tailnet")),
     })),
-    {
+    Option.getOrElse(testDeviceHelper, () => ({
       name: "lazurio-device",
       path: path.join(
         repository,
@@ -179,7 +217,7 @@ const helperBinaries = Effect.fn("main.helperBinaries")(function* (
         "debug",
         executable("lazurio-device"),
       ),
-    },
+    })),
   ];
 });
 
@@ -241,9 +279,9 @@ const program = Effect.gen(function* () {
   // The helpers live in a scope of their own, which the updater closes before it installs: on
   // Windows a running helper keeps its .exe locked (docs/adr/0005, point 5).
   const helpersScope = yield* Scope.fork(yield* Effect.scope);
-  const helpers = yield* Helpers.startAll(yield* helperBinaries(hooks.tailnetHelper)).pipe(
-    Scope.provide(helpersScope),
-  );
+  const helpers = yield* Helpers.startAll(
+    yield* helperBinaries(hooks.tailnetHelper, hooks.deviceHelper),
+  ).pipe(Scope.provide(helpersScope));
   for (const helper of helpers) {
     if (Option.isSome(helper.connection)) {
       hooks.helperStarted(helper.status.name, helper.connection.value.pid);
@@ -290,12 +328,44 @@ const program = Effect.gen(function* () {
           }),
         )
       : Option.none<DeviceService.DeviceService>();
-  const deviceControls: DeviceIpc.DeviceControls = Option.match(device, {
+  // Its switches (contract v3): the Environments the person added, the app's own sign-in with
+  // Lazurio Auth and a hand-over for each channel. Every switch is off after each start.
+  const switches = Option.isSome(device)
+    ? Option.some(
+        yield* DeviceSwitches.run({
+          device: device.value,
+          auth: yield* Effect.service(AuthClient.AuthClient).pipe(
+            Effect.provide(
+              AuthClient.layer({
+                ...Option.match(hooks.authIssuer, {
+                  onNone: () => ({}),
+                  onSome: (issuer) => ({ issuer }),
+                }),
+                keystore,
+                sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
+                allowWithoutKeystore: !Electron.app.isPackaged,
+                openBrowser: hooks.openBrowser,
+                locale: localeOf(Electron.app.getLocale()),
+              }).pipe(Layer.provide(FetchHttpClient.layer)),
+            ),
+          ),
+          environments: yield* DeviceEnvironments.open(
+            path.join(Electron.app.getPath("userData"), "agent-desktop-environments.json"),
+          ),
+        }),
+      )
+    : Option.none<DeviceSwitches.DeviceSwitches>();
+  const noSwitch = Effect.fail(new DeviceSwitches.DeviceSwitchError({ problem: "not-listed" }));
+  const deviceControls: DeviceIpc.DeviceControls = Option.match(switches, {
     onSome: (service) => service,
     onNone: () => ({
       current: () => DeviceService.withoutHelper(deviceHelper === undefined ? "absent" : "failed"),
       subscribe: () => () => {},
       stop: Effect.void,
+      setSwitch: () => noSwitch,
+      addEnvironment: () => noSwitch,
+      removeEnvironment: () => noSwitch,
+      signOut: Effect.void,
     }),
   });
   // The updater's view of the computer: the configured helper's, or the default (always idle).
@@ -398,6 +468,9 @@ const program = Effect.gen(function* () {
       status,
       remoteUrl: yield* remoteUrlOf(hooks.remoteUrl),
       whenReachable: tailnets.whenReachable,
+      pageShown: (url) => {
+        if (Option.isSome(switches)) switches.value.pageShown(url);
+      },
     }).pipe(Effect.andThen(Effect.never)),
     allWindowsClosed,
   );

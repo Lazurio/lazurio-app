@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { channelLabel } from "./deviceLabel.ts";
+import type { DeviceSwitchPhase, DeviceSwitchStatus } from "../shared/bridge.ts";
+import { channelLabel, problemLabel, switchLabel } from "./deviceLabel.ts";
 import { messages } from "./messages.ts";
 
 describe("channelLabel", () => {
@@ -76,6 +77,71 @@ describe("channelLabel", () => {
     assert.match(messages.en.device.lost, /quit Lazurio App and start it again/iu);
     for (const text of [messages.cs.device.lost, messages.en.device.lost]) {
       assert.notMatch(text, /skončil|ended|neběží|not running/iu);
+    }
+  });
+});
+
+const entry = (
+  phase: DeviceSwitchPhase,
+  channel: DeviceSwitchStatus["channel"] = { state: "off" },
+): DeviceSwitchStatus => ({
+  origin: "https://launchpad.bob.lazurio.io",
+  host: "launchpad.bob.lazurio.io",
+  switch: phase,
+  channel,
+});
+
+describe("switchLabel", () => {
+  it("says where a switch that is on is before and after the helper has its channel", () => {
+    assert.deepStrictEqual(switchLabel(entry({ phase: "signing-in" }), messages.cs.device), {
+      state: "Přihlaste se v prohlížeči.",
+      problem: null,
+    });
+    assert.strictEqual(
+      switchLabel(entry({ phase: "retrying", cause: "auth-unavailable" }), messages.en.device)
+        .state,
+      "Lazurio Auth is not answering. Trying again.",
+    );
+    assert.strictEqual(
+      switchLabel(entry({ phase: "channel" }, { state: "connected" }), messages.cs.device).state,
+      "Připojeno",
+    );
+  });
+
+  it("says what to do when the utility Lazurio Agent Desktop turned a switch off", () => {
+    const off = entry({
+      phase: "off",
+      problem: { from: "helper", reason: "agent_desktop_paired", httpStatus: 0 },
+    });
+    const cs = switchLabel(off, messages.cs.device);
+    assert.strictEqual(cs.state, "Vypnuto");
+    assert.match(cs.problem ?? "", /odeberte všechna Prostředí a utilitu odinstalujte/u);
+    assert.match(cs.problem ?? "", /io\.lazurio\.agent-desktop ve Správci pověření/u);
+    const en = switchLabel(off, messages.en.device).problem ?? "";
+    assert.match(en, /Remove every Environment in the utility and uninstall it/u);
+    assert.match(en, /Keychain Access/u);
+  });
+
+  it("names every final answer of Lazurio Auth and of the helper in a sentence", () => {
+    for (const text of [messages.cs.device, messages.en.device]) {
+      for (const reason of [
+        "sign-in-failed",
+        "signed-out",
+        "unknown-environment",
+        "not-permitted",
+        "environment-state-conflict",
+        "rejected",
+      ] as const) {
+        assert.notInclude(problemLabel({ from: "auth", reason }, text), "{");
+      }
+      assert.include(
+        problemLabel({ from: "helper", reason: "upgrade_refused", httpStatus: 400 }, text),
+        "HTTP 400",
+      );
+      assert.include(
+        problemLabel({ from: "helper", reason: "something_new", httpStatus: 0 }, text),
+        "something_new",
+      );
     }
   });
 });

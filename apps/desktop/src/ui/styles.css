@@ -185,3 +185,34 @@ body {
   opacity: 0.6;
   cursor: default;
 }
+
+/* Agent Desktop's switches (contract v3): the switch and the Environment, its state, then why it
+   went off and Remove on their own lines. */
+.shell__switch {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.shell__switches li > .shell__link {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.shell__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.shell__account {
+  margin-top: 12px;
+}

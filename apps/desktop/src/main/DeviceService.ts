@@ -47,6 +47,9 @@ export class DeviceRequestError extends Schema.TaggedError<DeviceRequestError>()
   }
 }
 
+// What the Device helper reports, without the app's switches (DeviceSwitches adds them).
+export type DeviceHelperStatus = Pick<DeviceStatus, "state" | "environments" | "agent">;
+
 // What the helper said last about who holds the computer. Only a LockState with a greater
 // sequence replaces it (docs/adr/0006, point 7).
 interface LockSnapshot {
@@ -100,15 +103,19 @@ export interface DeviceServiceOptions {
 
 export interface DeviceService {
   // The state for the local windows' bridge, outside any Effect.
-  readonly current: () => DeviceStatus;
+  readonly current: () => DeviceHelperStatus;
   // Calls the listener after every change of the state; the result stops it.
   readonly subscribe: (listener: () => void) => () => void;
+  // Calls the listener with every ChannelState the helper sends, answers included, in the order the
+  // app reads them, before the state's listeners; the result stops it. The switches learn from it
+  // when a channel needs a new hand-over or was refused, and after how long to ask again.
+  readonly onChannel: (listener: (state: ChannelState) => void) => () => void;
   // Stop: ends the work of the agent that holds the computer now, whatever its Environment.
   readonly stop: Effect.Effect<void, DeviceRequestError>;
   readonly stopChannel: (environmentId: string) => Effect.Effect<void, DeviceRequestError>;
-  // Opens a channel with a hand-over of Lazurio Auth (contract v3). Nothing calls it yet; later
-  // only a switch in a native window will, with a new hand-over for each start and after each
-  // NeedsHandOver (docs/adr/0006).
+  // Opens a channel with a hand-over of Lazurio Auth (contract v3). Only DeviceSwitches calls it,
+  // while the person's switch in a native window is on, with a new hand-over for each start and
+  // after each NeedsHandOver (docs/adr/0006).
   readonly startChannel: (start: ChannelStart) => Effect.Effect<void, DeviceRequestError>;
   // The computer's activity for the updater, once the helper took its configuration; none
   // otherwise, and the default (no channel, so always idle) stays.
@@ -119,7 +126,7 @@ export interface DeviceService {
 // own scope, which the updater closes before it installs.
 export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServiceOptions) {
   const { connection } = options;
-  let state: DeviceStatus["state"] = "starting";
+  let state: DeviceHelperStatus["state"] = "starting";
   let lock: Option.Option<LockSnapshot> = Option.none();
   const channels = new Map<string, DeviceChannelState>();
   const labels = new Map<string, string>();
@@ -134,6 +141,7 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   const changed = () => {
     for (const listener of listeners) listener();
   };
+  const channelListeners = new Set<(state: ChannelState) => void>();
   // A helper that died without DeviceStopped leaves no proof that its engine's process tree ended,
   // so the computer counts as busy and no update holds it until the app starts its helpers again
   // (docs/adr/0006, points 7 and 8).
@@ -161,6 +169,7 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   const applyChannel = (next: ChannelState) =>
     Effect.sync(() => {
       channels.set(next.environmentId, channelStateOf(next));
+      for (const listener of channelListeners) listener(next);
       changed();
     });
   const apply = (message: HelperMessage) => {
@@ -347,7 +356,7 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   };
 
   // After a lost connection only a DeviceStopped with every engine ended says no agent works.
-  const lostStatus = (): DeviceStatus => {
+  const lostStatus = (): DeviceHelperStatus => {
     const confirmed = Option.getOrElse(allEnginesEnded, () => false);
     return {
       state: "lost",
@@ -366,6 +375,10 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onChannel: (listener) => {
+      channelListeners.add(listener);
+      return () => channelListeners.delete(listener);
+    },
     stop,
     stopChannel,
     startChannel,
@@ -379,4 +392,7 @@ export const withoutHelper = (state: "absent" | "failed"): DeviceStatus => ({
   state,
   environments: [],
   agent: null,
+  account: "signed-out",
+  switches: [],
+  addable: null,
 });

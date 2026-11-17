@@ -26,6 +26,9 @@ export interface MainWindowOptions {
   readonly remoteUrl: Option.Option<string>;
   // Waits until the remote page's tailnet can reach it (Tailnet.Tailnets.whenReachable).
   readonly whenReachable: (url: string) => Effect.Effect<void>;
+  // Learns each page the remote view's main frame shows (Agent Desktop offers to add its
+  // Environment).
+  readonly pageShown: (url: string) => void;
 }
 
 // The first remote page loads again after these failures, which a network that changed or a
@@ -150,6 +153,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   if (Option.isSome(options.remoteUrl)) {
     remote = yield* acquireView(viewOptions({ partition: REMOTE_PARTITION }));
     registerView(remote.webContents, "Lazurio");
+    remote.webContents.on("did-navigate", (_event, url) => options.pageShown(url));
     yield* hardenSession(remote.webContents.session);
     window.contentView.addChildView(remote);
   }

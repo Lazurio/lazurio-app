@@ -134,15 +134,31 @@ describe("Lazurio App GEN4", () => {
   it("shows Agent Desktop in its local window with only the calls the window needs", async () => {
     await shell.locator('[data-device-state="ready"]').waitFor();
     await shell.locator('[data-device-environments="none"]').waitFor();
-    await shell.locator('[data-device-pairing="later"]').waitFor();
+    // The remote page is no Environment's Lazurio, so there is nothing to add.
+    await shell.locator('[data-device-add="none"]').waitFor();
     assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
     const bridge = await shell.evaluate(async () => ({
       calls: Object.keys(window.lazurio.device).toSorted(),
       state: await window.lazurio.device.getState(),
     }));
     assert.deepStrictEqual(bridge, {
-      calls: ["getState", "stop", "subscribe"],
-      state: { state: "ready", environments: [], agent: null },
+      calls: [
+        "addEnvironment",
+        "getState",
+        "removeEnvironment",
+        "setSwitch",
+        "signOut",
+        "stop",
+        "subscribe",
+      ],
+      state: {
+        state: "ready",
+        environments: [],
+        agent: null,
+        account: "signed-out",
+        switches: [],
+        addable: null,
+      },
     });
   });
 
@@ -157,6 +173,9 @@ describe("Lazurio App GEN4", () => {
         },
       ],
       agent: { environmentId: "e2e", label: "E2E" },
+      account: "signed-out",
+      switches: [],
+      addable: null,
     };
     await app.evaluate(
       ({ webContents }, { channel, status }) => {
@@ -165,7 +184,7 @@ describe("Lazurio App GEN4", () => {
       },
       { channel: DEVICE_STATE_CHANGED_CHANNEL, status: working },
     );
-    await shell.locator('[data-device-environment="e2e"][data-state="working"]').waitFor();
+    await shell.locator('[data-device-agent="e2e"]').waitFor();
     // The helper answers Stop with who holds the computer, and the window follows its answer.
     await shell.locator('[data-action="device-stop"]').click();
     await shell.locator('[data-action="device-stop"]').waitFor({ state: "detached" });
@@ -186,7 +205,14 @@ describe("Lazurio App GEN4", () => {
     // The updates' section knows that an install would wait for the helper.
     await shell.locator('[data-updates-device="unreachable"]').waitFor();
     const state = await shell.evaluate(() => window.lazurio.device.getState());
-    assert.deepStrictEqual(state, { state: "lost", environments: [], agent: "unknown" });
+    assert.deepStrictEqual(state, {
+      state: "lost",
+      environments: [],
+      agent: "unknown",
+      account: "signed-out",
+      switches: [],
+      addable: null,
+    });
     // Stop answers at once instead of waiting for a helper that cannot be reached.
     const stopped = await shell.evaluate(() =>
       window.lazurio.device.stop().then(

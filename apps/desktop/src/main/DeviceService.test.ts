@@ -1,26 +1,14 @@
-import { create, type MessageInitShape } from "@bufbuild/protobuf";
-import {
-  HelperMessageSchema,
-  type AppMessage,
-  type HelperMessage,
-} from "@lazurio/app-contracts/helper/v1";
 import { assert, describe, it } from "@effect/vitest";
-import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
-import type { DeviceStatus } from "../shared/bridge.ts";
-import { run, type DeviceService } from "./DeviceService.ts";
-import type { HelperConnection } from "./Helpers.ts";
-
-type RequestKind = NonNullable<AppMessage["kind"]>;
-type Reply = NonNullable<MessageInitShape<typeof HelperMessageSchema>["kind"]>;
+import { run, type DeviceHelperStatus, type DeviceService } from "./DeviceService.ts";
+import { fakeHelper, type FakeHelper, type Reply } from "./fake-device-connection.ts";
 
 const lock = (
   sequence: number,
@@ -36,57 +24,7 @@ const lock = (
   },
 });
 
-// A Device helper as the main process sees it: the test answers each request and sends the
-// helper's own messages; `stop` ends its output, as the helper's exit does.
-const fakeHelper = Effect.gen(function* () {
-  const events = yield* Queue.unbounded<HelperMessage, Cause.Done>();
-  const stopped = yield* Deferred.make<boolean>();
-  const stopping = yield* Deferred.make<void>();
-  const requests: Array<RequestKind> = [];
-  // How often the service ended the helper's process, and when it first did.
-  const ended = { count: 0 };
-  const endedOnce = yield* Deferred.make<void>();
-  const answers: Array<(kind: RequestKind) => Reply | undefined> = [];
-  const answerFor = (kind: RequestKind): Reply => {
-    for (const answer of answers) {
-      const reply = answer(kind);
-      if (reply !== undefined) return reply;
-    }
-    if (kind.case === "configureDevice") {
-      return { case: "deviceReady", value: { contractVersion: 3 } };
-    }
-    return { case: "failure", value: { code: "unknown_request", message: "not in this test" } };
-  };
-  const connection: HelperConnection = {
-    name: "lazurio-device",
-    version: "0.0.0-test",
-    request: (kind) =>
-      Effect.sync(() => {
-        requests.push(kind as RequestKind);
-        return create(HelperMessageSchema, { requestId: 1n, kind: answerFor(kind as RequestKind) });
-      }),
-    events: Stream.fromQueue(events),
-    stopped: Deferred.await(stopped),
-    stopping: Deferred.isDone(stopping),
-    pid: 4242,
-    end: Effect.sync(() => {
-      ended.count += 1;
-    }).pipe(Effect.andThen(Deferred.succeed(endedOnce, undefined)), Effect.asVoid),
-  };
-  const send = (kind: Reply) =>
-    Queue.offer(events, create(HelperMessageSchema, { requestId: 0n, kind }));
-  // The app stops the helper, which exits: its output ends, in time or not.
-  const exit = (inTime: boolean) =>
-    Deferred.succeed(stopping, undefined).pipe(
-      Effect.andThen(Queue.end(events)),
-      Effect.andThen(Deferred.succeed(stopped, inTime)),
-    );
-  // The helper dies on its own: its output ends while the app did not stop it.
-  const die = Queue.end(events);
-  return { connection, requests, answers, send, exit, die, ended, endedOnce };
-});
-
-const start = (helper: Effect.Success<typeof fakeHelper>, proxyHosts: ReadonlyArray<string> = []) =>
+const start = (helper: FakeHelper, proxyHosts: ReadonlyArray<string> = []) =>
   run({
     connection: helper.connection,
     dataDirectory: "/data/device",
@@ -106,8 +44,8 @@ const start = (helper: Effect.Success<typeof fakeHelper>, proxyHosts: ReadonlyAr
   });
 
 // Waits until the service's state passes the check, from the change that made it so.
-const stateWhere = (service: DeviceService, check: (status: DeviceStatus) => boolean) =>
-  Effect.callback<DeviceStatus>((resume) => {
+const stateWhere = (service: DeviceService, check: (status: DeviceHelperStatus) => boolean) =>
+  Effect.callback<DeviceHelperStatus>((resume) => {
     if (check(service.current())) {
       resume(Effect.succeed(service.current()));
       return;
@@ -373,7 +311,7 @@ describe("DeviceService's activity of the computer", () => {
 
 describe("DeviceService's confirmation that the helper stopped", () => {
   // The updater held the computer, then stopped the helpers; what the helper said last decides.
-  const afterGrant = (end: (helper: Effect.Success<typeof fakeHelper>) => Effect.Effect<void>) =>
+  const afterGrant = (end: (helper: FakeHelper) => Effect.Effect<void>) =>
     Effect.gen(function* () {
       const helper = yield* fakeHelper;
       helper.answers.push((kind) =>

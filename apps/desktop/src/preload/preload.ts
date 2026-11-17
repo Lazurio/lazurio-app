@@ -1,6 +1,10 @@
 import * as Electron from "electron";
 
 import {
+  DEVICE_ADD_ENVIRONMENT_CHANNEL,
+  DEVICE_REMOVE_ENVIRONMENT_CHANNEL,
+  DEVICE_SET_SWITCH_CHANNEL,
+  DEVICE_SIGN_OUT_CHANNEL,
   DEVICE_STATE_CHANGED_CHANNEL,
   DEVICE_STATE_CHANNEL,
   DEVICE_STOP_CHANNEL,
@@ -42,6 +46,18 @@ const bridge: LazurioBridge = {
     },
     stop: async () => {
       await Electron.ipcRenderer.invoke(DEVICE_STOP_CHANNEL);
+    },
+    setSwitch: async (origin, on) => {
+      await Electron.ipcRenderer.invoke(DEVICE_SET_SWITCH_CHANNEL, { origin, on });
+    },
+    addEnvironment: async (origin) => {
+      await Electron.ipcRenderer.invoke(DEVICE_ADD_ENVIRONMENT_CHANNEL, origin);
+    },
+    removeEnvironment: async (origin) => {
+      await Electron.ipcRenderer.invoke(DEVICE_REMOVE_ENVIRONMENT_CHANNEL, origin);
+    },
+    signOut: async () => {
+      await Electron.ipcRenderer.invoke(DEVICE_SIGN_OUT_CHANNEL);
     },
   },
 };
