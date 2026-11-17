@@ -95,6 +95,9 @@ const attachRemoteView = Effect.fn("MainWindow.attachRemoteView")(function* (
       nodeIntegration: false,
       webSecurity: true,
       spellcheck: false,
+      // The page keeps painting when Windows deems the window hidden, as its occlusion tracking
+      // may at start; a page hidden to its renderer stayed blank in the trial of 2026-11-17.
+      backgroundThrottling: false,
     },
   });
   registerView(view.webContents, "Lazurio");
