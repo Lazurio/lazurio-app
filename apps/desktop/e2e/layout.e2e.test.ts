@@ -52,17 +52,21 @@ afterAll(async () => {
 });
 
 const remoteBounds = () =>
-  app.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0];
-    const view = window?.contentView.children[0];
-    const [width = 0, height = 0] = window?.getContentSize() ?? [];
-    return { view: view?.getBounds(), width, height };
+  app.evaluate(({ BaseWindow }) => {
+    const window = BaseWindow.getAllWindows()[0];
+    const local = window?.contentView.children[0];
+    const view = window?.contentView.children[1];
+    const { width = 0, height = 0 } = window?.contentView.getBounds() ?? {};
+    return { local: local?.getBounds(), view: view?.getBounds(), width, height };
   });
 
 describe("Lazurio App GEN4 with a remote page", () => {
   it("keeps the tailnets' status and the update controls beside the page and usable", async () => {
-    const { view, width, height } = await remoteBounds();
+    const { local, view, width, height } = await remoteBounds();
     if (view === undefined) throw new Error("no remote view");
+    if (local === undefined) throw new Error("no local view");
+    // Side by side: the local view ends where the remote one starts, and nothing lies under it.
+    assert.deepStrictEqual(local, { x: 0, y: 0, width: view.x, height });
     assert.isAbove(view.width, 0);
     assert.strictEqual(view.x + view.width, width);
     assert.strictEqual(view.height, height);
@@ -80,11 +84,11 @@ describe("Lazurio App GEN4 with a remote page", () => {
   });
 
   it("shows the page and paints it without a forced repaint", async () => {
-    const shown = await app.evaluate(async ({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      const view = window?.contentView.children.find(
-        (child): child is Electron.WebContentsView => "webContents" in child,
-      );
+    const shown = await app.evaluate(async ({ BaseWindow }) => {
+      const window = BaseWindow.getAllWindows()[0];
+      const view = window?.contentView.children
+        .slice(1)
+        .find((child): child is Electron.WebContentsView => "webContents" in child);
       if (view === undefined) return { found: false };
       const contents = view.webContents;
       // A page hidden to its renderer reports "hidden" and runs no animation frame.
@@ -113,11 +117,13 @@ describe("Lazurio App GEN4 with a remote page", () => {
   // What the system composes into the window, not what the page drew for itself: on Windows the
   // page painted and still the window showed the local page's background in its place (the trial of
   // 2026-11-17). The remote page is green, the local window dark.
-  it.skipIf(process.platform === "darwin")(
-    // macOS lets no capture through without the Screen Recording permission, which no runner has.
-    "shows the remote page in the window's own pixels",
-    async () => {
-      const sample = await app.evaluate(async ({ BaseWindow, desktopCapturer, screen }) => {
+  it("shows the remote page in the window's own pixels", async (context) => {
+    const sample = await app.evaluate(
+      async ({ BaseWindow, desktopCapturer, screen, systemPreferences }) => {
+        // macOS captures nothing without the Screen Recording permission, which no runner grants;
+        // Windows always reports it granted, and Linux has no such permission.
+        const access = systemPreferences.getMediaAccessStatus?.("screen") ?? "granted";
+        if (access !== "granted") return { found: "no permission", access };
         const window = BaseWindow.getAllWindows()[0];
         if (window === undefined) return { found: "no window" };
         const bounds = window.getBounds();
@@ -155,13 +161,16 @@ describe("Lazurio App GEN4 with a remote page", () => {
           found: own === undefined ? "screen" : "window",
           remote: [bitmap[index + 2] ?? 0, bitmap[index + 1] ?? 0, bitmap[index] ?? 0],
         };
-      });
-      if (sample.remote === undefined) throw new Error(`nothing captured: ${sample.found}`);
-      const [red = 0, green = 0, blue = 0] = sample.remote;
-      assert.isTrue(
-        green > 120 && red < 80 && blue < 80,
-        `the window shows rgb(${red}, ${green}, ${blue}) where the remote page is (${sample.found})`,
-      );
-    },
-  );
+      },
+    );
+    if (sample.found === "no permission") {
+      context.skip(`no Screen Recording permission (${sample.access}) for a capture on macOS`);
+    }
+    if (sample.remote === undefined) throw new Error(`nothing captured: ${sample.found}`);
+    const [red = 0, green = 0, blue = 0] = sample.remote;
+    assert.isTrue(
+      green > 120 && red < 80 && blue < 80,
+      `the window shows rgb(${red}, ${green}, ${blue}) where the remote page is (${sample.found})`,
+    );
+  });
 });
