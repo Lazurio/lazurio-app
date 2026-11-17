@@ -12,6 +12,8 @@
         "e2e/*.test.ts",
         // The status test runs it as the tailnet helper, by path (e2e/status.e2e.test.ts).
         "e2e/fake-tailnet-helper.ts",
+        // Helpers.test.ts runs it as the device helper, by path.
+        "src/main/fake-device-helper.ts",
         "vite.ui.config.ts",
       ],
     },

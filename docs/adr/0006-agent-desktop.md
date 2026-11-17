@@ -113,6 +113,25 @@ Each step is one small pull request with targeted tests and a review on its exac
 8. commands on the computer behind their own switch;
 9. the channel with the short-lived permission from Lazurio Auth, together with the Environment's side.
 
+### The first usable build for Windows (2026-11-17)
+
+On 2026-11-17 Matěj asked for a minimal but working Agent Desktop in Lazurio App for Windows as soon as possible, built the way Lazurio will keep it, so not on the pilot exception of point 3. The same day he chose the channel's final design (variant B, HumanAndMachine-ai/Machines#936). It has three locks:
+
+1. **The computer** is an approved device node of the Environment owner in the Organization's tailnet, and the Environment's gateway admits the channel only from such a node.
+2. **The person** signs in with the app's own public Lazurio Auth client (PKCE). The app sends the gateway a short-lived token for one Environment, which the gateway's helper checks.
+3. **Consent** is the switch on the computer.
+
+There is no device key in Auth and no Environment-side registry of computer keys. The contract between the app, Auth, the gateway and the Platform (contract v3) is written with the threads that build those parts. Point 3's contract v1 and its pairing are not used for this build.
+
+- **In, independent of the channel:**
+  - the engine in the Windows package (step 4);
+  - the main process following the Device helper (step 5), with the updater's handshake of point 7;
+  - the tailnet helper's proxy for an Environment in the app's tailnet;
+  - minimal native controls in the window's local column (step 6): the Environments' states and Stop;
+  - Stop and every other end of an engine ending its whole process tree (point 8).
+- **In, once contract v3 is set:** the app's sign-in and the token per Environment, each Environment's switch, and the Device helper's channel signing in with the token instead of v1's signature.
+- **Later:** the icon in the menu bar or notification area, showing the history (the helper keeps writing it), the macOS permission guide, the switch for commands, and macOS builds.
+
 ## Alternatives considered
 
 | Alternative                                                               | Why not                                                                                                                                                                                         |

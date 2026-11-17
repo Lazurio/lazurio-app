@@ -1,11 +1,15 @@
 import * as Electron from "electron";
 
 import {
+  DEVICE_STATE_CHANGED_CHANNEL,
+  DEVICE_STATE_CHANNEL,
+  DEVICE_STOP_CHANNEL,
   INSTALL_UPDATE_CHANNEL,
   SET_UPDATE_CHANNEL_CHANNEL,
   STATUS_CHANGED_CHANNEL,
   STATUS_CHANNEL,
   type AppStatus,
+  type DeviceStatus,
   type LazurioBridge,
 } from "../shared/bridge.ts";
 
@@ -26,6 +30,19 @@ const bridge: LazurioBridge = {
   },
   installUpdate: async () => {
     await Electron.ipcRenderer.invoke(INSTALL_UPDATE_CHANNEL);
+  },
+  device: {
+    getState: () => Electron.ipcRenderer.invoke(DEVICE_STATE_CHANNEL) as Promise<DeviceStatus>,
+    subscribe: (listener) => {
+      const receive = (_event: Electron.IpcRendererEvent, status: DeviceStatus) => listener(status);
+      Electron.ipcRenderer.on(DEVICE_STATE_CHANGED_CHANNEL, receive);
+      return () => {
+        Electron.ipcRenderer.removeListener(DEVICE_STATE_CHANGED_CHANNEL, receive);
+      };
+    },
+    stop: async () => {
+      await Electron.ipcRenderer.invoke(DEVICE_STOP_CHANNEL);
+    },
   },
 };
 

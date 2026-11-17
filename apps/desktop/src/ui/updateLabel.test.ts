@@ -46,4 +46,28 @@ describe("updateLabel", () => {
     assert.isFalse(updateLabel(status({ phase: "idle" }, "nightly"), nightly, text).floor);
     assert.isFalse(updateLabel(status({ phase: "idle" }, "latest"), "0.1.0", text).floor);
   });
+
+  it("says that an install waits for Agent Desktop while the app cannot reach it", () => {
+    for (const language of ["cs", "en"] as const) {
+      const words = messages[language].updates;
+      const installing = updateLabel(
+        status({ phase: "installing", version: "0.2.0" }),
+        "0.1.0",
+        words,
+        true,
+      );
+      assert.strictEqual(
+        installing.text,
+        words.installingWaitsForDevice.replace("{version}", "0.2.0"),
+      );
+      assert.notStrictEqual(installing.text, words.installing.replace("{version}", "0.2.0"));
+      // A quit does not install it now, so the ready text must not promise that.
+      const ready = updateLabel(status({ phase: "ready", version: "0.2.0" }), "0.1.0", words, true);
+      assert.strictEqual(ready.text, words.readyWaitsForDevice.replace("{version}", "0.2.0"));
+    }
+    assert.strictEqual(
+      updateLabel(status({ phase: "installing", version: "0.2.0" }), "0.1.0", text, false).text,
+      text.installing.replace("{version}", "0.2.0"),
+    );
+  });
 });
