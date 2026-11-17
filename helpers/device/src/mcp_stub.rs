@@ -15,6 +15,15 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const NOT_INSTALLED: &str = "Agent Desktop není v této verzi Lazurio App nainstalovaný. \
      (Agent Desktop is not installed in this build of Lazurio App.)";
 
+/// The key under which the app announces itself in `initialize`'s `_meta`. The pilot application
+/// uses `io.lazurio/agent-desktop`.
+pub const APP_META_KEY: &str = "io.lazurio/app";
+
+/// The version of the device lock this helper takes before every tool call (ADR 0006 point 4):
+/// one exclusive lock on `io.lazurio.device/agent.lock` by `File::try_lock`. The Environment ends
+/// a session that does not announce it (LZD-0018 task 854).
+pub const DEVICE_LOCK_VERSION: u32 = 1;
+
 /// JSON-RPC's code for a method the server does not serve.
 const METHOD_NOT_FOUND: i64 = -32601;
 
@@ -31,6 +40,9 @@ pub fn answer(line: &str, helper_version: &str) -> Option<String> {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
             "serverInfo": {"name": SERVER_NAME, "version": helper_version},
+            "_meta": {
+                APP_META_KEY: {"version": helper_version, "deviceLock": DEVICE_LOCK_VERSION},
+            },
         })),
         "tools/list" => Ok(json!({"tools": []})),
         "tools/call" => Ok(json!({
@@ -72,6 +84,18 @@ mod tests {
             json!({"name": "lazurio-device", "version": "1.2.3"})
         );
         assert_eq!(reply["result"]["capabilities"], json!({"tools": {}}));
+    }
+
+    #[test]
+    fn initialize_announces_the_device_lock_under_the_apps_key() {
+        let reply =
+            ask(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"})).expect("an answer");
+        // The Environment's broker ends a session that does not announce the device lock
+        // (ADR 0006 point 4, LZD-0018 task 854); the app announces it under its own key.
+        assert_eq!(
+            reply["result"]["_meta"]["io.lazurio/app"],
+            json!({"version": "1.2.3", "deviceLock": 1})
+        );
     }
 
     #[test]
