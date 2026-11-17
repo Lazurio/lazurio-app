@@ -2,6 +2,11 @@
 // that a packaged app's window and its helpers' Hello name the version that runs
 // (Lazurio/lazurio-app#22): Go through -ldflags -X main.version, Rust through LAZURIO_APP_VERSION.
 
+// Every build of the tailnet helper leaves out the control server's requests for debug data, network
+// flow logs and the node's API for its peers; the helper refuses to run without these tags
+// (helpers/tailnet/harden.go).
+export const TAILNET_TAGS = "ts_omit_c2n,ts_omit_netlog,ts_omit_peerapiserver";
+
 // The versions of ADR 0005, point 3, and nothing that could carry a flag into -ldflags.
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/u;
 
@@ -26,6 +31,8 @@ export const helperBuild = (options: {
       "helpers/tailnet",
       "build",
       "-trimpath",
+      "-tags",
+      TAILNET_TAGS,
       ...(options.release ? ["-ldflags", `-X main.version=${options.appVersion}`] : []),
       "-o",
       options.tailnetOutput,

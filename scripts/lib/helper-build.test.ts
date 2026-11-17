@@ -15,6 +15,8 @@ describe("helperBuild", () => {
         "helpers/tailnet",
         "build",
         "-trimpath",
+        "-tags",
+        "ts_omit_c2n,ts_omit_netlog,ts_omit_peerapiserver",
         "-ldflags",
         "-X main.version=0.1.0-nightly.20261116.7",
         "-o",
@@ -29,7 +31,17 @@ describe("helperBuild", () => {
   it("keeps a development build on the helpers' own development versions", () => {
     const build = helperBuild({ release: false, appVersion: "0.1.0", tailnetOutput: "bin/x" });
     assert.deepStrictEqual(build, {
-      go: ["-C", "helpers/tailnet", "build", "-trimpath", "-o", "bin/x", "."],
+      go: [
+        "-C",
+        "helpers/tailnet",
+        "build",
+        "-trimpath",
+        "-tags",
+        "ts_omit_c2n,ts_omit_netlog,ts_omit_peerapiserver",
+        "-o",
+        "bin/x",
+        ".",
+      ],
       cargo: ["build", "--locked"],
       // A development build never inherits the release's version from the shell.
       cargoEnv: { LAZURIO_APP_VERSION: undefined },
