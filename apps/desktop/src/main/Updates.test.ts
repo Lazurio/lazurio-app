@@ -13,6 +13,7 @@ import * as Stream from "effect/Stream";
 import { DeviceActivity, type DeviceActivityShape } from "./DeviceActivity.ts";
 import { ElectronUpdater, ElectronUpdaterError, type UpdaterEvent } from "./ElectronUpdater.ts";
 import {
+  failureState,
   make,
   quitDecision,
   type Updates,
@@ -179,6 +180,51 @@ describe("Updates", () => {
         ]);
       }),
     );
+  });
+
+  it.effect("says a channel without a release has none, and any other error failed", () => {
+    const updater = fakeUpdater();
+    return withUpdates({ updater }, (updates) =>
+      Effect.gen(function* () {
+        // Stable before the first stable release: GitHub has no latest release to read.
+        yield* updater.emit(
+          "error",
+          Object.assign(new Error("Unable to find latest version on GitHub"), {
+            code: "ERR_UPDATER_LATEST_VERSION_NOT_FOUND",
+          }),
+        );
+        const none = yield* waitFor(updates, "no-release");
+        assert.deepStrictEqual(none._tag === "Some" ? none.value.state : undefined, {
+          phase: "no-release",
+        });
+        // A channel without a release is checked again later, like an idle one.
+        yield* updates.check;
+        assert.include(updater.calls, "check");
+        yield* updater.emit(
+          "error",
+          Object.assign(new Error("net::ERR_INTERNET_DISCONNECTED"), { code: "ERR_NETWORK" }),
+        );
+        const failed = yield* waitFor(updates, "failed");
+        assert.deepStrictEqual(failed._tag === "Some" ? failed.value.state : undefined, {
+          phase: "failed",
+          problem: "net::ERR_INTERNET_DISCONNECTED",
+        });
+      }),
+    );
+  });
+
+  it("takes either code of a channel without a release as no failure", () => {
+    for (const code of [
+      "ERR_UPDATER_LATEST_VERSION_NOT_FOUND",
+      "ERR_UPDATER_NO_PUBLISHED_VERSIONS",
+    ]) {
+      assert.deepStrictEqual(failureState({ code }, "x"), { phase: "no-release" });
+    }
+    assert.deepStrictEqual(failureState({ code: "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND" }, "x"), {
+      phase: "failed",
+      problem: "x",
+    });
+    assert.deepStrictEqual(failureState("broken", "x"), { phase: "failed", problem: "x" });
   });
 
   it.effect("downloads an offered update and is ready once it is downloaded", () => {
