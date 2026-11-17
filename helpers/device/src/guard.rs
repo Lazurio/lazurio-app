@@ -8,7 +8,7 @@
 //! takes over an entry.
 //!
 //! - macOS: a generic password with `kSecAttrService = io.lazurio.agent-desktop`, searched for its
-//!   attributes only, without its data, and without any prompt (`kSecUseAuthenticationUISkip`).
+//!   attributes only, never its data, with the keychain's user interface turned off for the search.
 //! - Windows: a generic entry of the Credential Manager whose target is
 //!   `env:<id>.io.lazurio.agent-desktop`. `cmdkey /list` names the targets and never a secret; its
 //!   labels are translated, the targets are not.
@@ -88,25 +88,72 @@ impl UtilityCheck for SystemCheck {
     }
 }
 
-/// macOS: the utility's generic passwords, by their attributes only. The data is never asked for,
-/// so no item's access control is evaluated for it, and `kSecUseAuthenticationUISkip` keeps the
-/// system from asking the person anything: a locked keychain is an error, not a prompt.
+/// macOS: the utility's generic passwords in the user's keychain search list.
+///
+/// The utility (pilot.7, `Lazurio/lazurio-agent-desktop` at `v0.1.0-pilot.7`, `crates/core`) keeps
+/// them with `keyring` 3.6.3 and its feature `apple-native`: `keyring::Entry::new(service,
+/// account)` without a target, which `keyring`'s `macos.rs` writes with
+/// `SecKeychainAddGenericPassword` (`SecKeychain::set_generic_password`) into the keychain of the
+/// user's domain, the login keychain. Such an item is a legacy keychain item with the default
+/// access list and no access control (no user presence).
 #[cfg(target_os = "macos")]
 fn system_check() -> Pairing {
+    keychain_check(SERVICE, None)
+}
+
+/// Only one search at a time turns the keychain's user interface off, since the switch belongs to
+/// the whole process: no search turns it on again while another one still needs it off.
+#[cfg(target_os = "macos")]
+static KEYCHAIN_UI_OFF: Mutex<()> = Mutex::new(());
+
+/// Whether a generic password of `service` exists in `keychains`, or in the user's keychain search
+/// list when `None`.
+///
+/// - The search asks for attributes only, never data. Reading attributes evaluates no item's
+///   access list or access control, so an item that would need the person to approve or
+///   authenticate before its secret is read is still found. `kSecUseAuthenticationUISkip`, which
+///   skips such items and then answers "not found", is never set.
+/// - The only prompt such a search can show is the one to unlock a locked keychain. The search
+///   turns the keychain's user interface off for its time
+///   (`SecKeychainSetUserInteractionAllowed`, `SecKeychain::disable_user_interaction`), so a
+///   locked keychain answers `errSecInteractionNotAllowed` at once instead, which is `Failed`.
+///   Without that, the person would be asked every 15 s while a channel is open. Should a macOS
+///   ignore the switch, the prompt appears, and a cancelled prompt is an error too: `Failed`.
+/// - `kSecUseAuthenticationUIFail`, which would fail an item that needs authentication, is not
+///   offered by `security-framework` 3.7.0 (only `kSecUseAuthenticationUISkip`), and the crate
+///   allows no unsafe code to set it; the user interface switch covers the legacy keychains that
+///   hold the utility's items.
+///
+/// Only `errSecItemNotFound` is `Absent`; every other error is `Failed`.
+#[cfg(target_os = "macos")]
+fn keychain_check(
+    service: &str,
+    keychains: Option<&[security_framework::os::macos::keychain::SecKeychain]>,
+) -> Pairing {
     use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+    use security_framework::os::macos::keychain::SecKeychain;
 
     /// `errSecItemNotFound`.
     const ITEM_NOT_FOUND: i32 = -25300;
 
-    let found = ItemSearchOptions::new()
+    let _one_at_a_time = KEYCHAIN_UI_OFF
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    // Turned on again when this is dropped, after the search.
+    let Ok(_ui_off) = SecKeychain::disable_user_interaction() else {
+        return Pairing::Failed;
+    };
+    let mut options = ItemSearchOptions::new();
+    options
         .class(ItemClass::generic_password())
-        .service(SERVICE)
+        .service(service)
         .load_attributes(true)
         .load_data(false)
-        .limit(Limit::All)
-        .skip_authenticated_items(true)
-        .search();
-    match found {
+        .limit(Limit::All);
+    if let Some(keychains) = keychains {
+        options.keychains(keychains);
+    }
+    match options.search() {
         // A search that succeeds matched at least one item.
         Ok(_) => Pairing::Paired,
         Err(error) if error.code() == ITEM_NOT_FOUND => Pairing::Absent,
@@ -485,15 +532,136 @@ mod tests {
         );
     }
 
-    /// The check of this system, for a person on a pilot's Mac or Windows:
-    /// `cargo test -- --ignored guard::tests::the_system_check_answers`. It prints what it found
-    /// and must neither prompt nor take longer than `cmdkey`'s 5 s.
+    /// The check of this system on a pilot's Windows:
+    /// `cargo test --locked -- --ignored guard::tests::the_system_check_answers`. It prints what it
+    /// found and must not take longer than `cmdkey`'s 5 s.
+    #[cfg(windows)]
     #[test]
-    #[ignore = "asks the real keystore of this computer"]
+    #[ignore = "asks the real Credential Manager of this computer"]
     fn the_system_check_answers() {
         let started = Instant::now();
         let found = SystemCheck.check();
         println!("{found:?} in {:?}", started.elapsed());
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// The keychain check on a real Mac, run by hand:
+    /// `cargo test --locked -- --ignored --nocapture guard::tests::the_keychain_check_on_this_mac`.
+    ///
+    /// It writes entries of its own service, never the utility's, the way the utility does
+    /// (`SecKeychainAddGenericPassword`), and removes them and its keychain again, also when it
+    /// fails:
+    ///
+    /// - (a) an entry in the login keychain is `Paired`;
+    /// - (b) once it is deleted, `Absent`;
+    /// - (c) an entry in a keychain of its own, which locks itself after 1 s without use (the
+    ///   only way to lock a keychain `security-framework` offers without unsafe code), is never
+    ///   `Absent`, and no prompt appears.
+    ///
+    /// An entry that needs authentication (an access control with user presence) lives in the
+    /// data protection keychain, which an unsigned test binary without the
+    /// `keychain-access-groups` entitlement cannot write to, so no case has one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "writes test entries to this Mac's login keychain and a keychain of its own"]
+    fn the_keychain_check_on_this_mac() {
+        use security_framework::os::macos::keychain::{
+            CreateOptions, KeychainSettings, SecKeychain, SecPreferencesDomain,
+        };
+        use security_framework::passwords::delete_generic_password;
+
+        const ACCOUNT: &str = "env:device-helper-guard-test";
+
+        /// Deletes the test's entry of `0` from the search list when dropped.
+        struct Entry(String);
+        impl Drop for Entry {
+            fn drop(&mut self) {
+                let _ = delete_generic_password(&self.0, ACCOUNT);
+            }
+        }
+
+        /// Deletes the test's keychain, from the search list too, and its directory when dropped.
+        struct Keychain(std::path::PathBuf);
+        impl Drop for Keychain {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("/usr/bin/security")
+                    .arg("delete-keychain")
+                    .arg(self.0.join("guard-test.keychain"))
+                    .status();
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        // The cleanup starts `security`.
+        let _forks = crate::testkit::spawning();
+        let unique = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos())
+        );
+        let service = format!("io.lazurio.device-helper-guard-test.{unique}");
+        let ui_on = || SecKeychain::user_interaction_allowed().expect("the switch's state");
+
+        // (a) An entry in the login keychain, where the utility's go.
+        let login = SecKeychain::default_for_domain(SecPreferencesDomain::User)
+            .expect("the login keychain");
+        let entry = Entry(service.clone());
+        login
+            .set_generic_password(&entry.0, ACCOUNT, b"not a secret")
+            .expect("the test's entry is written");
+        assert_eq!(keychain_check(&service, None), Pairing::Paired, "(a)");
+        assert_eq!(
+            keychain_check(&service, Some(std::slice::from_ref(&login))),
+            Pairing::Paired,
+            "(a) in the login keychain alone"
+        );
+        assert!(ui_on(), "the user interface is on again after a search");
+
+        // (b) The entry is gone.
+        delete_generic_password(&service, ACCOUNT).expect("the test's entry is deleted");
+        drop(entry);
+        assert_eq!(keychain_check(&service, None), Pairing::Absent, "(b)");
+
+        // (c) An entry in a keychain of the test's own, once that keychain locked itself.
+        let directory = std::env::temp_dir().join(format!("lazurio-guard-test-{unique}"));
+        std::fs::create_dir_all(&directory).expect("the test's directory");
+        let keychain = Keychain(directory);
+        let mut own = CreateOptions::new()
+            .password("device-helper-guard-test")
+            .prompt_user(false)
+            .create(keychain.0.join("guard-test.keychain"))
+            .expect("the test's keychain");
+        own.set_generic_password(&service, ACCOUNT, b"not a secret")
+            .expect("the test's entry in its keychain");
+        assert_eq!(
+            keychain_check(&service, Some(std::slice::from_ref(&own))),
+            Pairing::Paired,
+            "(c) unlocked"
+        );
+        let mut settings = KeychainSettings::new();
+        settings.set_lock_interval(Some(1));
+        own.set_settings(&settings)
+            .expect("the lock interval is set");
+        // The keychain's own timer locks it; no event says when, so the test waits well past it.
+        thread::sleep(Duration::from_secs(5));
+        let started = Instant::now();
+        let locked = keychain_check(&service, Some(std::slice::from_ref(&own)));
+        println!(
+            "(c) a locked keychain: {locked:?} in {:?}",
+            started.elapsed()
+        );
+        assert_ne!(
+            locked,
+            Pairing::Absent,
+            "(c) a locked keychain is never Absent"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "(c) no prompt held the search"
+        );
+        assert!(ui_on(), "the user interface is on again after a search");
+        drop(keychain);
     }
 }
