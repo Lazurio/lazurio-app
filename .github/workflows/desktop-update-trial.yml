@@ -53,6 +53,9 @@ jobs:
       - name: Package N and N+1
         shell: pwsh
         working-directory: apps/desktop
+        # gh downloads and verifies the engine of helpers/device/engine.lock (docs/adr/0006).
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           foreach ($version in '0.0.1', '0.0.2') {
             pnpm -w build:helpers --release --app-version $version
@@ -160,6 +163,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lazurio/app-desktop ensure:electron
       - run: pnpm build:helpers --release --app-version 0.0.1
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: pnpm --filter @lazurio/app-desktop build
       - name: Package N
         working-directory: apps/desktop

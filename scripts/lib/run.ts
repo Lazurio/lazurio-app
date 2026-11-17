@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-class CommandFailed extends Schema.TaggedError<CommandFailed>()("CommandFailed", {
+export class CommandFailed extends Schema.TaggedError<CommandFailed>()("CommandFailed", {
   command: Schema.String,
   exitCode: Schema.Number,
 }) {
