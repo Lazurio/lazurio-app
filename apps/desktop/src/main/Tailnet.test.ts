@@ -1,8 +1,9 @@
 import { create } from "@bufbuild/protobuf";
-import { NodeStateSchema } from "@lazurio/app-contracts/tailnet/v1";
+import { NodeStateSchema, ProxyEndpointSchema } from "@lazurio/app-contracts/tailnet/v1";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 
 import {
   afterEvent,
@@ -11,6 +12,7 @@ import {
   isSafeLoginUrl,
   pacDataUrl,
   pacScript,
+  proxyForHost,
   servingTailnet,
   startingBoard,
   statusOf,
@@ -208,5 +210,51 @@ describe("servingTailnet", () => {
     );
     assert.isUndefined(servingTailnet(tailnets, "not an address"));
     assert.isUndefined(servingTailnet([], "https://launchpad.bob.example-org.lazurio.io/"));
+  });
+});
+
+describe("proxyForHost", () => {
+  const tailnets = [
+    {
+      tailnet: "example-org",
+      controlUrl: "https://headscale.example-org.lazurio.io",
+      hostname: "app",
+      domains: ["example-org.lazurio.io"],
+    },
+  ];
+  const proxy = create(ProxyEndpointSchema, {
+    host: "127.0.0.1",
+    port: 41234,
+    username: "u",
+    password: "p",
+  });
+
+  it("gives the helper's proxy for a host in a tailnet's domains", () => {
+    assert.deepStrictEqual(
+      proxyForHost(tailnets, proxy, "launchpad.bob.example-org.lazurio.io"),
+      Option.some(proxy),
+    );
+    assert.deepStrictEqual(
+      proxyForHost(tailnets, proxy, "Launchpad.Bob.Example-Org.Lazurio.io."),
+      Option.some(proxy),
+    );
+  });
+
+  it("gives none for a host outside every tailnet, a look-alike or what is no host", () => {
+    for (const host of [
+      "dashboard.lazurio.ai",
+      "evil-example-org.lazurio.io",
+      "example-org.lazurio.io.attacker.example",
+      "user@launchpad.bob.example-org.lazurio.io",
+      "attacker.example/launchpad.bob.example-org.lazurio.io",
+      "launchpad.bob.example-org.lazurio.io:8443",
+      "",
+    ]) {
+      assert.deepStrictEqual(proxyForHost(tailnets, proxy, host), Option.none(), host);
+    }
+    assert.deepStrictEqual(
+      proxyForHost([], proxy, "launchpad.bob.example-org.lazurio.io"),
+      Option.none(),
+    );
   });
 });

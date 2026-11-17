@@ -83,6 +83,18 @@ export const servingTailnet = (
   )?.tailnet;
 };
 
+// The tailnet helper's proxy for a host the app's tailnets serve, for the app's own connections
+// such as the Device's channel (docs/adr/0006, point 3); none for any other host. Only a bare name
+// counts: a port, credentials or a path never pass for a tailnet's host.
+export const proxyForHost = (
+  tailnets: ReadonlyArray<TailnetConfig>,
+  proxy: ProxyEndpoint,
+  host: string,
+): Option.Option<ProxyEndpoint> =>
+  /^[A-Za-z0-9.-]+$/u.test(host) && servingTailnet(tailnets, `https://${host}/`) !== undefined
+    ? Option.some(proxy)
+    : Option.none();
+
 // Chromium takes a PAC script reliably only as a data: URL.
 export const pacDataUrl = (script: string): string =>
   `data:application/x-ns-proxy-autoconfig;base64,${btoa(script)}`;
@@ -190,6 +202,9 @@ export interface Tailnets {
   readonly subscribe: (listener: () => void) => () => void;
   // Waits until the tailnet that serves the address runs; at once for an address no tailnet serves.
   readonly whenReachable: (address: string) => Effect.Effect<void>;
+  // The tailnet helper's proxy, with the credentials of its current start, for a host in a
+  // tailnet's domains; none for a host no tailnet serves (proxyForHost).
+  readonly proxyFor: (host: string) => Option.Option<ProxyEndpoint>;
 }
 
 // Tailnets of an app that runs no tailnet helper: every address is reachable as it is.
@@ -197,6 +212,7 @@ export const noTailnets: Tailnets = {
   current: () => [],
   subscribe: () => () => {},
   whenReachable: () => Effect.void,
+  proxyFor: () => Option.none(),
 };
 
 // Runs the tailnets for as long as the scope lives.
@@ -329,6 +345,7 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
         });
       });
     },
+    proxyFor: (host) => proxyForHost(options.tailnets, proxy, host),
   };
   return tailnets;
 });
