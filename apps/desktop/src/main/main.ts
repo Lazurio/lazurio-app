@@ -306,6 +306,8 @@ const program = Effect.gen(function* () {
     return;
   }
   const platform = yield* HostProcess.Platform;
+  // Windows: the same AppUserModelID as the Start menu shortcut, so the hidden-window toast shows.
+  if (platform === "win32") Electron.app.setAppUserModelId(Lifecycle.APP_USER_MODEL_ID);
   // The window, once it exists, and whether it should show: a start at the sign-in to Windows is
   // hidden until the person opens the app.
   let mainWindow = Option.none<Electron.BaseWindow>();
@@ -342,6 +344,7 @@ const program = Effect.gen(function* () {
     Electron.app.setLoginItemSettings({
       openAtLogin: loginItem.value.openAtLogin,
       args: [...loginItem.value.args],
+      name: loginItem.value.name,
     });
   }
   const appPath = Electron.app.getAppPath();

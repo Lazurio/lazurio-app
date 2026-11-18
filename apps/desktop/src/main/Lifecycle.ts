@@ -27,9 +27,16 @@ const HIDDEN_ARGUMENT = "--hidden";
 export const startsHidden = (argv: ReadonlyArray<string>): boolean =>
   argv.includes(HIDDEN_ARGUMENT);
 
+// The app's AppUserModelID on Windows: electron-builder gives the Start menu shortcut the
+// `appId` of electron-builder.yml, and a toast shows only when the app names the same one. The
+// sign-in's `Run` value carries it as its name, so the uninstaller removes exactly that value
+// (build/installer.nsh).
+export const APP_USER_MODEL_ID = "io.lazurio.app";
+
 interface LoginItem {
   readonly openAtLogin: true;
   readonly args: ReadonlyArray<string>;
+  readonly name: string;
 }
 
 // Only a packaged app on Windows starts at the person's sign-in, hidden and with every switch off
@@ -39,7 +46,7 @@ export const loginItem = (options: {
   readonly packaged: boolean;
 }): Option.Option<LoginItem> =>
   options.platform === "win32" && options.packaged
-    ? Option.some({ openAtLogin: true, args: [HIDDEN_ARGUMENT] })
+    ? Option.some({ openAtLogin: true, args: [HIDDEN_ARGUMENT], name: APP_USER_MODEL_ID })
     : Option.none();
 
 interface TrayActions {

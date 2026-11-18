@@ -7,6 +7,7 @@ import * as Path from "effect/Path";
 
 import { messages } from "../ui/messages.ts";
 import {
+  APP_USER_MODEL_ID,
   beforeQuitStep,
   closeStep,
   keepsRunningInTray,
@@ -45,12 +46,33 @@ describe("Lifecycle", () => {
   it("starts at the sign-in to Windows only from a packaged app on Windows", () => {
     assert.deepStrictEqual(
       loginItem({ platform: "win32", packaged: true }),
-      Option.some({ openAtLogin: true, args: ["--hidden"] }),
+      Option.some({ openAtLogin: true, args: ["--hidden"], name: "io.lazurio.app" }),
     );
     assert.isTrue(Option.isNone(loginItem({ platform: "win32", packaged: false })));
     assert.isTrue(Option.isNone(loginItem({ platform: "darwin", packaged: true })));
     assert.isTrue(Option.isNone(loginItem({ platform: "linux", packaged: true })));
   });
+
+  it.effect(
+    "names the AppUserModelID of the shortcut, and the uninstaller removes its Run value",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const desktop = path.resolve(import.meta.dirname, "..", "..");
+        const builder = yield* fileSystem.readFileString(
+          path.join(desktop, "electron-builder.yml"),
+        );
+        assert.include(builder.split("\n"), `appId: ${APP_USER_MODEL_ID}`);
+        const installer = yield* fileSystem.readFileString(
+          path.join(desktop, "build", "installer.nsh"),
+        );
+        assert.include(
+          installer,
+          `DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${APP_USER_MODEL_ID}"`,
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
   it("offers Open and Quit in the tray's menu, in either language", () => {
     const calls: Array<string> = [];
