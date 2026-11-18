@@ -2,3 +2,5 @@
 packages/contracts/src/gen/** linguist-generated=true
 helpers/tailnet/gen/** linguist-generated=true
 pnpm-lock.yaml linguist-generated=true
+# Windows runs batch files; they keep its line endings.
+*.cmd text eol=crlf
