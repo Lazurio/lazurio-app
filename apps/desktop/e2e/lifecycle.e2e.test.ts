@@ -200,6 +200,30 @@ describe("Lazurio App's life outside its window", () => {
     await windowVisible(first, true);
   });
 
+  it("starts nothing on --quit with another data folder, where no app runs", async () => {
+    const electron: unknown = await first.app.evaluate(() => process.execPath);
+    if (typeof electron !== "string") return assert.fail("no Electron to start");
+    const elsewhere = temporaryUserData();
+    try {
+      const lone = NodeChildProcess.spawn(
+        electron,
+        [APP_DIRECTORY, "--quit", ...(osSandbox ? [] : ["--no-sandbox"])],
+        {
+          env: { ...process.env, LAZURIO_APP_E2E: "true", LAZURIO_APP_E2E_USER_DATA: elsewhere },
+          stdio: "ignore",
+        },
+      );
+      assert.strictEqual(
+        await new Promise<number | null>((resolve) => lone.once("exit", resolve)),
+        0,
+      );
+      // The app of this suite runs on.
+      assert.isNull(first.child.exitCode);
+    } finally {
+      removeUserData(elsewhere);
+    }
+  });
+
   // Last: it ends the app.
   it.effect("quits from the tray (Cmd+Q on a Mac), and its helpers end with it", () =>
     withTray(async (hasTray) => {

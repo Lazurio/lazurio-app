@@ -305,6 +305,11 @@ const program = Effect.gen(function* () {
     yield* Effect.logInfo("the app already runs; its window shows");
     return;
   }
+  // `--quit` with no app running has nothing to quit, and starts none.
+  if (Lifecycle.secondStart(process.argv) === "quit") {
+    yield* Effect.logInfo("--quit, and the app does not run");
+    return;
+  }
   const platform = yield* HostProcess.Platform;
   // Windows: the same AppUserModelID as the Start menu shortcut, so the hidden-window toast shows.
   if (platform === "win32") Electron.app.setAppUserModelId(Lifecycle.APP_USER_MODEL_ID);
