@@ -753,7 +753,7 @@ const program = Effect.gen(function* () {
         mainWindow = Option.some(window);
       },
       showOnLoad: () => showWanted,
-      closeStep: () => Lifecycle.closeStep(quitting),
+      closeStep: () => Lifecycle.closeStep(quitting, agentWorksNow()),
       hidden: () => {
         showWanted = false;
         if (Lifecycle.keepsRunningInTray(platform)) Effect.runForkWith(services)(hiddenNotice);

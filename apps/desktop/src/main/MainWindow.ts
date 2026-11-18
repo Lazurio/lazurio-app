@@ -39,7 +39,7 @@ export interface MainWindowOptions {
   // start or the tray asked for it meanwhile.
   readonly showOnLoad: () => boolean;
   // What closing the window does (Lifecycle.closeStep), and what follows when it hides.
-  readonly closeStep: () => "hide" | "close";
+  readonly closeStep: () => "hide" | "close" | "keep";
   readonly hidden: () => void;
   // Windows ends the person's session (log off, restart): the app quits.
   readonly sessionEnds: () => void;
@@ -219,9 +219,12 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   );
   options.created(window);
   // Closing the window hides it, so the app and Agent Desktop run on (Tray.ts); only a quit closes it.
+  // While an agent works it stays where it is.
   window.on("close", (event) => {
-    if (options.closeStep() === "close") return;
+    const step = options.closeStep();
+    if (step === "close") return;
     event.preventDefault();
+    if (step === "keep") return;
     window.hide();
     options.hidden();
   });

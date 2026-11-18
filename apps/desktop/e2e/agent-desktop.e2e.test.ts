@@ -409,6 +409,14 @@ describe("Agent Desktop's switch", () => {
     });
     await shell.evaluate(() => window.lazurio.status());
     assert.isTrue(await columnShown());
+    // Closing the window, as with its X, keeps it shown while the agent works.
+    const shownAfterClose = await app.evaluate(({ BaseWindow }) => {
+      const window = BaseWindow.getAllWindows()[0];
+      window?.close();
+      return window?.isVisible() === true;
+    });
+    assert.isTrue(shownAfterClose);
+    assert.isTrue(await columnShown());
     // Once the work ends, Hide works again.
     await environmentRow().locator('[data-action="device-switch"]').click();
     await inPhase("off");

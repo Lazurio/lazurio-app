@@ -25,6 +25,8 @@ describe("Lifecycle", () => {
   it("hides the window when it closes, and closes it only while the app quits", () => {
     assert.strictEqual(closeStep(false), "hide");
     assert.strictEqual(closeStep(true), "close");
+    assert.strictEqual(closeStep(false, true), "keep");
+    assert.strictEqual(closeStep(true, true), "close");
   });
 
   it("keeps running in the notification area on Windows and Linux, and in the Dock on a Mac", () => {

@@ -25,7 +25,10 @@ const STATUS: AppStatus = {
 const DEVICE: DeviceStatus = {
   state: "ready",
   environments: [],
-  agent: { environmentId: "env-1", label: "Ada's Environment" },
+  agent: {
+    environmentId: "launchpad.ada.example-org.lazurio.io",
+    label: "launchpad.ada.example-org.lazurio.io",
+  },
   account: "signed-in",
   switches: [
     {
@@ -59,7 +62,7 @@ describe("statusText", () => {
         "Helper programs:",
         "  lazurio-tailnet: ready 0.1.0-nightly.20261118.17",
         "  lazurio-device: failed",
-        "Agent Desktop: ready; account signed-in; agent working for Ada's Environment",
+        "Agent Desktop: ready; account signed-in; agent working",
         "  Environment 1: off (auth: unknown-environment); channel off",
         "",
       ].join("\n"),

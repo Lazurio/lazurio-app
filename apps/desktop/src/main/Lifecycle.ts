@@ -11,7 +11,10 @@ import type { TrayText } from "../ui/messages.ts";
 // hidden, and the first hidden window says once where the app went.
 
 // Closing the main window hides it; it closes only while the app quits.
-export const closeStep = (quitting: boolean): "hide" | "close" => (quitting ? "close" : "hide");
+// While an agent holds the computer the window stays: hiding it would hide that an agent works and
+// its Stop (docs/adr/0006).
+export const closeStep = (quitting: boolean, agentWorks = false): "hide" | "close" | "keep" =>
+  quitting ? "close" : agentWorks ? "keep" : "hide";
 
 // Windows and Linux keep the app in the notification area; a Mac keeps it in the Dock.
 export const keepsRunningInTray = (platform: string): boolean => platform !== "darwin";

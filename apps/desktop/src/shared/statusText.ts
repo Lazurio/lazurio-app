@@ -62,5 +62,6 @@ const updateLine = (state: AppStatus["updates"]["state"]): string => {
   }
 };
 
+// The working agent's Environment stays unnamed: its label is the Environment's host.
 const agentLine = (agent: DeviceStatus["agent"]): string =>
-  agent === null ? "none" : agent === "unknown" ? "unknown" : `working for ${agent.label}`;
+  agent === null ? "none" : agent === "unknown" ? "unknown" : "working";
