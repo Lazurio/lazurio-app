@@ -4,23 +4,33 @@ import * as Schema from "effect/Schema";
 import * as Electron from "electron";
 
 import {
+  DEVICE_ADD_ENVIRONMENT_CHANNEL,
+  DEVICE_REMOVE_ENVIRONMENT_CHANNEL,
+  DEVICE_SET_SWITCH_CHANNEL,
+  DEVICE_SIGN_OUT_CHANNEL,
   DEVICE_STATE_CHANGED_CHANNEL,
   DEVICE_STATE_CHANNEL,
   DEVICE_STOP_CHANNEL,
   type DeviceStatus,
 } from "../shared/bridge.ts";
 import type { DeviceRequestError } from "./DeviceService.ts";
+import type { DeviceSwitchError } from "./DeviceSwitches.ts";
 import { localViews } from "./Hardening.ts";
 import { destinationOf } from "./Navigation.ts";
 
-// Agent Desktop's requests from the app's local windows (docs/adr/0006, point 5): its state and
-// Stop. Only a local view of the app, showing the app's own files, may ask; a remote page has no
-// preload and is refused here as well. Every argument goes through Schema.
+// Agent Desktop's requests from the app's local windows (docs/adr/0006, point 5): state, Stop, the
+// switches, adding and removing an Environment, signing out. Only a local view of the app may ask,
+// so only a native window turns a switch on; a remote page has no preload and is refused here too.
+// Every argument goes through Schema.
 
 export interface DeviceControls {
   readonly current: () => DeviceStatus;
   readonly subscribe: (listener: () => void) => () => void;
   readonly stop: Effect.Effect<void, DeviceRequestError>;
+  readonly setSwitch: (origin: string, on: boolean) => Effect.Effect<void, DeviceSwitchError>;
+  readonly addEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
+  readonly removeEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
+  readonly signOut: Effect.Effect<void, DeviceSwitchError>;
 }
 
 const isLocalSender = (event: Electron.IpcMainInvokeEvent): boolean => {
@@ -30,8 +40,11 @@ const isLocalSender = (event: Electron.IpcMainInvokeEvent): boolean => {
   );
 };
 
-// Neither request takes an argument.
 const decodeNoArgument = Schema.decodeUnknownEffect(Schema.Undefined);
+const decodeSwitch = Schema.decodeUnknownEffect(
+  Schema.Struct({ origin: Schema.String, on: Schema.Boolean }),
+);
+const decodeOrigin = Schema.decodeUnknownEffect(Schema.String);
 
 class DeviceIpcRefused extends Schema.TaggedError<DeviceIpcRefused>()("DeviceIpcRefused", {}) {
   override get message(): string {
@@ -58,6 +71,18 @@ export const serve = Effect.fn("DeviceIpc.serve")(function* (device: DeviceContr
   );
   yield* handle(DEVICE_STOP_CHANNEL, (argument) =>
     decodeNoArgument(argument).pipe(Effect.andThen(device.stop)),
+  );
+  yield* handle(DEVICE_SET_SWITCH_CHANNEL, (argument) =>
+    decodeSwitch(argument).pipe(Effect.flatMap(({ origin, on }) => device.setSwitch(origin, on))),
+  );
+  yield* handle(DEVICE_ADD_ENVIRONMENT_CHANNEL, (argument) =>
+    decodeOrigin(argument).pipe(Effect.flatMap(device.addEnvironment)),
+  );
+  yield* handle(DEVICE_REMOVE_ENVIRONMENT_CHANNEL, (argument) =>
+    decodeOrigin(argument).pipe(Effect.flatMap(device.removeEnvironment)),
+  );
+  yield* handle(DEVICE_SIGN_OUT_CHANNEL, (argument) =>
+    decodeNoArgument(argument).pipe(Effect.andThen(device.signOut)),
   );
   // Every change goes to every local window. A window reads the state after subscribing, so no
   // change falls between.

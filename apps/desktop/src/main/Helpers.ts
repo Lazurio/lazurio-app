@@ -64,6 +64,9 @@ export interface HelperConnection {
   // helper answers by ending what it started, and SIGKILL after two seconds (on Windows, Effect's
   // spawner runs `taskkill /T /F`). Waits until it exited; a process already gone is no failure.
   readonly end: Effect.Effect<void>;
+  // Stops the helper now, as the scope's end would: Shutdown and the end of its input, then two
+  // seconds to exit, then `end`. True only when the process exited.
+  readonly shutdown: Effect.Effect<boolean>;
 }
 
 const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -152,20 +155,26 @@ const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
 
   // Shutdown, the end of the helper's input, and then its exit and the end of its output, which
   // the reader takes in before the scope ends it.
+  // The first stop does the work, from the scope's end or from `shutdown`; a later one waits for it.
   const stopped = yield* Deferred.make<boolean>();
   const stopping = yield* Deferred.make<void>();
-  yield* Effect.addFinalizer(() =>
-    Deferred.succeed(stopping, undefined).pipe(
-      Effect.andThen(send(nextRequestId, { case: "shutdown", value: {} })),
+  const stop = Effect.gen(function* () {
+    if (!(yield* Deferred.succeed(stopping, undefined))) return yield* Deferred.await(stopped);
+    const inTime = yield* send(nextRequestId, { case: "shutdown", value: {} }).pipe(
       Effect.andThen(Queue.end(outbox)),
       Effect.andThen(
         Effect.all([child.exitCode, Fiber.await(reader)]).pipe(Effect.timeout(STOP_WITHIN)),
       ),
       Effect.as(true),
       Effect.orElseSucceed(() => false),
-      Effect.flatMap((inTime) => Deferred.succeed(stopped, inTime)),
-    ),
-  );
+    );
+    yield* Deferred.succeed(stopped, inTime);
+    return inTime;
+  }).pipe(Effect.uninterruptible);
+  const kill = child
+    .kill({ killSignal: "SIGTERM", forceKillAfter: STOP_WITHIN })
+    .pipe(Effect.ignore);
+  yield* Effect.addFinalizer(() => stop);
 
   const nonce = crypto.getRandomValues(new Uint8Array(16));
   const pong = yield* request({ case: "ping", value: { nonce } });
@@ -181,7 +190,19 @@ const connect = Effect.fn("Helpers.connect")(function* (binary: HelperBinary) {
     stopped: Deferred.await(stopped),
     stopping: Deferred.isDone(stopping),
     pid: child.pid,
-    end: child.kill({ killSignal: "SIGTERM", forceKillAfter: STOP_WITHIN }).pipe(Effect.ignore),
+    end: kill,
+    shutdown: stop.pipe(
+      Effect.flatMap((inTime) =>
+        inTime
+          ? Effect.succeed(true)
+          : kill.pipe(
+              Effect.andThen(child.isRunning),
+              Effect.map((running) => !running),
+              Effect.orElseSucceed(() => false),
+            ),
+      ),
+      Effect.uninterruptible,
+    ),
   };
   return connection;
 });

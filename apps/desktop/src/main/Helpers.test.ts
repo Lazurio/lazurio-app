@@ -103,6 +103,36 @@ describe("Helpers", () => {
       assert.isFalse(isAlive(connection.pid));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  // The fail-safe of Agent Desktop's switches (DeviceService.endHelper): the app stops the helper
+  // while its scope still lives.
+  it.live.each(["stop", "linger"] as const)(
+    "shuts a helper down at once, by its PID when it does not exit (%s), and says it exited",
+    (afterShutdown) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fake = path.join(import.meta.dirname, "fake-device-helper.ts");
+        const [helper] = yield* startAll([
+          { name: "lazurio-device", path: process.execPath, args: [fake, afterShutdown] },
+        ]);
+        if (helper === undefined || Option.isNone(helper.connection)) {
+          return assert.fail(`the fake helper did not start: ${JSON.stringify(helper?.status)}`);
+        }
+        const connection = helper.connection.value;
+        const reading = yield* connection.events.pipe(
+          Stream.map((message) => message.kind.case),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        assert.isTrue(yield* connection.shutdown);
+        assert.isTrue(yield* connection.stopping);
+        assert.isFalse(isAlive(connection.pid));
+        assert.deepStrictEqual([...(yield* Fiber.join(reading))], ["deviceStopped"]);
+        // A second stop, the scope's end among them, waits for the first.
+        assert.isTrue(yield* connection.shutdown);
+        assert.strictEqual(yield* connection.stopped, afterShutdown === "stop");
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });
 
 // Signal 0 checks that the process exists and ends nothing.

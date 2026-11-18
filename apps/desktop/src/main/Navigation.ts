@@ -75,6 +75,23 @@ const httpsUrl = (address: string): URL | undefined => {
   }
 };
 
+// The origin `https://<host>` of a page of an Environment's Lazurio, for Agent Desktop's list: HTTPS
+// on the default port, a `launchpad.` name below lazurio.io; never lazurio.app, Auth or
+// the Dashboard. Only Lazurio Auth's hand-over says whether it is the person's Environment (404,
+// 403).
+export const environmentOriginOf = (address: string): string | undefined => {
+  const url = httpsUrl(address);
+  if (url === undefined || url.port !== "") return undefined;
+  const name = nameOf(url.hostname);
+  // An Environment's Lazurio is its `launchpad.` host; a module's app on another host of the same
+  // Environment would only get Auth's 404.
+  return name.startsWith("launchpad.") &&
+    isUnder(name, LAZURIO_DOMAIN) &&
+    /^[a-z0-9.-]+$/u.test(name)
+    ? `https://${name}`
+    : undefined;
+};
+
 // Every other service, Composio's connection of an Integration among them, opens in the system's
 // browser: the person is signed in there, providers such as Google refuse embedded browsers, and
 // the connection lives at the service, not in the app's session.
