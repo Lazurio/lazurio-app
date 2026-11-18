@@ -6,6 +6,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@lazurio/app-shared/HostProcess";
 import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -21,6 +22,7 @@ import * as Electron from "electron";
 
 import { APP_NAME } from "../shared/appName.ts";
 import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
+import { statusText } from "../shared/statusText.ts";
 import { localeOf, messages } from "../ui/messages.ts";
 
 import * as AuthClient from "./AuthClient.ts";
@@ -33,6 +35,7 @@ import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
 import * as KeystoreCheck from "./KeystoreCheck.ts";
 import * as Helpers from "./Helpers.ts";
+import * as AppMenu from "./AppMenu.ts";
 import * as Lifecycle from "./Lifecycle.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
@@ -45,6 +48,7 @@ import * as TailnetPolicy from "./TailnetPolicy.ts";
 import * as Tray from "./Tray.ts";
 import * as Updates from "./Updates.ts";
 import * as UpdatesIpc from "./UpdatesIpc.ts";
+import * as WindowIpc from "./WindowIpc.ts";
 
 // Lazurio App GEN4 (decision 0248): the main process. It serves the app's own windows, guards
 // every web contents, starts the helper processes and opens the main window.
@@ -360,11 +364,24 @@ const program = Effect.gen(function* () {
     window.show();
     window.focus();
   };
+  // The app's status column beside the page: hidden by default (Matěj, 2026-11-18), shown from
+  // the menu, the tray, --show-status, the waiting page or while an agent works.
+  let statusShown = Lifecycle.showsStatus(process.argv);
+  let windowControls = Option.none<MainWindow.MainWindowControls>();
+  let refreshMenu = () => {};
+  const setStatusShown = (shown: boolean) => {
+    statusShown = shown;
+    if (shown) showWindow();
+    if (Option.isSome(windowControls)) windowControls.value.relayout();
+    refreshMenu();
+  };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       const secondInstance = (_event: Electron.Event, argv: ReadonlyArray<string>) => {
         hooks.secondInstance();
-        if (Lifecycle.secondStart(argv) === "quit") Electron.app.quit();
+        const step = Lifecycle.secondStart(argv);
+        if (step === "quit") Electron.app.quit();
+        else if (step === "show-status") setStatusShown(true);
         else showWindow();
       };
       Electron.app.on("second-instance", secondInstance);
@@ -645,9 +662,70 @@ const program = Effect.gen(function* () {
   const text = messages[localeOf(Electron.app.getLocale())];
   if (Lifecycle.keepsRunningInTray(platform)) {
     hooks.trayMenu(
-      yield* Tray.serve({ text: text.tray, show: showWindow, quit: () => Electron.app.quit() }),
+      yield* Tray.serve({
+        text: text.tray,
+        show: showWindow,
+        showStatus: () => setStatusShown(true),
+        quit: () => Electron.app.quit(),
+      }),
     );
   }
+  // The window's menu in the app's language instead of Electron's English default (AppMenu.ts).
+  refreshMenu = () => {
+    Electron.Menu.setApplicationMenu(
+      Electron.Menu.buildFromTemplate(
+        AppMenu.menuTemplate({
+          text: text.menu,
+          appName: APP_NAME,
+          platform,
+          statusShown,
+          actions: {
+            toggleStatus: () => setStatusShown(!statusShown),
+            // Agent Desktop lives in the status column until it has a window of its own.
+            openAgentDesktop: () => setStatusShown(true),
+            reloadPage: () => {
+              if (Option.isSome(windowControls)) windowControls.value.reloadPage();
+            },
+            about: () => {
+              void Electron.dialog.showMessageBox({
+                type: "info",
+                title: text.menu.about,
+                message: APP_NAME,
+                detail: text.menu.aboutDetail.replace("{version}", Electron.app.getVersion()),
+              });
+            },
+          },
+        }) as unknown as Array<Electron.MenuItemConstructorOptions>,
+      ),
+    );
+  };
+  refreshMenu();
+  yield* WindowIpc.serve({
+    setStatusShown,
+    statusText: Effect.map(DateTime.now, (now) =>
+      statusText({
+        appName: APP_NAME,
+        platform,
+        status: status(),
+        device: deviceControls.current(),
+        at: DateTime.formatIso(now),
+      }),
+    ),
+  });
+  // While an agent works on the computer, the status column with its Stop shows by itself: the
+  // window then never hides that an agent holds the computer (docs/adr/0006), until Agent Desktop
+  // has a bar of its own.
+  let agentWorked = false;
+  const showWhileAgentWorks = () => {
+    const agent = deviceControls.current().agent;
+    const works = agent !== null && agent !== "unknown";
+    if (works && !agentWorked) setStatusShown(true);
+    agentWorked = works;
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => deviceControls.subscribe(showWhileAgentWorks)),
+    (stop) => Effect.sync(stop),
+  );
   const hiddenNotice = yield* Lifecycle.noticeOnce(
     path.join(Electron.app.getPath("userData"), "tray.json"),
     hooks.notice(text.tray.hiddenNotice),
@@ -675,6 +753,10 @@ const program = Effect.gen(function* () {
         if (Lifecycle.keepsRunningInTray(platform)) Effect.runForkWith(services)(hiddenNotice);
       },
       sessionEnds: () => Electron.app.quit(),
+      statusShown: () => statusShown,
+      controls: (controls) => {
+        windowControls = Option.some(controls);
+      },
     }).pipe(Effect.andThen(Effect.never)),
     Deferred.await(quitRequested),
   );

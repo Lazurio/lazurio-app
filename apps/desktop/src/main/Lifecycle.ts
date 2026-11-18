@@ -37,8 +37,16 @@ export const startsHidden = (argv: ReadonlyArray<string>): boolean =>
 // how a script, the Windows update trial among them, ends it without killing it.
 const QUIT_ARGUMENT = "--quit";
 
-export const secondStart = (argv: ReadonlyArray<string>): "quit" | "show" =>
-  argv.includes(QUIT_ARGUMENT) ? "quit" : "show";
+// `--show-status` opens the window with the app's status column (task of 2026-11-18: the column
+// is hidden by default), at a first start or as a second start over the running app, so a script
+// over SSH or a support call can open it without a click.
+const SHOW_STATUS_ARGUMENT = "--show-status";
+
+export const showsStatus = (argv: ReadonlyArray<string>): boolean =>
+  argv.includes(SHOW_STATUS_ARGUMENT);
+
+export const secondStart = (argv: ReadonlyArray<string>): "quit" | "show-status" | "show" =>
+  argv.includes(QUIT_ARGUMENT) ? "quit" : showsStatus(argv) ? "show-status" : "show";
 
 // The app's AppUserModelID on Windows: electron-builder gives the Start menu shortcut the
 // `appId` of electron-builder.yml, and a toast shows only when the app names the same one. The
@@ -64,6 +72,7 @@ export const loginItem = (options: {
 
 interface TrayActions {
   readonly show: () => void;
+  readonly showStatus: () => void;
   readonly quit: () => void;
 }
 
@@ -72,6 +81,7 @@ export const trayMenu = (
   actions: TrayActions,
 ): ReadonlyArray<{ readonly label: string; readonly click: () => void }> => [
   { label: text.open, click: actions.show },
+  { label: text.status, click: actions.showStatus },
   { label: text.quit, click: actions.quit },
 ];
 

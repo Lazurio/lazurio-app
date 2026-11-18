@@ -30,13 +30,48 @@ export interface Text {
   readonly updates: UpdatesText;
   readonly device: DeviceText;
   // The remote page's place while a tailnet's page cannot be reached yet (Waiting.tsx).
-  readonly waiting: { readonly title: string; readonly lead: string };
+  readonly waiting: { readonly title: string; readonly lead: string; readonly showStatus: string };
   readonly tray: TrayText;
+  // The app's status column, hidden by default, and its actions.
+  readonly status: StatusText;
+  readonly menu: MenuText;
+}
+
+interface StatusText {
+  readonly title: string;
+  readonly hide: string;
+  readonly copy: string;
+  readonly copied: string;
+  readonly copyFailed: string;
+  // The section with the helper programs and their versions, folded.
+  readonly details: string;
+}
+
+// The window's menu (AppMenu.ts).
+export interface MenuText {
+  readonly edit: string;
+  readonly undo: string;
+  readonly redo: string;
+  readonly cut: string;
+  readonly copy: string;
+  readonly paste: string;
+  readonly selectAll: string;
+  readonly view: string;
+  readonly status: string;
+  readonly agentDesktop: string;
+  readonly reload: string;
+  readonly help: string;
+  readonly about: string;
+  readonly aboutDetail: string;
+  readonly hide: string;
+  readonly quit: string;
 }
 
 // The icon in the notification area and the notice when the window hides for the first time.
 export interface TrayText {
   readonly open: string;
+  // Opens the window with the app's status column.
+  readonly status: string;
   readonly quit: string;
   readonly hiddenNotice: string;
 }
@@ -141,33 +176,34 @@ export interface UpdatesText {
 const cs: Text = {
   generation: "Generace",
   version: "Verze",
-  helpers: "Pomocné procesy",
+  helpers: "Pomocné programy",
   ready: "Běží",
   failed: "Nespustil se",
-  tailnets: "Tailnety",
-  noTailnets: "Žádný tailnet",
+  tailnets: "Síť Organizace",
+  noTailnets: "Žádná síť",
   starting: "Připojuje se",
   "needs-login": "Čeká na přihlášení",
   running: "Připojeno",
   stopped: "Zastaveno",
-  noKeystore: `Úložiště klíčů systému není dostupné, a proto se tailnet nespustil. Odemkněte ho (na Macu Klíčenku) a ${APP_NAME} spusťte znovu.`,
+  noKeystore: `Úložiště klíčů systému není dostupné, a proto se síť nespustila. Odemkněte ho (na Macu Klíčenku) a ${APP_NAME} spusťte znovu.`,
   keyInaccessible: {
-    lead: `${APP_NAME} nemůže přečíst klíč tohoto tailnetu, a proto se tailnet nespustil. Nic nemažte: zkontrolujte, že soubor patří vám, že ho jde číst a že disk funguje, a ${APP_NAME} spusťte znovu. Jde o tento soubor:`,
+    lead: `${APP_NAME} nemůže přečíst klíč této sítě, a proto se síť nespustila. Nic nemažte: zkontrolujte, že soubor patří vám, že ho jde číst a že disk funguje, a ${APP_NAME} spusťte znovu. Jde o tento soubor:`,
   },
   keyNotSaved: {
-    lead: `${APP_NAME} nemůže uložit nový klíč tohoto tailnetu, a proto se tailnet nespustil. Zkontrolujte, že do jeho složky jde zapisovat a že je na disku místo, a ${APP_NAME} spusťte znovu. Klíč patří do tohoto souboru:`,
+    lead: `${APP_NAME} nemůže uložit nový klíč této sítě, a proto se síť nespustila. Zkontrolujte, že do jeho složky jde zapisovat a že je na disku místo, a ${APP_NAME} spusťte znovu. Klíč patří do tohoto souboru:`,
   },
   keyUnreadable: {
-    lead: `Úložiště klíčů systému neotevře klíč tohoto tailnetu, a proto se tailnet nespustil. Pokud systém žádal o odemčení úložiště klíčů, povolte ho a ${APP_NAME} spusťte znovu. Když se klíč neotevře ani potom, ukončete ${APP_NAME}, smažte tento soubor a tuto složku a aplikaci spusťte znovu:`,
-    after: "Počítač se pak do tailnetu přihlásí znovu a jako nové zařízení čeká na schválení.",
+    lead: `Úložiště klíčů systému neotevře klíč této sítě, a proto se síť nespustila. Pokud systém žádal o odemčení úložiště klíčů, povolte ho a ${APP_NAME} spusťte znovu. Když se klíč neotevře ani potom, ukončete ${APP_NAME}, smažte tento soubor a tuto složku a aplikaci spusťte znovu:`,
+    after: "Počítač se pak do sítě přihlásí znovu a jako nové zařízení čeká na schválení.",
   },
   stateUnreadable: {
-    lead: `Uložený stav tohoto tailnetu nejde otevřít jeho klíčem, a proto se tailnet nespustil. Ukončete ${APP_NAME}, smažte tento soubor a tuto složku a aplikaci spusťte znovu:`,
-    after: "Počítač se pak do tailnetu přihlásí znovu a jako nové zařízení čeká na schválení.",
+    lead: `Uložený stav této sítě nejde otevřít jeho klíčem, a proto se síť nespustila. Ukončete ${APP_NAME}, smažte tento soubor a tuto složku a aplikaci spusťte znovu:`,
+    after: "Počítač se pak do sítě přihlásí znovu a jako nové zařízení čeká na schválení.",
   },
   waiting: {
     title: "Prostředí se zatím nenačetlo",
     lead: `Toto zařízení nejspíš čeká na schválení v Organizaci, nebo se síť ještě nepřipojila. Jakmile bude Prostředí dostupné, ${APP_NAME} ho načte sama.`,
+    showStatus: "Zobrazit stav aplikace",
   },
   updates: {
     title: "Aktualizace",
@@ -260,43 +296,71 @@ const cs: Text = {
   },
   tray: {
     open: `Otevřít ${APP_NAME}`,
+    status: "Stav aplikace",
     quit: `Ukončit ${APP_NAME}`,
     hiddenNotice: `${APP_NAME} běží dál v oznamovací oblasti. Zapnutý Agent Desktop zůstává připojený. Ukončíte ji přes ikonu v oznamovací oblasti.`,
+  },
+  status: {
+    title: "Stav aplikace",
+    hide: "Skrýt",
+    copy: "Kopírovat stav",
+    copied: "Stav je zkopírovaný. Vložte ho do zprávy.",
+    copyFailed: "Stav se nepodařilo zkopírovat.",
+    details: "Technické podrobnosti",
+  },
+  menu: {
+    edit: "Úpravy",
+    undo: "Zpět",
+    redo: "Znovu",
+    cut: "Vyjmout",
+    copy: "Kopírovat",
+    paste: "Vložit",
+    selectAll: "Vybrat vše",
+    view: "Zobrazit",
+    status: "Stav aplikace",
+    agentDesktop: "Agent Desktop…",
+    reload: "Znovu načíst stránku",
+    help: "Nápověda",
+    about: `O aplikaci ${APP_NAME}`,
+    aboutDetail: "Verze {version}. Stav aplikace ukáže Zobrazit → Stav aplikace (Ctrl+Shift+D).",
+    hide: `Skrýt ${APP_NAME}`,
+    quit: `Ukončit ${APP_NAME}`,
   },
 };
 
 const en: Text = {
   generation: "Generation",
   version: "Version",
-  helpers: "Helper processes",
+  helpers: "Helper programs",
   ready: "Running",
   failed: "Did not start",
-  tailnets: "Tailnets",
-  noTailnets: "No tailnet",
+  tailnets: "Organization networks",
+  noTailnets: "No network",
   starting: "Connecting",
   "needs-login": "Waiting for sign-in",
   running: "Connected",
   stopped: "Stopped",
-  noKeystore: `The system's keystore is not available, so the tailnet did not start. Unlock it (the Keychain on a Mac) and start ${APP_NAME} again.`,
+  noKeystore: `The system's keystore is not available, so the network did not start. Unlock it (the Keychain on a Mac) and start ${APP_NAME} again.`,
   keyInaccessible: {
-    lead: `${APP_NAME} cannot read the key of this tailnet, so the tailnet did not start. Delete nothing: check that the file is yours, that it can be read and that the disk works, then start ${APP_NAME} again. This is the file:`,
+    lead: `${APP_NAME} cannot read the key of this network, so the network did not start. Delete nothing: check that the file is yours, that it can be read and that the disk works, then start ${APP_NAME} again. This is the file:`,
   },
   keyNotSaved: {
-    lead: `${APP_NAME} cannot save a new key for this tailnet, so the tailnet did not start. Check that its folder can be written and that the disk has space, then start ${APP_NAME} again. The key belongs in this file:`,
+    lead: `${APP_NAME} cannot save a new key for this network, so the network did not start. Check that its folder can be written and that the disk has space, then start ${APP_NAME} again. The key belongs in this file:`,
   },
   keyUnreadable: {
-    lead: `The system's keystore does not open the key of this tailnet, so the tailnet did not start. If the system asked to unlock its keystore, allow it and start ${APP_NAME} again. If the key still does not open, quit ${APP_NAME}, delete this file and this folder, and start the app again:`,
+    lead: `The system's keystore does not open the key of this network, so the network did not start. If the system asked to unlock its keystore, allow it and start ${APP_NAME} again. If the key still does not open, quit ${APP_NAME}, delete this file and this folder, and start the app again:`,
     after:
-      "The computer then signs in to the tailnet again and waits for approval as a new device.",
+      "The computer then signs in to the network again and waits for approval as a new device.",
   },
   stateUnreadable: {
-    lead: `The saved state of this tailnet does not open with its key, so the tailnet did not start. Quit ${APP_NAME}, delete this file and this folder, and start the app again:`,
+    lead: `The saved state of this network does not open with its key, so the network did not start. Quit ${APP_NAME}, delete this file and this folder, and start the app again:`,
     after:
-      "The computer then signs in to the tailnet again and waits for approval as a new device.",
+      "The computer then signs in to the network again and waits for approval as a new device.",
   },
   waiting: {
     title: "The Environment has not loaded yet",
     lead: `This device most likely waits for its approval in the Organization, or the network has not connected yet. ${APP_NAME} loads the Environment by itself once it can be reached.`,
+    showStatus: "Show the app's status",
   },
   updates: {
     title: "Updates",
@@ -390,8 +454,35 @@ const en: Text = {
   },
   tray: {
     open: `Open ${APP_NAME}`,
+    status: "App status",
     quit: `Quit ${APP_NAME}`,
     hiddenNotice: `${APP_NAME} keeps running in the notification area. An Agent Desktop that is on stays connected. Quit it from its icon in the notification area.`,
+  },
+  status: {
+    title: "App status",
+    hide: "Hide",
+    copy: "Copy status",
+    copied: "The status is copied. Paste it into a message.",
+    copyFailed: "The status could not be copied.",
+    details: "Technical details",
+  },
+  menu: {
+    edit: "Edit",
+    undo: "Undo",
+    redo: "Redo",
+    cut: "Cut",
+    copy: "Copy",
+    paste: "Paste",
+    selectAll: "Select all",
+    view: "View",
+    status: "App status",
+    agentDesktop: "Agent Desktop…",
+    reload: "Reload page",
+    help: "Help",
+    about: `About ${APP_NAME}`,
+    aboutDetail: "Version {version}. View → App status (Ctrl+Shift+D) shows the app's status.",
+    hide: `Hide ${APP_NAME}`,
+    quit: `Quit ${APP_NAME}`,
   },
 };
 

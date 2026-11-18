@@ -51,7 +51,11 @@ beforeAll(async () => {
 
   userData = temporaryUserData();
   app = await _electron.launch({
-    args: [NodePath.resolve(import.meta.dirname, ".."), "--ignore-certificate-errors"],
+    args: [
+      NodePath.resolve(import.meta.dirname, ".."),
+      "--show-status",
+      "--ignore-certificate-errors",
+    ],
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
     env: {
       ...process.env,

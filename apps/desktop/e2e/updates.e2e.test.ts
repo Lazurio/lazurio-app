@@ -19,7 +19,7 @@ let shell: Page;
 beforeAll(async () => {
   userData = temporaryUserData();
   app = await _electron.launch({
-    args: [NodePath.resolve(import.meta.dirname, "..")],
+    args: [NodePath.resolve(import.meta.dirname, ".."), "--show-status"],
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
     env: { ...process.env, LAZURIO_APP_E2E: "true", LAZURIO_APP_E2E_USER_DATA: userData },
   });

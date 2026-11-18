@@ -45,8 +45,12 @@ const launch = async (userData: string, args: ReadonlyArray<string> = []): Promi
   child.stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
   const shell = await app.firstWindow();
   await shell.locator('main[data-status="live"]').waitFor();
-  await shell.locator('[data-helper="lazurio-tailnet"][data-state="ready"]').waitFor();
-  await shell.locator('[data-helper="lazurio-device"][data-state="ready"]').waitFor();
+  await shell
+    .locator('[data-helper="lazurio-tailnet"][data-state="ready"]')
+    .waitFor({ state: "attached" });
+  await shell
+    .locator('[data-helper="lazurio-device"][data-state="ready"]')
+    .waitFor({ state: "attached" });
   return { app, child, shell, output };
 };
 
@@ -102,7 +106,7 @@ const openWindow = (launched: Launched, hasTray: boolean) =>
 // Quits as the person does: the tray's Quit, or Cmd+Q on a Mac (app.quit).
 const quitApp = (launched: Launched, hasTray: boolean) =>
   hasTray
-    ? clickTray(launched, 1)
+    ? clickTray(launched, 2)
     : launched.app.evaluate(({ app }) => {
         app.quit();
       });

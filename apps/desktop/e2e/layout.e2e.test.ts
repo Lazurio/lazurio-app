@@ -32,7 +32,7 @@ beforeAll(async () => {
   if (address === null || typeof address === "string") throw new Error("no server address");
   userData = temporaryUserData();
   app = await _electron.launch({
-    args: [NodePath.resolve(import.meta.dirname, "..")],
+    args: [NodePath.resolve(import.meta.dirname, ".."), "--show-status"],
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
     env: {
       ...process.env,
@@ -43,6 +43,8 @@ beforeAll(async () => {
   });
   shell = await app.firstWindow();
   await shell.locator('main[data-status="live"]').waitFor();
+  // The helper programs are folded under the technical details; this test measures their rows.
+  await shell.locator("[data-details] summary").click();
 });
 
 afterAll(async () => {
@@ -72,7 +74,7 @@ describe("Lazurio App GEN4 with a remote page", () => {
     assert.strictEqual(view.x + view.width, width);
     assert.strictEqual(view.height, height);
     for (const selector of [
-      'section[aria-label="Tailnety"], section[aria-label="Tailnets"]',
+      'section[aria-label="Síť Organizace"], section[aria-label="Organization networks"]',
       "section[data-updates-phase]",
       'input[name="update-channel"][value="nightly"]',
     ]) {
@@ -240,9 +242,9 @@ describe("Lazurio App GEN4 with a remote page", () => {
       title: 1,
       titleText: APP_NAME,
       names: [
+        ["lazurioexampleorganization", 1],
         ["lazurio-tailnet", 1],
         ["lazurio-device", 1],
-        ["lazurioexampleorganization", 1],
       ],
       colors: { stateIsOk: true, versionIsOk: false },
     });

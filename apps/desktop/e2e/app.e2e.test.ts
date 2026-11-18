@@ -39,7 +39,7 @@ beforeAll(async () => {
 
   userData = temporaryUserData();
   app = await _electron.launch({
-    args: [NodePath.resolve(import.meta.dirname, "..")],
+    args: [NodePath.resolve(import.meta.dirname, ".."), "--show-status"],
     // Playwright adds --no-sandbox on Linux unless told otherwise. CI configures the SUID sandbox
     // and sets LAZURIO_APP_E2E_OS_SANDBOX, so the operating system's sandbox is on there too.
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
@@ -104,8 +104,12 @@ const inRemotePage = (script: string): Promise<unknown> =>
 describe("Lazurio App GEN4", () => {
   it("shows its local window with both helpers past their handshake", async () => {
     assert.match(shell.url(), /^lazurio-app:\/\/shell\//u);
-    await shell.locator('[data-helper="lazurio-tailnet"][data-state="ready"]').waitFor();
-    await shell.locator('[data-helper="lazurio-device"][data-state="ready"]').waitFor();
+    await shell
+      .locator('[data-helper="lazurio-tailnet"][data-state="ready"]')
+      .waitFor({ state: "attached" });
+    await shell
+      .locator('[data-helper="lazurio-device"][data-state="ready"]')
+      .waitFor({ state: "attached" });
   });
 
   it("gives its local window the bridge and nothing of Node", async () => {

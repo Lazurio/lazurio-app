@@ -10,6 +10,7 @@ import {
   APP_USER_MODEL_ID,
   beforeQuitStep,
   secondStart,
+  showsStatus,
   closeStep,
   keepsRunningInTray,
   loginItem,
@@ -56,6 +57,9 @@ describe("Lifecycle", () => {
     assert.strictEqual(secondStart(["Lazurio App.exe", "--quit"]), "quit");
     assert.strictEqual(secondStart(["Lazurio App.exe"]), "show");
     assert.strictEqual(secondStart(["Lazurio App.exe", "--hidden"]), "show");
+    assert.strictEqual(secondStart(["Lazurio App.exe", "--show-status"]), "show-status");
+    assert.isTrue(showsStatus(["Lazurio App.exe", "--show-status"]));
+    assert.isFalse(showsStatus(["Lazurio App.exe"]));
   });
 
   it("starts at the sign-in to Windows only from a packaged app on Windows", () => {
@@ -89,22 +93,23 @@ describe("Lifecycle", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it("offers Open and Quit in the tray's menu, in either language", () => {
+  it("offers Open, the app's status and Quit in the tray's menu, in either language", () => {
     const calls: Array<string> = [];
     const actions = {
       show: () => calls.push("show"),
+      showStatus: () => calls.push("status"),
       quit: () => calls.push("quit"),
     };
     const cs = trayMenu(messages.cs.tray, actions);
     assert.deepStrictEqual(
       cs.map((item) => item.label),
-      ["Otevřít Lazurio App (Alpha)", "Ukončit Lazurio App (Alpha)"],
+      ["Otevřít Lazurio App (Alpha)", "Stav aplikace", "Ukončit Lazurio App (Alpha)"],
     );
     for (const item of cs) item.click();
-    assert.deepStrictEqual(calls, ["show", "quit"]);
+    assert.deepStrictEqual(calls, ["show", "status", "quit"]);
     assert.deepStrictEqual(
       trayMenu(messages.en.tray, actions).map((item) => item.label),
-      ["Open Lazurio App (Alpha)", "Quit Lazurio App (Alpha)"],
+      ["Open Lazurio App (Alpha)", "App status", "Quit Lazurio App (Alpha)"],
     );
   });
 

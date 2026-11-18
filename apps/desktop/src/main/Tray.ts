@@ -13,6 +13,7 @@ import { trayMenu } from "./Lifecycle.ts";
 export interface TrayOptions {
   readonly text: TrayText;
   readonly show: () => void;
+  readonly showStatus: () => void;
   readonly quit: () => void;
 }
 

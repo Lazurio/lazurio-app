@@ -173,6 +173,8 @@ const launch = async (fakeHelperSettings: Record<string, string> = {}) => {
   app = await _electron.launch({
     args: [
       NodePath.resolve(import.meta.dirname, ".."),
+      // The status column, hidden by default, is what this test reads.
+      "--show-status",
       `--host-resolver-rules=${rules.join(", ")}`,
       "--ignore-certificate-errors",
     ],
