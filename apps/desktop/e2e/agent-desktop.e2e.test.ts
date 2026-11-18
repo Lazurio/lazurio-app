@@ -417,6 +417,15 @@ describe("Agent Desktop's switch", () => {
     });
     assert.isTrue(shownAfterClose);
     assert.isTrue(await columnShown());
+    // Hidden or minimized by the system while the agent works, it shows again.
+    const afterHideAndMinimize = await app.evaluate(({ BaseWindow }) => {
+      const window = BaseWindow.getAllWindows()[0];
+      window?.hide();
+      const afterHide = window?.isVisible() === true;
+      window?.minimize();
+      return { afterHide, afterMinimize: window?.isMinimized() === false && window.isVisible() };
+    });
+    assert.deepStrictEqual(afterHideAndMinimize, { afterHide: true, afterMinimize: true });
     // Once the work ends, Hide works again.
     await environmentRow().locator('[data-action="device-switch"]').click();
     await inPhase("off");

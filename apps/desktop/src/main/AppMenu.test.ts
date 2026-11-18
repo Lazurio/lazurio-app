@@ -43,6 +43,11 @@ describe("AppMenu.menuTemplate", () => {
       actions: actions([]),
     });
     assert.deepStrictEqual(labels(menu), ["Lazurio App (Alpha)", "Edit", "View"]);
+    // No Hide on a Mac: the window never hides while an agent works.
+    assert.notInclude(
+      menu.flatMap((item) => item.submenu ?? []).map((item) => item.role),
+      "hide",
+    );
     assert.isTrue(menu[2]?.submenu?.[0]?.checked);
   });
 });

@@ -65,7 +65,6 @@ export interface MenuText {
   readonly help: string;
   readonly about: string;
   readonly aboutDetail: string;
-  readonly hide: string;
   readonly quit: string;
 }
 
@@ -326,7 +325,6 @@ const cs: Text = {
     help: "Nápověda",
     about: `O aplikaci ${APP_NAME}`,
     aboutDetail: "Verze {version}. Stav aplikace ukáže Zobrazit → Stav aplikace (Ctrl+Shift+D).",
-    hide: `Skrýt ${APP_NAME}`,
     quit: `Ukončit ${APP_NAME}`,
   },
 };
@@ -485,7 +483,6 @@ const en: Text = {
     help: "Help",
     about: `About ${APP_NAME}`,
     aboutDetail: "Version {version}. View → App status (Ctrl+Shift+D) shows the app's status.",
-    hide: `Hide ${APP_NAME}`,
     quit: `Quit ${APP_NAME}`,
   },
 };

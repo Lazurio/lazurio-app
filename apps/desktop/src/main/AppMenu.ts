@@ -14,16 +14,7 @@ export interface AppMenuActions {
 // Electron.MenuItemConstructorOptions, kept free of Electron so tests can read it.
 export interface MenuItem {
   readonly label?: string;
-  readonly role?:
-    | "undo"
-    | "redo"
-    | "cut"
-    | "copy"
-    | "paste"
-    | "selectAll"
-    | "quit"
-    | "hide"
-    | "about";
+  readonly role?: "undo" | "redo" | "cut" | "copy" | "paste" | "selectAll" | "quit" | "about";
   readonly type?: "separator" | "checkbox";
   readonly checked?: boolean;
   readonly accelerator?: string;
@@ -52,7 +43,7 @@ export const menuTemplate = (options: {
             submenu: [
               { label: text.about, click: actions.about },
               separator,
-              { role: "hide" as const, label: text.hide },
+              // No Hide: the window never hides while an agent works (docs/adr/0006).
               { role: "quit" as const, label: text.quit },
             ],
           },

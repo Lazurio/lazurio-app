@@ -371,6 +371,14 @@ const program = Effect.gen(function* () {
   let refreshMenu = () => {};
   // Set once Agent Desktop's controls exist; until then no agent can work.
   let agentWorksNow = () => false;
+  // While an agent works, a window that was minimized or hidden (the system's Hide, a minimize)
+  // shows again, so the work and its Stop stay in view for the whole hold (docs/adr/0006).
+  const keepWindowInView = () => {
+    if (quitting || !agentWorksNow() || Option.isNone(mainWindow)) return;
+    if (mainWindow.value.isDestroyed()) return;
+    const window = mainWindow.value;
+    if (window.isMinimized() || !window.isVisible()) showWindow();
+  };
   const setStatusShown = (requested: boolean) => {
     const shown = Lifecycle.statusShownAfter(requested, agentWorksNow());
     statusShown = shown;
@@ -726,6 +734,7 @@ const program = Effect.gen(function* () {
   const showWhileAgentWorks = () => {
     const works = agentWorksNow();
     if (works && !agentWorked) setStatusShown(true);
+    else if (works) keepWindowInView();
     agentWorked = works;
   };
   yield* Effect.acquireRelease(
@@ -751,6 +760,8 @@ const program = Effect.gen(function* () {
       },
       created: (window) => {
         mainWindow = Option.some(window);
+        window.on("minimize", keepWindowInView);
+        window.on("hide", keepWindowInView);
       },
       showOnLoad: () => showWanted,
       closeStep: () => Lifecycle.closeStep(quitting, agentWorksNow()),
