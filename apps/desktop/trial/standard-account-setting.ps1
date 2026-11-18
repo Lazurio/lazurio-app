@@ -59,7 +59,9 @@ try {
   Write-Host "The standard account's own HKCU holds the setting, and the helper reads it."
 
   # The runner's own account, an administrator, got nothing: the value is the standard account's.
-  & "$env:SystemRoot\System32\reg.exe" query 'HKCU\Software\Lazurio' 2>$null | Out-Null
+  # Through cmd.exe: Windows PowerShell turns a native command's error output into a terminating
+  # error under 'Stop', and reg.exe answers a missing key on its error output.
+  & "$env:SystemRoot\System32\cmd.exe" /d /c "reg.exe query HKCU\Software\Lazurio >nul 2>&1"
   if ($LASTEXITCODE -eq 0) { throw "the runner's own HKCU has a Lazurio key" }
   Write-Host 'The runner account has no such value.'
 }
