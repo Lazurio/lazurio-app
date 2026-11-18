@@ -1,9 +1,9 @@
 # The update test from build N to N+1 on Windows (docs/adr/0005, point 9). It installs N for the
 # current user, leaves a marker in the app's data folder, starts N, waits for N's log line that the
-# update is ready, quits N as the tray's Quit does (a second start with --quit), waits until N+1 is the installed
-# app and has opened the key N sealed with DPAPI (KeystoreCheck.ts). The marker must survive. It
-# then uninstalls the app, which removes the updater's cache and keeps the data folder. It stops
-# only the processes it started, by their PIDs.
+# update is ready, quits N as the tray's Quit does (a second start with --quit), waits until N+1
+# is the installed app and has opened the key N sealed with DPAPI (KeystoreCheck.ts). The marker
+# must survive. It then uninstalls the app, which removes the updater's cache and keeps the data
+# folder. It stops only the processes it started, by their PIDs.
 param(
   [Parameter(Mandatory)] [string]$InstallerN,
   [Parameter(Mandatory)] [string]$Feed,
