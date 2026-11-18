@@ -64,7 +64,10 @@ export type UpdateState =
   | { readonly phase: "installing"; readonly version: string }
   // The installer started and the app quits for it.
   | { readonly phase: "restarting"; readonly version: string }
-  | { readonly phase: "failed"; readonly problem: string };
+  | { readonly phase: "failed"; readonly problem: string }
+  // The chosen channel has no release to update to yet (electron-updater's
+  // ERR_UPDATER_LATEST_VERSION_NOT_FOUND or ERR_UPDATER_NO_PUBLISHED_VERSIONS): nothing failed.
+  | { readonly phase: "no-release" };
 
 export interface UpdatesStatus {
   readonly channel: UpdateChannelName;

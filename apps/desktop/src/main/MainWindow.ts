@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
+import { APP_NAME } from "../shared/appName.ts";
 import { STATUS_CHANNEL, type AppStatus } from "../shared/bridge.ts";
 import { hardenSession, registerView } from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
@@ -29,6 +30,9 @@ export interface MainWindowOptions {
   // Learns each page the remote view's main frame shows (Agent Desktop offers to add its
   // Environment).
   readonly pageShown: (url: string) => void;
+  // Whether a tailnet serves the address (Tailnet.Tailnets.proxyFor): only such a page waits for
+  // its Environment to become reachable, for example for the Organization to approve the Device.
+  readonly servedByTailnet: (address: string) => boolean;
 }
 
 // The first remote page loads again after these failures, which a network that changed or a
@@ -126,6 +130,53 @@ const loadRemote = Effect.fn("MainWindow.loadRemote")(function* (
   });
 });
 
+// Chromium's errors for a tailnet's page its node cannot reach yet (the Device waits for approval,
+// or the network is not up): NETWORK_CHANGED, CONNECTION_REFUSED, NAME_NOT_RESOLVED,
+// ADDRESS_UNREACHABLE, TUNNEL_CONNECTION_FAILED, CONNECTION_TIMED_OUT, PROXY_CONNECTION_FAILED.
+const UNREACHABLE: ReadonlySet<number> = new Set([-21, -102, -105, -109, -111, -118, -130]);
+// How often a waiting page tries its address again.
+const RETRY_EVERY = "5 seconds";
+
+// While a tailnet's page cannot be reached, the waiting view takes the remote view's place instead
+// of a blank page and the address loads again every few seconds, until it shows (plan task 648).
+const waitForReachable = Effect.fn("MainWindow.waitForReachable")(function* (
+  remote: Electron.WebContentsView,
+  waiting: Electron.WebContentsView,
+  servedByTailnet: (address: string) => boolean,
+) {
+  let pending: string | undefined;
+  const showWaiting = (shown: boolean) => {
+    waiting.setVisible(shown);
+    remote.setVisible(!shown);
+  };
+  remote.webContents.on("did-fail-load", (_event, code, _description, address, isMainFrame) => {
+    if (!isMainFrame || !UNREACHABLE.has(code) || !servedByTailnet(address)) return;
+    pending = address;
+    showWaiting(true);
+  });
+  remote.webContents.on("did-navigate", (_event, _address, responseCode) => {
+    if (pending === undefined || responseCode <= 0) return;
+    pending = undefined;
+    showWaiting(false);
+  });
+  // One attempt at a time: the next waits until the previous load has finished or failed, so a
+  // reachable Environment that answers slowly is not cancelled by the next attempt.
+  yield* Effect.sleep(RETRY_EVERY).pipe(
+    Effect.andThen(
+      Effect.suspend(() => {
+        const address = pending;
+        if (address === undefined || remote.webContents.isDestroyed()) return Effect.void;
+        return Effect.tryPromise({
+          try: () => remote.webContents.loadURL(address),
+          catch: (failure) => new RemoteLoadError({ code: codeOf(failure) }),
+        }).pipe(Effect.ignore);
+      }),
+    ),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+});
+
 export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowOptions) {
   yield* serveStatus(options.status);
   const window = yield* Effect.acquireRelease(
@@ -135,7 +186,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
           width: 1280,
           height: 800,
           show: false,
-          title: "Lazurio App",
+          title: APP_NAME,
           backgroundColor: WINDOW_BACKGROUND,
         }),
     ),
@@ -150,12 +201,19 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   window.contentView.addChildView(local);
 
   let remote: Electron.WebContentsView | undefined;
+  let waiting: Electron.WebContentsView | undefined;
   if (Option.isSome(options.remoteUrl)) {
     remote = yield* acquireView(viewOptions({ partition: REMOTE_PARTITION }));
     registerView(remote.webContents, "Lazurio");
     remote.webContents.on("did-navigate", (_event, url) => options.pageShown(url));
     yield* hardenSession(remote.webContents.session);
     window.contentView.addChildView(remote);
+    // The app's own page in the remote view's place while a tailnet's page cannot be reached.
+    waiting = yield* acquireView(viewOptions({}));
+    waiting.setBackgroundColor(WINDOW_BACKGROUND);
+    registerView(waiting.webContents, "Local");
+    waiting.setVisible(false);
+    window.contentView.addChildView(waiting);
   }
   // The column and the page side by side; without a page the local view takes the window.
   const layout = () => {
@@ -163,19 +221,28 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     const { width, height } = window.contentView.getBounds();
     const column = remote === undefined ? width : Math.min(LOCAL_COLUMN_WIDTH, width);
     local.setBounds({ x: 0, y: 0, width: column, height });
-    remote?.setBounds({ x: column, y: 0, width: Math.max(0, width - column), height });
+    const page = { x: column, y: 0, width: Math.max(0, width - column), height };
+    remote?.setBounds(page);
+    waiting?.setBounds(page);
   };
   layout();
   // The content view changes size with the window and, on Linux, when the menu bar appears.
   window.contentView.on("bounds-changed", layout);
   // A BaseWindow does not close its views' pages; they close with the scope that ends here.
+  if (remote !== undefined && waiting !== undefined) {
+    yield* waitForReachable(remote, waiting, options.servedByTailnet);
+  }
   window.on("closed", () => {
-    for (const view of [local, remote]) {
+    for (const view of [local, remote, waiting]) {
       if (view !== undefined && !view.webContents.isDestroyed()) view.webContents.close();
     }
   });
 
   yield* Effect.promise(() => local.webContents.loadURL(LOCAL_ENTRY));
+  if (waiting !== undefined) {
+    const view = waiting;
+    yield* Effect.promise(() => view.webContents.loadURL(`${LOCAL_ENTRY}#waiting`));
+  }
   window.show();
   if (remote !== undefined && Option.isSome(options.remoteUrl)) {
     yield* loadRemote(window, remote, options.remoteUrl.value, options.whenReachable);

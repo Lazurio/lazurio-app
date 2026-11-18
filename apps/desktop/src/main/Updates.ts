@@ -65,6 +65,9 @@ export interface UpdatesOptions {
   readonly stopHelpers: Effect.Effect<void>;
   // After a failed install, brings the stopped helpers back.
   readonly restartHelpers: Effect.Effect<void>;
+  // Whether a channel has a release, asked after a failed check: Some(false) only when its feed
+  // confirms none (ReleaseFeed.channelHasRelease), none when that is not known.
+  readonly channelHasRelease?: (channel: UpdateChannel) => Effect.Effect<Option.Option<boolean>>;
 }
 
 export interface Updates {
@@ -102,6 +105,13 @@ const decodeVersion = Schema.decodeUnknownOption(Schema.Struct({ version: Schema
 
 const describe = (value: unknown): string =>
   value instanceof Error ? value.message : "electron-updater reported an error";
+
+// The state a failed check or an updater error leaves: no release when the channel's feed
+// confirms it has none (ReleaseFeed), a failure otherwise, network and feed failures among them.
+export const failureState = (hasRelease: Option.Option<boolean>, problem: string): UpdateState =>
+  Option.isSome(hasRelease) && !hasRelease.value
+    ? { phase: "no-release" }
+    : { phase: "failed", problem };
 
 // Holds the computer for the install: asks the Device's activity until it answers `true`, waiting
 // for it to become idle in between.
@@ -157,11 +167,26 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
     yield* updater.setFullChangelog(channel === "nightly");
   });
 
+  // A failed check: no release when the channel's feed confirms it has none, a failure otherwise.
+  // The failure shows at once; the feed's answer turns it into no release only while that same
+  // failure is still the status: a newer state or another channel since then discards the answer.
+  const failed = (problem: string) =>
+    Effect.suspend(() => {
+      const failure: UpdatesStatus = { ...latest, state: { phase: "failed", problem } };
+      return setStatus(failure).pipe(
+        Effect.andThen(options.channelHasRelease?.(failure.channel) ?? Effect.succeedNone),
+        Effect.flatMap((hasRelease) =>
+          latest === failure ? setState(failureState(hasRelease, problem)) : Effect.void,
+        ),
+      );
+    });
+
   const check = Effect.suspend(() => {
-    if (latest.state.phase !== "idle" && latest.state.phase !== "failed") return Effect.void;
+    const phase = latest.state.phase;
+    if (phase !== "idle" && phase !== "failed" && phase !== "no-release") return Effect.void;
     return setState({ phase: "checking" }).pipe(
       Effect.andThen(updater.checkForUpdates),
-      Effect.catch((error) => setState({ phase: "failed", problem: error.message })),
+      Effect.catch((error) => failed(error.message)),
     );
   }).pipe(Effect.withSpan("Updates.check"));
 
@@ -294,9 +319,7 @@ export const make = Effect.fn("Updates.make")(function* (options: UpdatesOptions
     yield* updater.on("update-available", (info) => run(onAvailable(info)));
     yield* updater.on("update-not-available", () => run(setState({ phase: "idle" })));
     yield* updater.on("update-downloaded", (info) => run(onDownloaded(info)));
-    yield* updater.on("error", (error) =>
-      run(setState({ phase: "failed", problem: describe(error) })),
-    );
+    yield* updater.on("error", (error) => run(failed(describe(error))));
     yield* Effect.sleep(FIRST_CHECK).pipe(
       Effect.andThen(check.pipe(Effect.repeat(Schedule.spaced(CHECK_EVERY)))),
       Effect.forkScoped,
