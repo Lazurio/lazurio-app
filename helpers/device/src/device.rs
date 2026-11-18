@@ -1333,7 +1333,7 @@ mod tests {
         let (a, _b) = (orders.remove(0), orders.remove(0));
         let engines = FakeEngines::start();
         let utility = FakeUtility::absent();
-        // The interval is short here; the guard's own is 15 s.
+        // The interval is short here; the guard's own is 10 s.
         let every = Duration::from_millis(20);
         let (mut device, states, lock_states, directory) = guarded_device(
             &environment,
@@ -1458,7 +1458,7 @@ mod tests {
             }
         });
         let utility = FakeUtility::absent();
-        // The interval and the limit are short here; the guard's own are 15 s and 5 s.
+        // The interval and the limit are short here; the guard's own are 10 s and 5 s.
         let (mut device, states, _locks, _) = guarded_device(
             &environment,
             &utility,
@@ -1505,5 +1505,74 @@ mod tests {
 
         utility.release();
         assert!(device.shutdown(Instant::now() + PATIENCE));
+    }
+
+    /// The utility is paired right after a periodic check read the keychain, the worst moment:
+    /// the channel closes within the window, counted from the pairing, whether the next check
+    /// answers `Paired` or hangs until its limit. The times are the guard's shortened 25 times
+    /// (window 600 ms, period 400 ms, limit 200 ms), and each check takes 180 ms, so a period
+    /// counted from the end of a check would overshoot the window.
+    #[test]
+    fn a_utility_paired_while_a_channel_is_open_closes_it_within_the_window() {
+        use crate::lazurio::app::device::v1::Connected;
+        use crate::testkit::{FakeEnvironment, FakeUtility, PATIENCE, Session};
+
+        const WINDOW: Duration = Duration::from_millis(600);
+        const EVERY: Duration = Duration::from_millis(400);
+        const LIMIT: Duration = Duration::from_millis(200);
+        // Waking the guard's thread and closing the channel; far below what a period counted
+        // from the end of a check adds (180 ms).
+        const TOLERANCE: Duration = Duration::from_millis(120);
+        const _: () = assert!(EVERY.as_millis() + LIMIT.as_millis() <= WINDOW.as_millis());
+
+        for hangs in [false, true] {
+            let environment = FakeEnvironment::start(|session: &mut Session| {
+                if session.ready() {
+                    session.until_closed();
+                }
+            });
+            let utility = FakeUtility::absent();
+            utility.take(Duration::from_millis(180));
+            let (mut device, states, _locks, _) =
+                guarded_device(&environment, &utility, EVERY, LIMIT, None);
+            start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+            assert_eq!(
+                state_of(&states),
+                (
+                    "env-a".to_owned(),
+                    channel_state::State::Connected(Connected {})
+                )
+            );
+
+            // The first periodic check has read "absent" and still works on: now the utility
+            // is paired.
+            let asked = utility.asked();
+            utility.wait_asked_more_than(asked);
+            utility.set(guard::Pairing::Paired);
+            if hangs {
+                utility.hang();
+            }
+            let paired = Instant::now();
+
+            let (id, state) = state_of(&states);
+            let took = paired.elapsed();
+            assert_eq!(id, "env-a");
+            assert_eq!(
+                state,
+                refused(if hangs {
+                    guard::CHECK_FAILED
+                } else {
+                    guard::PAIRED
+                }),
+                "hangs: {hangs}"
+            );
+            assert!(
+                took <= WINDOW + TOLERANCE,
+                "hangs: {hangs}: the channel closed {took:?} after the pairing, past the window \
+                 of {WINDOW:?}"
+            );
+            utility.release();
+            assert!(device.shutdown(Instant::now() + PATIENCE));
+        }
     }
 }

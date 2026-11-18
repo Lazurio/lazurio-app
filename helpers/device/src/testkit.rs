@@ -888,6 +888,8 @@ pub struct FakeUtility {
     changed: std::sync::Condvar,
     hanging: Mutex<bool>,
     released: std::sync::Condvar,
+    /// How long each check takes after it read its answer, as a slow `cmdkey` does.
+    takes: Mutex<Duration>,
 }
 
 impl FakeUtility {
@@ -900,6 +902,11 @@ impl FakeUtility {
     /// From now on, the check answers `pairing`.
     pub fn set(&self, pairing: Pairing) {
         *self.answer.lock().unwrap_or_else(PoisonError::into_inner) = Some(pairing);
+    }
+
+    /// From now on, each check takes `takes` after it read its answer.
+    pub fn take(&self, takes: Duration) {
+        *self.takes.lock().unwrap_or_else(PoisonError::into_inner) = takes;
     }
 
     /// From now on, a check waits until [`FakeUtility::release`] before it answers.
@@ -938,6 +945,11 @@ impl UtilityCheck for FakeUtility {
             .unwrap_or(Pairing::Absent);
         *self.asked.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         self.changed.notify_all();
+        let takes = *self.takes.lock().unwrap_or_else(PoisonError::into_inner);
+        if !takes.is_zero() {
+            // A stand-in for a check's own work, not a wait for an event.
+            thread::sleep(takes);
+        }
         let hanging = self.hanging.lock().unwrap_or_else(PoisonError::into_inner);
         let _released = self
             .released

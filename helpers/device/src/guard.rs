@@ -18,13 +18,14 @@
 //! The check fails closed: when it cannot tell (an error, a locked keychain, no answer within 5 s),
 //! no channel opens and every open channel closes, as when an entry is found. Every check runs on a
 //! thread of its own and counts as failed after 5 s ([`CHECK_TIMEOUT`]): on macOS 26 a search in a
-//! locked keychain can show the prompt to unlock it although the keychain's user interface is
-//! off, and the search then waits for the person. While such a search still waits, no new one
-//! starts, so prompts never pile up, and every check fails at once. It runs
-//! before each channel opens and every 15 s while a channel is open ([`Guard`]). When it finds the
-//! utility, the agent is stopped the way Stop stops it (its engine's process tree ends, and the
-//! computer is free only after that), and every channel closes with the reason the main process
-//! shows.
+//! locked keychain can show the prompt to unlock it although the keychain's user interface is off,
+//! and the search then waits for the person. While such a search still waits, no new one starts, so
+//! prompts never pile up, and every check fails at once. It runs before each channel opens and,
+//! while a channel is open, every 10 s counted from the start of the one before ([`Guard`]), so a
+//! utility paired while a channel is open works alongside it for at most 15 s ([`WINDOW`]), the
+//! time of the check that finds it included. When it finds the utility, the agent is stopped the
+//! way Stop stops it (its engine's process tree ends, and the computer is free only after that),
+//! and every channel closes with the reason the main process shows.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -42,14 +43,25 @@ pub const SERVICE: &str = "io.lazurio.agent-desktop";
 /// `env:<id>.io.lazurio.agent-desktop` (`{user}.{service}`, crate `keyring`).
 pub const WINDOWS_TARGET_SUFFIX: &str = ".io.lazurio.agent-desktop";
 
-/// How often the check runs while a channel is open.
-pub const CHECK_EVERY: Duration = Duration::from_secs(15);
-
-/// How long `cmdkey /list` may take.
-pub const CMDKEY_TIMEOUT: Duration = Duration::from_secs(5);
+/// The longest a utility paired while a channel is open works alongside it: from the start of the
+/// last check that could not see it yet to the answer of the next one, which closes the channels
+/// at once, whether that answer is `Paired` or `Failed` after [`CHECK_TIMEOUT`].
+pub const WINDOW: Duration = Duration::from_secs(15);
 
 /// How long any check may take before it counts as failed.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often a check starts while a channel is open, counted from the start of the check before:
+/// what [`WINDOW`] leaves after [`CHECK_TIMEOUT`].
+pub const CHECK_EVERY: Duration = WINDOW.saturating_sub(CHECK_TIMEOUT);
+
+// A check that starts one period after the last one, and takes its whole time, still answers
+// within the window.
+const _: () = assert!(CHECK_EVERY.as_millis() + CHECK_TIMEOUT.as_millis() <= WINDOW.as_millis());
+const _: () = assert!(!CHECK_EVERY.is_zero());
+
+/// How long `cmdkey /list` may take.
+pub const CMDKEY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The refusal while the utility is paired on the computer.
 pub const PAIRED: &str = "agent_desktop_paired";
@@ -283,9 +295,9 @@ pub trait Watched: Send + Sync {
     fn revoke(&self, reason: &'static str, stop_engine: bool) -> bool;
 }
 
-/// Runs the check before each channel opens and every [`CHECK_EVERY`] while a channel is open, on
-/// one thread for all channels; closes every channel and stops the agent when it finds the utility
-/// or cannot tell.
+/// Runs the check before each channel opens and, while a channel is open, every [`CHECK_EVERY`]
+/// from the start of the check before, on one thread for all channels; closes every channel and
+/// stops the agent when it finds the utility or cannot tell.
 pub struct Guard {
     shared: Arc<Shared>,
 }
@@ -396,7 +408,7 @@ impl Guard {
     /// stopped and every watched channel closed with that reason too.
     #[must_use]
     pub fn check_before_open(&self) -> Option<&'static str> {
-        let reason = bounded_check(&self.shared).refusal()?;
+        let reason = bounded_check(&self.shared).0.refusal()?;
         trip(&self.shared, reason);
         Some(reason)
     }
@@ -404,8 +416,9 @@ impl Guard {
 
 /// Runs the check on a thread of its own and waits for it at most `timeout`; later it is `Failed`.
 /// While the thread of an earlier check still runs, past its time, no new check starts and the
-/// answer is `Failed` at once. The waiting thread never joins a check's thread.
-fn bounded_check(shared: &Shared) -> Pairing {
+/// answer is `Failed` at once. The waiting thread never joins a check's thread. Returns the answer
+/// and when the check started, once it was its turn.
+fn bounded_check(shared: &Shared) -> (Pairing, Instant) {
     use std::sync::atomic::Ordering;
 
     /// Clears the flag when the check returned, or panicked.
@@ -420,9 +433,10 @@ fn bounded_check(shared: &Shared) -> Pairing {
         .checking
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
+    let started = Instant::now();
     if shared.searching.swap(true, Ordering::SeqCst) {
         // An earlier check still waits, for example on a prompt.
-        return Pairing::Failed;
+        return (Pairing::Failed, started);
     }
     let (sender, answer) = std::sync::mpsc::channel();
     let check = Arc::clone(&shared.check);
@@ -437,18 +451,21 @@ fn bounded_check(shared: &Shared) -> Pairing {
         });
     if spawned.is_err() {
         // The closure, and with it `done`, was dropped: the flag is clear again.
-        return Pairing::Failed;
+        return (Pairing::Failed, started);
     }
-    answer
+    let found = answer
         .recv_timeout(shared.timeout)
-        .unwrap_or(Pairing::Failed)
+        .unwrap_or(Pairing::Failed);
+    (found, started)
 }
 
-/// The periodic check: every `every` while some channel is watched; the thread ends when none is.
+/// The periodic check: while some channel is watched, a check starts `every` after the start of the
+/// one before, so the time a check takes never lengthens the period; the thread ends when no
+/// channel is watched. A refusal closes the channels as soon as the check answered.
 fn watch(shared: &Shared) {
     let mut state = shared.lock_state();
+    let mut deadline = Instant::now() + shared.every;
     loop {
-        let deadline = Instant::now() + shared.every;
         loop {
             if state.watched.is_empty() {
                 state.running = false;
@@ -466,9 +483,11 @@ fn watch(shared: &Shared) {
         }
         drop(state);
         // Outside the state's lock: `cmdkey` may take its 5 s.
-        if let Some(reason) = bounded_check(shared).refusal() {
+        let (found, started) = bounded_check(shared);
+        if let Some(reason) = found.refusal() {
             trip(shared, reason);
         }
+        deadline = started + shared.every;
         state = shared.lock_state();
     }
 }
