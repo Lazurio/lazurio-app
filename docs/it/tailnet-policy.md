@@ -50,3 +50,29 @@ Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Lazurio\App' -Name 'Tailnets' -V
 To check it, run `reg query "HKLM\SOFTWARE\Policies\Lazurio\App" /v Tailnets`. Start Lazurio App again afterwards.
 
 The tailnet then shows in the app's column. Lazurio App's log names the source with the line `tailnets { source: 'policy', … }`.
+
+## Without an administrator: the person's own setting
+
+For Lazurio App (Alpha) at a client where nobody can write the policy, the signed-in person can set the same value for themselves. This is a temporary exception, like the policy, and it ends when Lazurio App gets a person's tailnets from their Lazurio account.
+
+|         |                                          |
+| ------- | ---------------------------------------- |
+| Key     | `HKEY_CURRENT_USER\Software\Lazurio\App` |
+| Value   | `Tailnets`                               |
+| Type    | `REG_SZ` (string)                        |
+| Content | the same JSON array as the policy        |
+
+- Lazurio App reads it only when the computer has no policy. A policy, when IT sets one, always wins.
+- Lazurio App checks it exactly like the policy: only control servers and suffixes below `lazurio.io` or `lazurio.ai`. A setting that does not decode joins no tailnet at all.
+- It grants nobody access, like the policy: signing in to the tailnet still needs the person's Lazurio account and the Organization's membership, and reach still needs the Organization's approval of the computer.
+- Any program running with the person's rights can change it. It can point the app only at Lazurio's own control servers, though.
+
+In a PowerShell window of the person (no administrator), with the values Lazurio gives:
+
+```powershell
+$tailnets = '[{"tailnet":"<organization>","controlUrl":"https://headscale.<organization>.lazurio.io","domains":["<organization>.lazurio.io"]}]'
+New-Item -Path 'HKCU:\Software\Lazurio\App' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Lazurio\App' -Name 'Tailnets' -Value $tailnets -Type String
+```
+
+Start Lazurio App again afterwards. Its log then names the source with the line `tailnets { source: 'user-setting', … }`. To remove the setting, run `Remove-ItemProperty -Path 'HKCU:\Software\Lazurio\App' -Name 'Tailnets'`.

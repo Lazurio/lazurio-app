@@ -21,11 +21,20 @@ class PolicyReadError extends Schema.TaggedError<PolicyReadError>()("PolicyReadE
 const EXIT_POLICY = 0;
 const EXIT_NO_POLICY = 3;
 
-// The policy's text on this computer, or none when IT set none.
-export const readWindows = Effect.fn("TailnetPolicy.readWindows")(function* (helperPath: string) {
+// Where the text comes from: IT's machine policy (HKLM), or until the directory at Lazurio Auth
+// serves a person without an administrator, the person's own setting of the same shape (HKCU).
+export type PolicySource = "machine" | "user";
+
+// The policy's text on this computer, or none when IT (or the person) set none.
+export const readWindows = Effect.fn("TailnetPolicy.readWindows")(function* (
+  helperPath: string,
+  source: PolicySource = "machine",
+) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(
-    ChildProcess.make(helperPath, ["read-policy"], { stderr: "ignore" }),
+    ChildProcess.make(helperPath, [source === "machine" ? "read-policy" : "read-user-setting"], {
+      stderr: "ignore",
+    }),
   );
   const [output, exitCode] = yield* Effect.all(
     [

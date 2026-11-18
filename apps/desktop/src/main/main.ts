@@ -144,18 +144,31 @@ const packagedDirectory = Effect.gen(function* () {
     Effect.tapError((error) => Effect.logWarning("cannot read the tailnet policy", error)),
     Effect.orElseSucceed(() => Option.none<string>()),
   );
-  if (Option.isNone(policy)) {
+  // Without IT's policy, the person's own setting of the same shape (HKCU), for Lazurio App (Alpha)
+  // at a client without an administrator until the directory at Lazurio Auth serves them.
+  const userSetting = Option.isSome(policy)
+    ? Option.none<string>()
+    : yield* TailnetPolicy.readWindows(helper, "user").pipe(
+        Effect.tapError((error) => Effect.logWarning("cannot read the tailnet setting", error)),
+        Effect.orElseSucceed(() => Option.none<string>()),
+      );
+  const chosen = Option.isSome(policy)
+    ? Option.some({ source: "policy", text: policy.value })
+    : Option.map(userSetting, (text) => ({ source: "user-setting", text }));
+  if (Option.isNone(chosen)) {
     return {
       source: "built-in",
       directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
     };
   }
-  // A policy that IT set but that does not decode joins nothing, rather than the built-in directory.
-  const directory = yield* TailnetDirectory.fromText(policy.value, NodeOS.hostname()).pipe(
-    Effect.tapError((error) => Effect.logError("the tailnet policy does not decode", error)),
+  // A policy or setting that does not decode joins nothing, rather than the built-in directory.
+  const directory = yield* TailnetDirectory.fromText(chosen.value.text, NodeOS.hostname()).pipe(
+    Effect.tapError((error) =>
+      Effect.logError("the tailnet policy does not decode", { source: chosen.value.source, error }),
+    ),
     Effect.orElseSucceed((): TailnetDirectory.Directory => ({ tailnets: [], refused: [] })),
   );
-  return { source: "policy", directory };
+  return { source: chosen.value.source, directory };
 });
 
 const tailnetsToJoin = Effect.gen(function* () {
