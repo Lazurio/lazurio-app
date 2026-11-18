@@ -228,7 +228,8 @@ describe.runIf(ENABLED)("AuthClient against Keycloak", () => {
         `Keycloak answers to a refresh with scope=${DEVICE_ENTRY_SCOPE}: ${renewed.scope}`,
       );
       // Auth's contract (check 2) expects exactly lazurio-device-entry from the pinned 26.7.3;
-      // 26.6.2, the only image here, answers openid beside it. Reported to Auth: <issue>.
+      // 26.6.2, the only image here, answers openid beside it. Reported to Auth:
+      // https://github.com/HumanAndMachine-ai/Auth/issues/136.
       assert.include(String(renewed.scope).split(" "), DEVICE_ENTRY_SCOPE);
       assert.strictEqual(scoped.scope, renewed.scope);
       assert.strictEqual(scoped.aud, DEVICE_ENTRY_SCOPE);
