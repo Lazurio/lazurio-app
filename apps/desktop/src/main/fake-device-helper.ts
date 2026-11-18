@@ -1,7 +1,7 @@
 // Tests only: lazurio-device. After Shutdown "stop" exits, "linger" never exits, "crash" exits after
 // Ping, "mute" closes its output. "v3": each StartChannel gets Connecting, then the next of
-// LAZURIO_FAKE_DEVICE_OUTCOMES (connected, working, needs-hand-over, refused:<reason>).
-// LAZURIO_FAKE_DEVICE_STOP=silent ignores StopChannel.
+// LAZURIO_FAKE_DEVICE_OUTCOMES. LAZURIO_FAKE_DEVICE_STOP=silent ignores StopChannel, and
+// LAZURIO_FAKE_DEVICE_EXIT_AFTER_READY=true exits after DeviceReady without DeviceStopped.
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import type { ChannelStateSchema } from "@lazurio/app-contracts/device/v1";
 import { decodeFrames, encodeFrame } from "@lazurio/app-contracts/framing";
@@ -61,6 +61,7 @@ const v3 = (requestId: bigint, request: AppKind): boolean => {
   switch (request.case) {
     case "configureDevice":
       answer(requestId, { case: "deviceReady", value: { contractVersion: 3 } });
+      if (process.env["LAZURIO_FAKE_DEVICE_EXIT_AFTER_READY"] === "true") process.exit(1);
       return true;
     case "startChannel": {
       const { environmentId } = request.value;

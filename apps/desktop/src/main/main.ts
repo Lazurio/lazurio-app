@@ -738,6 +738,8 @@ const program = Effect.gen(function* () {
     Effect.sync(() => deviceControls.subscribe(showWhileAgentWorks)),
     (stop) => Effect.sync(stop),
   );
+  // The helper may have been lost, or an agent may work, before this subscription.
+  showWhileAgentWorks();
   const hiddenNotice = yield* Lifecycle.noticeOnce(
     path.join(Electron.app.getPath("userData"), "tray.json"),
     hooks.notice(text.tray.hiddenNotice),
