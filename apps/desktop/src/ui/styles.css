@@ -249,3 +249,57 @@ body {
   line-height: 1.5;
   text-wrap: pretty;
 }
+
+/* The status column's head: the app's name with Hide, what the column is, the version and Copy. */
+.shell__title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shell__title h1 {
+  min-width: 0;
+}
+
+.shell__subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.shell__copy button,
+.waiting button {
+  margin: 4px 0 0;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--surface);
+  font: inherit;
+  cursor: pointer;
+}
+
+.shell__copy p {
+  margin: 6px 0 0;
+}
+
+/* The helper programs and other technical facts, folded unless the person opens them. */
+.shell__details {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.shell__details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.shell__details h3 {
+  margin: 12px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}

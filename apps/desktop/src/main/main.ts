@@ -6,6 +6,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@lazurio/app-shared/HostProcess";
 import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -14,6 +15,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -21,6 +23,7 @@ import * as Electron from "electron";
 
 import { APP_NAME } from "../shared/appName.ts";
 import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
+import { statusText } from "../shared/statusText.ts";
 import { localeOf, messages } from "../ui/messages.ts";
 
 import * as AuthClient from "./AuthClient.ts";
@@ -33,6 +36,7 @@ import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
 import * as KeystoreCheck from "./KeystoreCheck.ts";
 import * as Helpers from "./Helpers.ts";
+import * as AppMenu from "./AppMenu.ts";
 import * as Lifecycle from "./Lifecycle.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
@@ -45,6 +49,7 @@ import * as TailnetPolicy from "./TailnetPolicy.ts";
 import * as Tray from "./Tray.ts";
 import * as Updates from "./Updates.ts";
 import * as UpdatesIpc from "./UpdatesIpc.ts";
+import * as WindowIpc from "./WindowIpc.ts";
 
 // Lazurio App GEN4 (decision 0248): the main process. It serves the app's own windows, guards
 // every web contents, starts the helper processes and opens the main window.
@@ -360,11 +365,35 @@ const program = Effect.gen(function* () {
     window.show();
     window.focus();
   };
+  // The app's status column beside the page: hidden by default (Matěj, 2026-11-18), shown from
+  // the menu, the tray, --show-status, the waiting page or while an agent works.
+  let statusShown = Lifecycle.showsStatus(process.argv);
+  let windowControls = Option.none<MainWindow.MainWindowControls>();
+  let refreshMenu = () => {};
+  // Set once Agent Desktop's controls exist; until then no agent can work.
+  let agentWorksNow = () => false;
+  // While an agent works, a window that was minimized or hidden (the system's Hide, a minimize)
+  // shows again, so the work and its Stop stay in view for the whole hold (docs/adr/0006).
+  const keepWindowInView = () => {
+    if (quitting || !agentWorksNow() || Option.isNone(mainWindow)) return;
+    if (mainWindow.value.isDestroyed()) return;
+    const window = mainWindow.value;
+    if (window.isMinimized() || !window.isVisible()) showWindow();
+  };
+  const setStatusShown = (requested: boolean) => {
+    const shown = Lifecycle.statusShownAfter(requested, agentWorksNow());
+    statusShown = shown;
+    if (shown) showWindow();
+    if (Option.isSome(windowControls)) windowControls.value.relayout();
+    refreshMenu();
+  };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       const secondInstance = (_event: Electron.Event, argv: ReadonlyArray<string>) => {
         hooks.secondInstance();
-        if (Lifecycle.secondStart(argv) === "quit") Electron.app.quit();
+        const step = Lifecycle.secondStart(argv);
+        if (step === "quit") Electron.app.quit();
+        else if (step === "show-status") setStatusShown(true);
         else showWindow();
       };
       Electron.app.on("second-instance", secondInstance);
@@ -645,9 +674,79 @@ const program = Effect.gen(function* () {
   const text = messages[localeOf(Electron.app.getLocale())];
   if (Lifecycle.keepsRunningInTray(platform)) {
     hooks.trayMenu(
-      yield* Tray.serve({ text: text.tray, show: showWindow, quit: () => Electron.app.quit() }),
+      yield* Tray.serve({
+        text: text.tray,
+        show: showWindow,
+        showStatus: () => setStatusShown(true),
+        quit: () => Electron.app.quit(),
+      }),
     );
   }
+  // The window's menu in the app's language instead of Electron's English default (AppMenu.ts).
+  refreshMenu = () => {
+    Electron.Menu.setApplicationMenu(
+      Electron.Menu.buildFromTemplate(
+        AppMenu.menuTemplate({
+          text: text.menu,
+          appName: APP_NAME,
+          platform,
+          statusShown,
+          actions: {
+            toggleStatus: () => setStatusShown(!statusShown),
+            // Agent Desktop lives in the status column until it has a window of its own.
+            openAgentDesktop: () => setStatusShown(true),
+            reloadPage: () => {
+              if (Option.isSome(windowControls)) windowControls.value.reloadPage();
+            },
+            about: () => {
+              void Electron.dialog.showMessageBox({
+                type: "info",
+                title: text.menu.about,
+                message: APP_NAME,
+                detail: text.menu.aboutDetail.replace("{version}", Electron.app.getVersion()),
+              });
+            },
+          },
+        }) as unknown as Array<Electron.MenuItemConstructorOptions>,
+      ),
+    );
+  };
+  refreshMenu();
+  yield* WindowIpc.serve({
+    setStatusShown,
+    statusText: Effect.map(DateTime.now, (now) =>
+      statusText({
+        appName: APP_NAME,
+        platform,
+        status: status(),
+        device: deviceControls.current(),
+        at: DateTime.formatIso(now),
+      }),
+    ),
+  });
+  // While an agent holds the computer, or the helper was lost and nothing confirmed that its work
+  // ended, the status column with Stop or its warning shows by itself and stays in view
+  // (docs/adr/0006), until Agent Desktop has a bar of its own.
+  agentWorksNow = () => deviceControls.current().agent !== null;
+  let agentWorked = false;
+  const showWhileAgentWorks = () => {
+    const works = agentWorksNow();
+    if (works && !agentWorked) setStatusShown(true);
+    else if (works) keepWindowInView();
+    agentWorked = works;
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => deviceControls.subscribe(showWhileAgentWorks)),
+    (stop) => Effect.sync(stop),
+  );
+  // The helper may have been lost, or an agent may work, before this subscription.
+  showWhileAgentWorks();
+  // And every second, as the system does not report every way a window hides (a Mac reports no
+  // programmatic hide), so a window minimized or hidden during the work shows again.
+  yield* Effect.sync(keepWindowInView).pipe(
+    Effect.repeat(Schedule.spaced("1 second")),
+    Effect.forkScoped,
+  );
   const hiddenNotice = yield* Lifecycle.noticeOnce(
     path.join(Electron.app.getPath("userData"), "tray.json"),
     hooks.notice(text.tray.hiddenNotice),
@@ -667,14 +766,20 @@ const program = Effect.gen(function* () {
       },
       created: (window) => {
         mainWindow = Option.some(window);
+        window.on("minimize", keepWindowInView);
+        window.on("hide", keepWindowInView);
       },
       showOnLoad: () => showWanted,
-      closeStep: () => Lifecycle.closeStep(quitting),
+      closeStep: () => Lifecycle.closeStep(quitting, agentWorksNow()),
       hidden: () => {
         showWanted = false;
         if (Lifecycle.keepsRunningInTray(platform)) Effect.runForkWith(services)(hiddenNotice);
       },
       sessionEnds: () => Electron.app.quit(),
+      statusShown: () => statusShown,
+      controls: (controls) => {
+        windowControls = Option.some(controls);
+      },
     }).pipe(Effect.andThen(Effect.never)),
     Deferred.await(quitRequested),
   );

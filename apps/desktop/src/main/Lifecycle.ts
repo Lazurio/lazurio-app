@@ -11,7 +11,10 @@ import type { TrayText } from "../ui/messages.ts";
 // hidden, and the first hidden window says once where the app went.
 
 // Closing the main window hides it; it closes only while the app quits.
-export const closeStep = (quitting: boolean): "hide" | "close" => (quitting ? "close" : "hide");
+// While an agent holds the computer the window stays: hiding it would hide that an agent works and
+// its Stop (docs/adr/0006).
+export const closeStep = (quitting: boolean, agentWorks = false): "hide" | "close" | "keep" =>
+  quitting ? "close" : agentWorks ? "keep" : "hide";
 
 // Windows and Linux keep the app in the notification area; a Mac keeps it in the Dock.
 export const keepsRunningInTray = (platform: string): boolean => platform !== "darwin";
@@ -37,8 +40,22 @@ export const startsHidden = (argv: ReadonlyArray<string>): boolean =>
 // how a script, the Windows update trial among them, ends it without killing it.
 const QUIT_ARGUMENT = "--quit";
 
-export const secondStart = (argv: ReadonlyArray<string>): "quit" | "show" =>
-  argv.includes(QUIT_ARGUMENT) ? "quit" : "show";
+// `--show-status` opens the window with the app's status column (task of 2026-11-18: the column
+// is hidden by default), at a first start or as a second start over the running app, so a script
+// over SSH or a support call can open it without a click.
+const SHOW_STATUS_ARGUMENT = "--show-status";
+
+export const showsStatus = (argv: ReadonlyArray<string>): boolean =>
+  argv.includes(SHOW_STATUS_ARGUMENT);
+
+// Whether the status column shows after a request: while an agent holds the computer it stays,
+// whatever Hide or View asked, so the window never hides that an agent works or its Stop
+// (docs/adr/0006); once the work ends, the person's choice counts again.
+export const statusShownAfter = (requested: boolean, agentWorks: boolean): boolean =>
+  requested || agentWorks;
+
+export const secondStart = (argv: ReadonlyArray<string>): "quit" | "show-status" | "show" =>
+  argv.includes(QUIT_ARGUMENT) ? "quit" : showsStatus(argv) ? "show-status" : "show";
 
 // The app's AppUserModelID on Windows: electron-builder gives the Start menu shortcut the
 // `appId` of electron-builder.yml, and a toast shows only when the app names the same one. The
@@ -64,6 +81,7 @@ export const loginItem = (options: {
 
 interface TrayActions {
   readonly show: () => void;
+  readonly showStatus: () => void;
   readonly quit: () => void;
 }
 
@@ -72,6 +90,7 @@ export const trayMenu = (
   actions: TrayActions,
 ): ReadonlyArray<{ readonly label: string; readonly click: () => void }> => [
   { label: text.open, click: actions.show },
+  { label: text.status, click: actions.showStatus },
   { label: text.quit, click: actions.quit },
 ];
 

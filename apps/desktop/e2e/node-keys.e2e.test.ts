@@ -32,7 +32,7 @@ beforeAll(async () => {
   NodeFS.mkdirSync(NodePath.join(userData, "tailnets", "e2e-dir.key"));
 
   app = await _electron.launch({
-    args: [NodePath.resolve(import.meta.dirname, "..")],
+    args: [NodePath.resolve(import.meta.dirname, ".."), "--show-status"],
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
     env: {
       ...process.env,

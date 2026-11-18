@@ -173,6 +173,8 @@ const launch = async (fakeHelperSettings: Record<string, string> = {}) => {
   app = await _electron.launch({
     args: [
       NodePath.resolve(import.meta.dirname, ".."),
+      // The status column, hidden by default, is what this test reads.
+      "--show-status",
       `--host-resolver-rules=${rules.join(", ")}`,
       "--ignore-certificate-errors",
     ],
@@ -378,6 +380,79 @@ describe("Agent Desktop's switch", () => {
     await environmentRow().locator('[data-action="device-remove"]').click();
     await shell.locator('[data-device-environments="none"]').waitFor();
     await shell.locator(`[data-device-add="${ENVIRONMENT}"]`).waitFor();
+  });
+
+  // Hides or minimizes the window and waits until it shows again ("show" after a hide, "restore"
+  // after a minimize). The listener is in place before the action: on Windows the app restores
+  // the window from within the minimize. A window that never comes back fails by the timeout.
+  const backInView = (how: "hide" | "minimize") =>
+    app.evaluate(async ({ BaseWindow }, action) => {
+      const window = BaseWindow.getAllWindows()[0];
+      if (window === undefined) return false;
+      await new Promise<void>((resolve) => {
+        if (action === "hide") {
+          window.once("show", () => resolve());
+          window.hide();
+        } else {
+          window.once("restore", () => resolve());
+          window.minimize();
+        }
+      });
+      return window.isVisible() && !window.isMinimized();
+    }, how);
+
+  // It restarts the app with an agent that works as soon as its channel opens: the status column
+  // stays visible, whatever Hide or View asks, until the work ends (docs/adr/0006).
+  it("keeps the status column and Stop visible while an agent works", async () => {
+    await app.close();
+    await launch({ LAZURIO_FAKE_DEVICE_OUTCOMES: "working" });
+    await shell.locator('[data-action="device-add"]').click();
+    const from = mark();
+    await environmentRow().locator('[data-action="device-switch"]').click();
+    // @effect-diagnostics-next-line globalFetch:off - The person's browser, outside the app and Effect.
+    await fetch(await handedToBrowser(from));
+    await inPhase("channel", "working");
+    await shell.locator('[data-action="device-stop"]').waitFor();
+    assert.isTrue(await shell.locator('[data-action="status-hide"]').isDisabled());
+    const columnShown = () =>
+      app.evaluate(({ BaseWindow }) => {
+        const local = BaseWindow.getAllWindows()[0]?.contentView.children[0];
+        return local?.getVisible() === true && (local?.getBounds().width ?? 0) > 0;
+      });
+    // Hide through the bridge, then View → App status in the window's menu: neither hides it.
+    await shell.evaluate(() => window.lazurio.setStatusPanel(false));
+    assert.isTrue(await columnShown());
+    await app.evaluate(({ Menu }) => {
+      const items = Menu.getApplicationMenu()?.items.flatMap((item) => item.submenu?.items ?? []);
+      items?.find((item) => item.accelerator === "CmdOrCtrl+Shift+D")?.click();
+    });
+    await shell.evaluate(() => window.lazurio.status());
+    assert.isTrue(await columnShown());
+    // Closing the window, as with its X, keeps it shown while the agent works.
+    const shownAfterClose = await app.evaluate(({ BaseWindow }) => {
+      const window = BaseWindow.getAllWindows()[0];
+      window?.close();
+      return window?.isVisible() === true;
+    });
+    assert.isTrue(shownAfterClose);
+    assert.isTrue(await columnShown());
+    // Hidden or minimized while the agent works, it shows again. Under Xvfb no window manager
+    // minimizes a window, so Linux checks the hide only; Windows and macOS check both.
+    assert.isTrue(await backInView("hide"));
+    const linux = (await shell.evaluate(() => navigator.platform)).startsWith("Linux");
+    if (!linux) assert.isTrue(await backInView("minimize"));
+    // Once the work ends, Hide works again.
+    await environmentRow().locator('[data-action="device-switch"]').click();
+    await inPhase("off");
+    await shell.locator('[data-action="status-hide"]:not([disabled])').click();
+    await shell.evaluate(() => window.lazurio.status());
+    assert.isFalse(await columnShown());
+    await shell.evaluate(() => window.lazurio.setStatusPanel(true));
+    await environmentRow().locator('[data-action="device-remove"]').click();
+    await shell.locator('[data-device-environments="none"]').waitFor();
+    // The next test signs in again.
+    await shell.locator('[data-action="device-sign-out"]').click();
+    await shell.locator('[data-device-account="signed-out"]').waitFor();
   });
 
   // Last: it restarts the app with a Device helper that never answers StopChannel.

@@ -39,7 +39,7 @@ beforeAll(async () => {
 
   userData = temporaryUserData();
   app = await _electron.launch({
-    args: [NodePath.resolve(import.meta.dirname, "..")],
+    args: [NodePath.resolve(import.meta.dirname, ".."), "--show-status"],
     // Playwright adds --no-sandbox on Linux unless told otherwise. CI configures the SUID sandbox
     // and sets LAZURIO_APP_E2E_OS_SANDBOX, so the operating system's sandbox is on there too.
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
@@ -104,8 +104,12 @@ const inRemotePage = (script: string): Promise<unknown> =>
 describe("Lazurio App GEN4", () => {
   it("shows its local window with both helpers past their handshake", async () => {
     assert.match(shell.url(), /^lazurio-app:\/\/shell\//u);
-    await shell.locator('[data-helper="lazurio-tailnet"][data-state="ready"]').waitFor();
-    await shell.locator('[data-helper="lazurio-device"][data-state="ready"]').waitFor();
+    await shell
+      .locator('[data-helper="lazurio-tailnet"][data-state="ready"]')
+      .waitFor({ state: "attached" });
+    await shell
+      .locator('[data-helper="lazurio-device"][data-state="ready"]')
+      .waitFor({ state: "attached" });
   });
 
   it("gives its local window the bridge and nothing of Node", async () => {
@@ -197,9 +201,33 @@ describe("Lazurio App GEN4", () => {
       Reflect.get(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}, "lazurio-device"),
     );
     if (typeof pid !== "number") return assert.fail("the app named no PID of its Device helper");
+    // The column is hidden before the helper is lost without confirming that its engines ended.
+    await shell.evaluate(() => window.lazurio.setStatusPanel(false));
     process.kill(pid, "SIGKILL");
     const problem = shell.locator('[data-device-state="lost"] [data-device-problem="lost"]');
     await problem.waitFor();
+    // The unconfirmed state opens the column, keeps it and the window in view, and Hide is off.
+    const inView = () =>
+      app.evaluate(({ BaseWindow }) => {
+        const window = BaseWindow.getAllWindows()[0];
+        const local = window?.contentView.children[0];
+        return window?.isVisible() === true && local?.getVisible() === true;
+      });
+    assert.isTrue(await inView());
+    assert.isTrue(await shell.locator('[data-action="status-hide"]').isDisabled());
+    await shell.evaluate(() => window.lazurio.setStatusPanel(false));
+    // Hidden, the window shows again; one that never does fails the test by its timeout.
+    const shownAgain = await app.evaluate(async ({ BaseWindow }) => {
+      const window = BaseWindow.getAllWindows()[0];
+      if (window === undefined) return false;
+      await new Promise<void>((resolve) => {
+        window.once("show", () => resolve());
+        window.hide();
+      });
+      return window.isVisible();
+    });
+    assert.isTrue(shownAgain);
+    assert.isTrue(await inView());
     assert.match(await problem.innerText(), /not known whether|nevíme, jestli/iu);
     assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
     // The updates' section knows that an install would wait for the helper.

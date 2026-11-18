@@ -17,6 +17,8 @@ export const DEVICE_SET_SWITCH_CHANNEL = "lazurio:device-set-switch";
 export const DEVICE_ADD_ENVIRONMENT_CHANNEL = "lazurio:device-add-environment";
 export const DEVICE_REMOVE_ENVIRONMENT_CHANNEL = "lazurio:device-remove-environment";
 export const DEVICE_SIGN_OUT_CHANNEL = "lazurio:device-sign-out";
+export const STATUS_PANEL_CHANNEL = "lazurio:status-panel";
+export const COPY_STATUS_CHANNEL = "lazurio:copy-status";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -174,6 +176,10 @@ export interface LazurioBridge {
   readonly setUpdateChannel: (channel: UpdateChannelName) => Promise<void>;
   // Installs a downloaded update: the app restarts once no agent works on the computer.
   readonly installUpdate: () => Promise<void>;
+  // Shows or hides the app's status column beside the page.
+  readonly setStatusPanel: (shown: boolean) => Promise<void>;
+  // Copies the app's status as text without secrets (statusText.ts) to the clipboard.
+  readonly copyStatus: () => Promise<void>;
   // Agent Desktop. Only the app's local windows have it, never a remote page.
   readonly device: DeviceBridge;
 }

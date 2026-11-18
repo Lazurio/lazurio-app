@@ -10,6 +10,8 @@ import {
   APP_USER_MODEL_ID,
   beforeQuitStep,
   secondStart,
+  showsStatus,
+  statusShownAfter,
   closeStep,
   keepsRunningInTray,
   loginItem,
@@ -23,6 +25,8 @@ describe("Lifecycle", () => {
   it("hides the window when it closes, and closes it only while the app quits", () => {
     assert.strictEqual(closeStep(false), "hide");
     assert.strictEqual(closeStep(true), "close");
+    assert.strictEqual(closeStep(false, true), "keep");
+    assert.strictEqual(closeStep(true, true), "close");
   });
 
   it("keeps running in the notification area on Windows and Linux, and in the Dock on a Mac", () => {
@@ -56,6 +60,9 @@ describe("Lifecycle", () => {
     assert.strictEqual(secondStart(["Lazurio App.exe", "--quit"]), "quit");
     assert.strictEqual(secondStart(["Lazurio App.exe"]), "show");
     assert.strictEqual(secondStart(["Lazurio App.exe", "--hidden"]), "show");
+    assert.strictEqual(secondStart(["Lazurio App.exe", "--show-status"]), "show-status");
+    assert.isTrue(showsStatus(["Lazurio App.exe", "--show-status"]));
+    assert.isFalse(showsStatus(["Lazurio App.exe"]));
   });
 
   it("starts at the sign-in to Windows only from a packaged app on Windows", () => {
@@ -89,22 +96,23 @@ describe("Lifecycle", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it("offers Open and Quit in the tray's menu, in either language", () => {
+  it("offers Open, the app's status and Quit in the tray's menu, in either language", () => {
     const calls: Array<string> = [];
     const actions = {
       show: () => calls.push("show"),
+      showStatus: () => calls.push("status"),
       quit: () => calls.push("quit"),
     };
     const cs = trayMenu(messages.cs.tray, actions);
     assert.deepStrictEqual(
       cs.map((item) => item.label),
-      ["Otevřít Lazurio App (Alpha)", "Ukončit Lazurio App (Alpha)"],
+      ["Otevřít Lazurio App (Alpha)", "Stav aplikace", "Ukončit Lazurio App (Alpha)"],
     );
     for (const item of cs) item.click();
-    assert.deepStrictEqual(calls, ["show", "quit"]);
+    assert.deepStrictEqual(calls, ["show", "status", "quit"]);
     assert.deepStrictEqual(
       trayMenu(messages.en.tray, actions).map((item) => item.label),
-      ["Open Lazurio App (Alpha)", "Quit Lazurio App (Alpha)"],
+      ["Open Lazurio App (Alpha)", "App status", "Quit Lazurio App (Alpha)"],
     );
   });
 
@@ -170,4 +178,11 @@ describe("Lifecycle", () => {
       assert.strictEqual(shown, 1);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  it("keeps the status column while an agent works, whatever Hide or View asks", () => {
+    assert.isTrue(statusShownAfter(false, true));
+    assert.isTrue(statusShownAfter(true, true));
+    assert.isTrue(statusShownAfter(true, false));
+    assert.isFalse(statusShownAfter(false, false));
+  });
 });

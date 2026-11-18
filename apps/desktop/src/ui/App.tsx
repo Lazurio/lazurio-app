@@ -30,33 +30,53 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
     return stop;
   }, []);
   const text = messages[localeOf(navigator.language)];
+  // Whether an agent holds the computer now, or may (the helper was lost unconfirmed): Agent
+  // Desktop's section, with Stop or its warning, then comes first and the column stays.
+  const agentWorks = device !== null && device.agent !== null;
+  const [copyState, setCopyState] = useState<"copied" | "failed" | null>(null);
+  const copyStatus = () => {
+    window.lazurio.copyStatus().then(
+      () => setCopyState("copied"),
+      () => setCopyState("failed"),
+    );
+  };
   return (
     <main className="shell" data-status={live ? "live" : "initial"}>
       <header className="shell__header">
-        <h1>{APP_NAME}</h1>
+        <div className="shell__title">
+          <h1>{APP_NAME}</h1>
+          <button
+            type="button"
+            className="shell__link"
+            data-action="status-hide"
+            disabled={agentWorks}
+            onClick={() => void window.lazurio.setStatusPanel(false)}
+          >
+            {text.status.hide}
+          </button>
+        </div>
+        <p className="shell__subtitle">{text.status.title}</p>
+        {agentWorks ? (
+          <p className="shell__subtitle" data-status-stays="">
+            {text.status.hideWhileAgentWorks}
+          </p>
+        ) : null}
         <dl className="shell__facts">
-          <dt>{text.generation}</dt>
-          <dd>{current.generation}</dd>
           <dt>{text.version}</dt>
           <dd>{current.appVersion}</dd>
         </dl>
+        <div className="shell__copy">
+          <button type="button" data-action="status-copy" onClick={copyStatus}>
+            {text.status.copy}
+          </button>
+          {copyState === null ? null : (
+            <p className="shell__empty" role="status" data-copy-state={copyState}>
+              {copyState === "copied" ? text.status.copied : text.status.copyFailed}
+            </p>
+          )}
+        </div>
       </header>
-      <section aria-label={text.helpers}>
-        <h2>{text.helpers}</h2>
-        <ul className="shell__helpers">
-          {current.helpers.map((helper) => (
-            <li key={helper.name} data-helper={helper.name} data-state={helper.state}>
-              <span>{helper.name}</span>
-              <span className="shell__state">
-                {helper.state === "ready" ? text.ready : text.failed}
-              </span>
-              {helper.state === "ready" ? (
-                <span className="shell__detail">{helper.version}</span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      </section>
+      {agentWorks ? <AgentDesktopSection status={device} text={text.device} /> : null}
       <section aria-label={text.tailnets}>
         <h2>{text.tailnets}</h2>
         {current.tailnets.length === 0 ? (
@@ -102,7 +122,30 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
         text={text.updates}
         deviceUnreachable={device?.state === "lost"}
       />
-      <AgentDesktopSection status={device} text={text.device} />
+      {agentWorks ? null : <AgentDesktopSection status={device} text={text.device} />}
+      <details className="shell__details" data-details="">
+        <summary>{text.status.details}</summary>
+        <dl className="shell__facts">
+          <dt>{text.generation}</dt>
+          <dd>{current.generation}</dd>
+        </dl>
+        <section aria-label={text.helpers}>
+          <h3>{text.helpers}</h3>
+          <ul className="shell__helpers">
+            {current.helpers.map((helper) => (
+              <li key={helper.name} data-helper={helper.name} data-state={helper.state}>
+                <span>{helper.name}</span>
+                <span className="shell__state">
+                  {helper.state === "ready" ? text.ready : text.failed}
+                </span>
+                {helper.state === "ready" ? (
+                  <span className="shell__detail">{helper.version}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      </details>
     </main>
   );
 }

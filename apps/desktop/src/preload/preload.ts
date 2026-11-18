@@ -9,7 +9,9 @@ import {
   DEVICE_STATE_CHANNEL,
   DEVICE_STOP_CHANNEL,
   INSTALL_UPDATE_CHANNEL,
+  COPY_STATUS_CHANNEL,
   SET_UPDATE_CHANNEL_CHANNEL,
+  STATUS_PANEL_CHANNEL,
   STATUS_CHANGED_CHANNEL,
   STATUS_CHANNEL,
   type AppStatus,
@@ -34,6 +36,12 @@ const bridge: LazurioBridge = {
   },
   installUpdate: async () => {
     await Electron.ipcRenderer.invoke(INSTALL_UPDATE_CHANNEL);
+  },
+  setStatusPanel: async (shown) => {
+    await Electron.ipcRenderer.invoke(STATUS_PANEL_CHANNEL, shown);
+  },
+  copyStatus: async () => {
+    await Electron.ipcRenderer.invoke(COPY_STATUS_CHANNEL);
   },
   device: {
     getState: () => Electron.ipcRenderer.invoke(DEVICE_STATE_CHANNEL) as Promise<DeviceStatus>,

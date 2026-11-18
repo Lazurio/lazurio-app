@@ -39,10 +39,22 @@ export interface MainWindowOptions {
   // start or the tray asked for it meanwhile.
   readonly showOnLoad: () => boolean;
   // What closing the window does (Lifecycle.closeStep), and what follows when it hides.
-  readonly closeStep: () => "hide" | "close";
+  readonly closeStep: () => "hide" | "close" | "keep";
   readonly hidden: () => void;
   // Windows ends the person's session (log off, restart): the app quits.
   readonly sessionEnds: () => void;
+  // Whether the app's status column shows beside the page; hidden by default (2026-11-18).
+  readonly statusShown: () => boolean;
+  // A bar above the page, laid out with the window (Agent Desktop's "an agent works" bar).
+  readonly topBar?: { readonly view: Electron.WebContentsView; readonly height: () => number };
+  // The window's controls once its views exist: lay them out again, reload the page.
+  readonly controls: (controls: MainWindowControls) => void;
+}
+
+export interface MainWindowControls {
+  // Lays the views out again, after the status column or the top bar showed or hid.
+  readonly relayout: () => void;
+  readonly reloadPage: () => void;
 }
 
 // The first remote page loads again after these failures, which a network that changed or a
@@ -207,9 +219,12 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   );
   options.created(window);
   // Closing the window hides it, so the app and Agent Desktop run on (Tray.ts); only a quit closes it.
+  // While an agent works it stays where it is.
   window.on("close", (event) => {
-    if (options.closeStep() === "close") return;
+    const step = options.closeStep();
+    if (step === "close") return;
     event.preventDefault();
+    if (step === "keep") return;
     window.hide();
     options.hidden();
   });
@@ -227,26 +242,44 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     remote.webContents.on("did-navigate", (_event, url) => options.pageShown(url));
     yield* hardenSession(remote.webContents.session);
     window.contentView.addChildView(remote);
-    // The app's own page in the remote view's place while a tailnet's page cannot be reached.
-    waiting = yield* acquireView(viewOptions({}));
+    // The app's own page in the remote view's place while a tailnet's page cannot be reached. It
+    // has the bridge, so it can open the status column.
+    waiting = yield* acquireView(viewOptions({ preload: options.preloadPath }));
     waiting.setBackgroundColor(WINDOW_BACKGROUND);
     registerView(waiting.webContents, "Local");
     waiting.setVisible(false);
     window.contentView.addChildView(waiting);
   }
-  // The column and the page side by side; without a page the local view takes the window.
+  if (options.topBar !== undefined) window.contentView.addChildView(options.topBar.view);
+  // The status column, when shown, and the page side by side, with the top bar over the page;
+  // without a page the local view takes the window.
   const layout = () => {
     // The content view's own size: on Linux the menu bar takes part of the content size.
     const { width, height } = window.contentView.getBounds();
-    const column = remote === undefined ? width : Math.min(LOCAL_COLUMN_WIDTH, width);
+    const shown = remote === undefined || options.statusShown();
+    const column = remote === undefined ? width : shown ? Math.min(LOCAL_COLUMN_WIDTH, width) : 0;
+    local.setVisible(shown);
     local.setBounds({ x: 0, y: 0, width: column, height });
-    const page = { x: column, y: 0, width: Math.max(0, width - column), height };
+    const bar = Math.min(options.topBar?.height() ?? 0, height);
+    options.topBar?.view.setBounds({
+      x: column,
+      y: 0,
+      width: Math.max(0, width - column),
+      height: bar,
+    });
+    const page = { x: column, y: bar, width: Math.max(0, width - column), height: height - bar };
     remote?.setBounds(page);
     waiting?.setBounds(page);
   };
   layout();
   // The content view changes size with the window and, on Linux, when the menu bar appears.
   window.contentView.on("bounds-changed", layout);
+  options.controls({
+    relayout: layout,
+    reloadPage: () => {
+      if (remote !== undefined && !remote.webContents.isDestroyed()) remote.webContents.reload();
+    },
+  });
   // A BaseWindow does not close its views' pages; they close with the scope that ends here.
   if (remote !== undefined && waiting !== undefined) {
     yield* waitForReachable(remote, waiting, options.servedByTailnet);
