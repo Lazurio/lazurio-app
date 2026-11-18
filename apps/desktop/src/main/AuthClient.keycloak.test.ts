@@ -1,7 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import * as Clock from "effect/Clock";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -94,6 +92,7 @@ const keycloak = Effect.gen(function* () {
 interface Exchange {
   readonly url: string;
   readonly authorization: string | null;
+  readonly requestBody: string;
   readonly status: number;
   readonly body: string;
 }
@@ -105,6 +104,14 @@ const recordingFetch = (exchanges: Array<Exchange>): typeof globalThis.fetch => 
     exchanges.push({
       url: input instanceof Request ? input.url : String(input),
       authorization: new Headers(init?.headers).get("authorization"),
+      requestBody:
+        typeof init?.body === "string"
+          ? init.body
+          : init?.body instanceof Uint8Array
+            ? new TextDecoder().decode(init.body)
+            : init?.body instanceof URLSearchParams
+              ? init.body.toString()
+              : "",
       status: response.status,
       body: await response.clone().text(),
     });
@@ -205,36 +212,47 @@ describe.runIf(ENABLED)("AuthClient against Keycloak", () => {
       assert.strictEqual(claimsOf(tokens.refresh_token).typ, "Refresh");
       assert.notInclude(String(tokens.scope).split(" "), "offline_access");
 
-      // A clock past the access token's expiry: the hand-over refreshes it first. Keycloak has
-      // no device-hand-over endpoint and answers 404, which the client maps as Auth's 404.
-      const clock = yield* Clock.Clock;
-      const ahead = Duration.toMillis(Duration.minutes(10));
-      const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN)).pipe(
-        Effect.provideService(Clock.Clock, {
-          currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe() + ahead,
-          currentTimeMillis: Effect.map(clock.currentTimeMillis, (now) => now + ahead),
-          currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe() + BigInt(ahead) * 1_000_000n,
-          currentTimeNanos: Effect.map(
-            clock.currentTimeNanos,
-            (now) => now + BigInt(ahead) * 1_000_000n,
-          ),
-          monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
-          monotonicTimeNanos: clock.monotonicTimeNanos,
-          sleep: (duration) => clock.sleep(duration),
-        }),
-      );
-      assert.isTrue(isHandOverError(error));
-      assert.strictEqual(isHandOverError(error) ? error.reason : "", "unknown-environment");
+      // Right before the hand-over the client refreshes with exactly scope=lazurio-device-entry,
+      // and calls device-hand-over only with a token of exactly that scope and one audience.
+      // Keycloak has no device-hand-over endpoint and answers 404, mapped as Auth's 404.
+      const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
       const [, refreshed] = tokenCalls();
       assert.strictEqual(refreshed?.status, 200);
+      assert.strictEqual(
+        new URLSearchParams(refreshed?.requestBody).get("scope"),
+        DEVICE_ENTRY_SCOPE,
+      );
       const renewed = JSON.parse(refreshed?.body ?? "{}");
-      assert.notStrictEqual(renewed.access_token, tokens.access_token);
-      assert.include(audiencesOf(claimsOf(renewed.access_token)), DEVICE_ENTRY_SCOPE);
+      const scoped = claimsOf(renewed.access_token);
+      const answered = {
+        scope: renewed.scope,
+        claimedScope: scoped.scope,
+        aud: scoped.aud,
+        azp: scoped.azp,
+      };
+      const exact = {
+        scope: DEVICE_ENTRY_SCOPE,
+        claimedScope: DEVICE_ENTRY_SCOPE,
+        aud: DEVICE_ENTRY_SCOPE,
+        azp: CLIENT_ID,
+      };
       const handOver = exchanges.find((exchange) => exchange.url.endsWith("/device-hand-over"));
-      assert.strictEqual(handOver?.authorization, `Bearer ${renewed.access_token}`);
+      if (JSON.stringify(answered) === JSON.stringify(exact)) {
+        assert.strictEqual(isHandOverError(error) ? error.reason : "", "unknown-environment");
+        assert.strictEqual(handOver?.authorization, `Bearer ${renewed.access_token}`);
+      } else {
+        // A token that is not exactly the scope's never goes to the hand-over.
+        assert.strictEqual(isHandOverError(error) ? error.reason : "", "scope-not-granted");
+        assert.isUndefined(handOver);
+      }
 
       yield* auth.signOut;
       assert.strictEqual(yield* auth.state, "signedOut");
+
+      // The contract pins Keycloak 26.7.3, whose refresh with exactly this scope answers that
+      // scope without openid and the scope's one audience. Only 26.6.2 is on this machine, so
+      // this checks 26.6.2 against the pinned behavior.
+      assert.deepStrictEqual(answered, exact);
     }).pipe(
       Effect.provideService(FetchHttpClient.Fetch, recordingFetch(exchanges)),
       Effect.scoped,
