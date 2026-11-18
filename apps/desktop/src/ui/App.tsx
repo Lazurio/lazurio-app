@@ -44,9 +44,15 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
       },
     );
   };
-  const offersSignIn =
-    current.account === "signed-out" &&
-    (current.tailnetSource === "built-in" || current.tailnetSource === "lazurio-auth");
+  const personal = current.tailnetSource === "built-in" || current.tailnetSource === "lazurio-auth";
+  const offersSignIn = personal && current.account !== "signed-in";
+  // Agent Desktop shows the account where its helper runs; otherwise the tailnets' section does.
+  const showsAccount =
+    personal && current.account !== "signed-out" && (device === null || device.state === "absent");
+  const signOut = () => {
+    setSignInFailed(false);
+    window.lazurio.signOut().catch(() => setSignInFailed(true));
+  };
   return (
     <main className="shell" data-status={live ? "live" : "initial"}>
       <header className="shell__header">
@@ -77,22 +83,39 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
       <section aria-label={text.tailnets}>
         <h2>{text.tailnets}</h2>
         {offersSignIn ? (
-          <div className="shell__sign-in" data-networks-sign-in="">
-            <p>{text.networksSignInHint}</p>
+          <div className="shell__sign-in" data-networks-sign-in={current.account}>
+            <p>
+              {current.account === "needs-sign-in"
+                ? text.networksSignInAgainHint
+                : text.networksSignInHint}
+            </p>
             <button
               type="button"
               data-action="networks-sign-in"
               disabled={signingIn}
               onClick={signIn}
             >
-              {text.networksSignIn}
+              {current.account === "needs-sign-in" ? text.networksSignInAgain : text.networksSignIn}
             </button>
-            {signInFailed ? (
-              <p className="shell__reason shell__problem" role="alert">
-                {text.networksSignInFailed}
-              </p>
-            ) : null}
           </div>
+        ) : null}
+        {showsAccount ? (
+          <div className="shell__account" data-app-account={current.account}>
+            <span>{text.accountSignedIn}</span>
+            <button
+              type="button"
+              className="shell__link"
+              data-action="account-sign-out"
+              onClick={signOut}
+            >
+              {text.accountSignOut}
+            </button>
+          </div>
+        ) : null}
+        {signInFailed ? (
+          <p className="shell__reason shell__problem" role="alert">
+            {text.networksSignInFailed}
+          </p>
         ) : null}
         {current.tailnets.length === 0 ? (
           <p className="shell__empty">{text.noTailnets}</p>

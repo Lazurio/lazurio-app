@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
-import { SIGN_IN_CHANNEL } from "../shared/bridge.ts";
+import { SIGN_IN_CHANNEL, SIGN_OUT_CHANNEL } from "../shared/bridge.ts";
 import type { AuthClientShape, AuthUnreachableError, SignInError } from "./AuthClient.ts";
 import { destinationOf } from "./Navigation.ts";
 
@@ -22,16 +22,22 @@ const isLocalSender = (event: Electron.IpcMainInvokeEvent): boolean => {
 
 // The local windows' sign-in to Lazurio for the person's networks: the app's own sign-in in the
 // system's browser (AuthClient), after which `follow` reads the directory.
-export const serve = Effect.fn("SignInIpc.serve")(function* (auth: AuthClientShape) {
+export const serve = Effect.fn("SignInIpc.serve")(function* <E>(
+  auth: AuthClientShape,
+  signOut: Effect.Effect<void, E>,
+) {
   const services = yield* Effect.context<never>();
-  yield* Effect.acquireRelease(
-    Effect.sync(() =>
-      Electron.ipcMain.handle(SIGN_IN_CHANNEL, (event) =>
-        Effect.runPromiseWith(services)<void, SignInIpcRefused | SignInFailure>(
-          isLocalSender(event) ? auth.signIn : Effect.fail(new SignInIpcRefused()),
+  const handle = <F>(channel: string, answer: Effect.Effect<void, F>) =>
+    Effect.acquireRelease(
+      Effect.sync(() =>
+        Electron.ipcMain.handle(channel, (event) =>
+          Effect.runPromiseWith(services)<void, F | SignInIpcRefused>(
+            isLocalSender(event) ? answer : Effect.fail(new SignInIpcRefused()),
+          ),
         ),
       ),
-    ),
-    () => Effect.sync(() => Electron.ipcMain.removeHandler(SIGN_IN_CHANNEL)),
-  );
+      () => Effect.sync(() => Electron.ipcMain.removeHandler(channel)),
+    );
+  yield* handle<SignInFailure>(SIGN_IN_CHANNEL, auth.signIn);
+  yield* handle(SIGN_OUT_CHANNEL, signOut);
 });

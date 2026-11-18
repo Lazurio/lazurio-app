@@ -13,7 +13,7 @@ import {
   type DirectoryNetwork,
   NetworkDirectoryError,
 } from "./AuthClient.ts";
-import { follow, readSaved, textOf } from "./NetworkDirectory.ts";
+import { follow, readSaved, type ReadOutcome, textOf } from "./NetworkDirectory.ts";
 import * as TailnetDirectory from "./TailnetDirectory.ts";
 
 const EXAMPLE: DirectoryNetwork = {
@@ -98,6 +98,7 @@ const withFollow = <E>(
     readonly signOut: Effect.Effect<void>;
     readonly savedPath: string;
     readonly changes: () => number;
+    readonly outcomes: ReadonlyArray<ReadOutcome>;
     // Waits until the read after the latest sign-in is handled.
     readonly handled: Effect.Effect<void>;
   }) => Effect.Effect<void, E, FileSystem.FileSystem>,
@@ -109,11 +110,16 @@ const withFollow = <E>(
     const { auth, reads, signOut } = yield* fakeAuth(answer);
     const done = yield* Queue.unbounded<void>();
     let changes = 0;
+    const outcomes: Array<ReadOutcome> = [];
     yield* follow({
       auth,
       savedPath,
       inUse,
       computer: "Desktop-1",
+      onRead: (outcome) =>
+        Effect.sync(() => {
+          outcomes.push(outcome);
+        }),
       changed: Effect.sync(() => {
         changes += 1;
       }),
@@ -125,6 +131,7 @@ const withFollow = <E>(
       signOut,
       savedPath,
       changes: () => changes,
+      outcomes,
       handled: Queue.take(done),
     });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
@@ -200,5 +207,50 @@ describe("NetworkDirectory.follow", () => {
           assert.strictEqual(reads(), 2);
         }),
     ),
+  );
+
+  it.effect("asks for a new sign-in when the session lacks the directory's scope", () => {
+    // A session from a version that asked only for the device scope, then a new sign-in.
+    const answers: Array<Effect.Effect<ReadonlyArray<DirectoryNetwork>, NetworkDirectoryError>> = [
+      Effect.fail(new NetworkDirectoryError({ reason: "scope-not-granted" })),
+      Effect.fail(new NetworkDirectoryError({ reason: "unavailable", status: 503 })),
+      Effect.succeed([EXAMPLE]),
+    ];
+    return withFollow(
+      () => answers.shift() ?? Effect.die("no more answers"),
+      Option.none(),
+      ({ auth, outcomes, changes, handled }) =>
+        Effect.gen(function* () {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            // A sign-in while signed in reads again too.
+            yield* auth.signIn;
+            yield* handled;
+          }
+          assert.deepStrictEqual(outcomes, ["needs-sign-in", "not-read", "read"]);
+          assert.strictEqual(changes(), 1);
+        }),
+    );
+  });
+
+  it.effect("takes the suffixes Auth answers for a network that serves several zones", () =>
+    Effect.gen(function* () {
+      const shared: DirectoryNetwork = {
+        tailnet: "shared-host",
+        controlUrl: "https://headscale.shared-host.lazurio.io",
+        domains: ["first-org.lazurio.io", "second-org.lazurio.io"],
+      };
+      const directory = yield* TailnetDirectory.fromText(textOf([shared]), "Desktop-1");
+      assert.deepStrictEqual(
+        directory.tailnets.map((tailnet) => tailnet.domains),
+        [["first-org.lazurio.io", "second-org.lazurio.io"]],
+      );
+      // Tailnet.test.ts routes each such suffix through its network.
+      // A suffix outside Lazurio's domains refuses the network whole.
+      const outside = yield* TailnetDirectory.fromText(
+        textOf([{ ...shared, domains: ["first-org.lazurio.io", "example.com"] }]),
+        "Desktop-1",
+      );
+      assert.deepStrictEqual(outside.tailnets, []);
+    }),
   );
 });

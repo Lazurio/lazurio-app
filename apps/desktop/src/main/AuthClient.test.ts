@@ -1324,6 +1324,36 @@ describe("AuthClient.networks", () => {
     ),
   );
 
+  it.effect("reads after a new sign-in once a session from before the directory lacks it", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        // The previous version signed in for the device scope only and sealed that session.
+        const before = yield* client({ scopes: [DEVICE_ENTRY_SCOPE] });
+        yield* signInThroughBrowser(before, opened);
+        // This version opens the same session at its start.
+        const after = yield* client();
+        assert.strictEqual(yield* after.state, "signedIn");
+        const error = yield* Effect.flip(after.networks);
+        assert.strictEqual(
+          isNetworkDirectoryError(error) ? error.reason : error._tag,
+          "scope-not-granted",
+        );
+        assert.deepStrictEqual(fake.networksRequests, []);
+        // A new sign-in while signed in asks for both scopes and the read then works.
+        yield* signInThroughBrowser(after, opened);
+        assert.strictEqual(
+          fake.authorizations.at(-1)?.scope,
+          `openid ${DEVICE_ENTRY_SCOPE} ${NETWORK_DIRECTORY_SCOPE}`,
+        );
+        fake.settings.networksBody = {
+          schema: "lazurio.network-directory.v1",
+          networks: [NETWORK],
+        };
+        assert.strictEqual((yield* after.networks).length, 1);
+      }),
+    ),
+  );
+
   it.effect("needs a sign-in that granted the scope lazurio-network-directory", () =>
     withHarness(({ fake, opened, client }) =>
       Effect.gen(function* () {

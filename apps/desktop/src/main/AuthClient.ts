@@ -167,10 +167,12 @@ export class NetworkDirectoryError extends Schema.TaggedError<NetworkDirectoryEr
   }
 }
 
-// One network of the person's directory: its name and its control server, as Auth answers them.
+// One network of the person's directory as Auth answers it: its name, its control server and,
+// once Auth answers them, the DNS suffixes of the Organizations it serves.
 export interface DirectoryNetwork {
   readonly tailnet: string;
   readonly controlUrl: string;
+  readonly domains?: ReadonlyArray<string>;
 }
 
 // A one-time hand-over for one Environment. Only the Device helper's channel may read it.
@@ -260,6 +262,7 @@ const NetworkDirectoryResponse = Schema.Struct({
       tailnet: Schema.String,
       controlUrl: Schema.String,
       organizations: Schema.Array(Schema.Struct({ id: Schema.String })),
+      domains: Schema.optional(Schema.Array(Schema.String)),
     }),
   ),
 });
@@ -929,7 +932,9 @@ export const layer = (options: AuthClientOptions) =>
           yield* Effect.logInfo("auth: network directory read", {
             networks: answer.value.networks.length,
           });
-          return answer.value.networks.map(({ tailnet, controlUrl }) => ({ tailnet, controlUrl }));
+          return answer.value.networks.map(({ tailnet, controlUrl, domains }) =>
+            domains === undefined ? { tailnet, controlUrl } : { tailnet, controlUrl, domains },
+          );
         }).pipe(Effect.withSpan("AuthClient.networks")),
       });
     }),

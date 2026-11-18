@@ -27,7 +27,11 @@ export const textOf = (networks: ReadonlyArray<DirectoryNetwork>): string =>
   JSON.stringify(
     [...networks]
       .sort((a, b) => (a.tailnet < b.tailnet ? -1 : a.tailnet > b.tailnet ? 1 : 0))
-      .map(({ tailnet, controlUrl }) => ({ tailnet, controlUrl, domains: domainsOf(controlUrl) })),
+      .map(({ tailnet, controlUrl, domains }) => ({
+        tailnet,
+        controlUrl,
+        domains: domains !== undefined && domains.length > 0 ? domains : domainsOf(controlUrl),
+      })),
     null,
     2,
   );
@@ -38,6 +42,8 @@ export const readSaved = Effect.fn("NetworkDirectory.readSaved")(function* (path
   return yield* fileSystem.readFileString(path).pipe(Effect.option);
 });
 
+export type ReadOutcome = "read" | "needs-sign-in" | "not-read";
+
 export interface ReadOptions {
   readonly auth: AuthClientShape;
   readonly savedPath: string;
@@ -46,6 +52,9 @@ export interface ReadOptions {
   // Called once a list differs from the one in use and is saved: the app starts again with it.
   readonly changed: Effect.Effect<void>;
   readonly computer: string;
+  // How the latest read went: read, or the session lacks the directory's scope (a sign-in from
+  // before the app asked for it) and the person must sign in again, or not read for another reason.
+  readonly onRead: (outcome: ReadOutcome) => Effect.Effect<void>;
   // Tests only: after each sign-in's read is handled.
   readonly handled?: Effect.Effect<void>;
 }
@@ -62,11 +71,20 @@ export const follow = Effect.fn("NetworkDirectory.follow")(function* (options: R
       Effect.gen(function* () {
         const networks = yield* options.auth.networks.pipe(
           Effect.tapError((error) =>
-            Effect.logWarning("network directory not read", { reason: error.message }),
+            Effect.logWarning("network directory not read", { reason: error.message }).pipe(
+              Effect.andThen(
+                options.onRead(
+                  error._tag === "NetworkDirectoryError" && error.reason === "scope-not-granted"
+                    ? "needs-sign-in"
+                    : "not-read",
+                ),
+              ),
+            ),
           ),
           Effect.option,
         );
         if (Option.isNone(networks)) return;
+        yield* options.onRead("read");
         if (networks.value.length === 0) {
           yield* Effect.logInfo("network directory: no network for this person");
           return;

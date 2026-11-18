@@ -11,6 +11,7 @@ import {
   INSTALL_UPDATE_CHANNEL,
   SET_UPDATE_CHANNEL_CHANNEL,
   SIGN_IN_CHANNEL,
+  SIGN_OUT_CHANNEL,
   STATUS_CHANGED_CHANNEL,
   STATUS_CHANNEL,
   type AppStatus,
@@ -38,6 +39,9 @@ const bridge: LazurioBridge = {
   },
   signIn: async () => {
     await Electron.ipcRenderer.invoke(SIGN_IN_CHANNEL);
+  },
+  signOut: async () => {
+    await Electron.ipcRenderer.invoke(SIGN_OUT_CHANNEL);
   },
   device: {
     getState: () => Electron.ipcRenderer.invoke(DEVICE_STATE_CHANNEL) as Promise<DeviceStatus>,

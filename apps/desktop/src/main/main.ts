@@ -19,6 +19,7 @@ import * as Electron from "electron";
 import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
 import { localeOf } from "../ui/messages.ts";
 
+import * as Account from "./Account.ts";
 import * as AuthClient from "./AuthClient.ts";
 import { DeviceActivity } from "./DeviceActivity.ts";
 import * as DeviceEnvironments from "./DeviceEnvironments.ts";
@@ -398,7 +399,10 @@ const program = Effect.gen(function* () {
       setSwitch: () => noSwitch,
       addEnvironment: () => noSwitch,
       removeEnvironment: () => noSwitch,
-      signOut: Effect.void,
+      // Without the helper's switches the account still signs out (Account.signOutOf).
+      signOut: auth.signOut.pipe(
+        Effect.mapError(() => new DeviceSwitches.DeviceSwitchError({ problem: "not-saved" })),
+      ),
     }),
   });
   // The updater's view of the computer: the configured helper's, or the default (always idle).
@@ -471,13 +475,15 @@ const program = Effect.gen(function* () {
     Effect.provideService(DeviceActivity, deviceActivity),
   );
   let account = yield* auth.state;
+  // Set when the session lacks the directory's scope, until a read succeeds or the app signs out.
+  let needsSignIn = false;
   const status = (): AppStatus => ({
     appVersion: Electron.app.getVersion(),
     generation: "GEN4",
     helpers: helpers.map((helper) => helper.status),
     tailnets: tailnets.current(),
     tailnetSource: joining.source,
-    account: account === "signedIn" ? "signed-in" : "signed-out",
+    account: account === "signedOut" ? "signed-out" : needsSignIn ? "needs-sign-in" : "signed-in",
     updates: updates.current(),
   });
   // Every change of status goes to every local window, from before the first window exists. A
@@ -499,6 +505,7 @@ const program = Effect.gen(function* () {
     Stream.runForEach((state) =>
       Effect.sync(() => {
         account = state;
+        if (state === "signedOut") needsSignIn = false;
         broadcastStatus();
       }),
     ),
@@ -512,6 +519,11 @@ const program = Effect.gen(function* () {
       savedPath: yield* savedDirectoryPath(),
       inUse: joining.text,
       computer: NodeOS.hostname(),
+      onRead: (outcome) =>
+        Effect.sync(() => {
+          if (outcome !== "not-read") needsSignIn = outcome === "needs-sign-in";
+          broadcastStatus();
+        }),
       changed: Effect.sync(() => {
         if (quitting) return;
         Electron.app.relaunch();
@@ -520,7 +532,7 @@ const program = Effect.gen(function* () {
     });
   }
   // Only the app's local windows may start the sign-in for the person's networks.
-  yield* SignInIpc.serve(auth);
+  yield* SignInIpc.serve(auth, Account.signOutOf(switches, auth));
   // Only the app's local windows may pick the channel or install (UpdatesIpc.ts).
   yield* UpdatesIpc.serve(updates);
   // Only the app's local windows see Agent Desktop's state and may press Stop (DeviceIpc.ts).
