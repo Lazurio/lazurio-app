@@ -40,6 +40,13 @@ describe("updateLabel", () => {
     assert.strictEqual(label.text, text.failed);
   });
 
+  it("says the chosen channel has no release yet, instead of a failure", () => {
+    const label = updateLabel(status({ phase: "no-release" }), "0.1.0-nightly.20261117.8", text);
+    assert.strictEqual(label.text, text.noRelease);
+    assert.isFalse(label.canInstall);
+    assert.notStrictEqual(label.text, text.failed);
+  });
+
   it("explains the floor only to a nightly build on the stable channel", () => {
     const nightly = "0.2.0-nightly.20261116.5";
     assert.isTrue(updateLabel(status({ phase: "idle" }, "latest"), nightly, text).floor);

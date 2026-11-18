@@ -77,6 +77,8 @@ export interface UpdatesText {
   readonly installingWaitsForDevice: string;
   readonly restarting: string;
   readonly failed: string;
+  // The chosen channel has no release yet (docs/adr/0005, point 4: the person's choice stays).
+  readonly noRelease: string;
   readonly channelNotSaved: string;
 }
 
@@ -127,6 +129,7 @@ const cs: Text = {
     installingWaitsForDevice: `Instalace verze {version} čeká na Agent Desktop, se kterým se přerušilo spojení. Ukončete ${APP_NAME} a spusťte ji znovu; aktualizace se nainstaluje později.`,
     restarting: "Restartuje se do verze {version}…",
     failed: `Aktualizace se nepovedla. ${APP_NAME} to zkusí znovu za hodinu.`,
+    noRelease: `Vybraný kanál zatím nemá žádné vydání, takže se ${APP_NAME} nemá na co aktualizovat. Přepněte na druhý kanál, nebo počkejte na jeho první vydání.`,
     channelNotSaved: `Kanál se nepodařilo změnit. Zkontrolujte, že do složky dat ${APP_NAME} jde zapisovat, a zkuste to znovu.`,
   },
   device: {
@@ -200,6 +203,7 @@ const en: Text = {
     installingWaitsForDevice: `Installing version {version} waits for Agent Desktop, whose connection was lost. Quit ${APP_NAME} and start it again; the update installs later.`,
     restarting: "Restarting into version {version}…",
     failed: `The update did not work. ${APP_NAME} tries again in an hour.`,
+    noRelease: `The chosen channel has no release yet, so ${APP_NAME} has nothing to update to. Switch to the other channel, or wait for its first release.`,
     channelNotSaved: `The channel could not be changed. Check that the data folder of ${APP_NAME} can be written, and try again.`,
   },
   device: {

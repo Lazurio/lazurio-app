@@ -39,6 +39,8 @@ export const updateLabel = (
     case "checking":
     case "failed":
       return { text: text[state.phase], canInstall: false, floor };
+    case "no-release":
+      return { text: text.noRelease, canInstall: false, floor };
     case "ready":
       return { text: withVersion(text.ready, state.version), canInstall: true, floor };
     case "downloading":

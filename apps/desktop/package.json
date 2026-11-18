@@ -28,6 +28,7 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "@types/sax": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "effect": "catalog:",
     "electron": "catalog:",
@@ -36,6 +37,7 @@
     "playwright-core": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "sax": "catalog:",
     "vite-plus": "catalog:"
   },
   "productName": "Lazurio App"
