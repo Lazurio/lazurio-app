@@ -382,6 +382,24 @@ describe("Agent Desktop's switch", () => {
     await shell.locator(`[data-device-add="${ENVIRONMENT}"]`).waitFor();
   });
 
+  // Hides or minimizes the window and waits until it shows again: after "show", or after
+  // "minimize" and then "restore". A window that never comes back fails the test by its timeout.
+  const backInView = (how: "hide" | "minimize") =>
+    app.evaluate(async ({ BaseWindow }, action) => {
+      const window = BaseWindow.getAllWindows()[0];
+      if (window === undefined) return false;
+      await new Promise<void>((resolve) => {
+        if (action === "hide") {
+          window.once("show", () => resolve());
+          window.hide();
+        } else {
+          window.once("minimize", () => window.once("restore", () => resolve()));
+          window.minimize();
+        }
+      });
+      return window.isVisible() && !window.isMinimized();
+    }, how);
+
   // It restarts the app with an agent that works as soon as its channel opens: the status column
   // stays visible, whatever Hide or View asks, until the work ends (docs/adr/0006).
   it("keeps the status column and Stop visible while an agent works", async () => {
@@ -417,15 +435,11 @@ describe("Agent Desktop's switch", () => {
     });
     assert.isTrue(shownAfterClose);
     assert.isTrue(await columnShown());
-    // Hidden or minimized by the system while the agent works, it shows again.
-    const afterHideAndMinimize = await app.evaluate(({ BaseWindow }) => {
-      const window = BaseWindow.getAllWindows()[0];
-      window?.hide();
-      const afterHide = window?.isVisible() === true;
-      window?.minimize();
-      return { afterHide, afterMinimize: window?.isMinimized() === false && window.isVisible() };
-    });
-    assert.deepStrictEqual(afterHideAndMinimize, { afterHide: true, afterMinimize: true });
+    // Hidden or minimized while the agent works, it shows again. Under Xvfb no window manager
+    // minimizes a window, so Linux checks the hide only; Windows and macOS check both.
+    assert.isTrue(await backInView("hide"));
+    const linux = (await shell.evaluate(() => navigator.platform)).startsWith("Linux");
+    if (!linux) assert.isTrue(await backInView("minimize"));
     // Once the work ends, Hide works again.
     await environmentRow().locator('[data-action="device-switch"]').click();
     await inPhase("off");

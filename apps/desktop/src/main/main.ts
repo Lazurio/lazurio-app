@@ -15,6 +15,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -740,6 +741,12 @@ const program = Effect.gen(function* () {
   );
   // The helper may have been lost, or an agent may work, before this subscription.
   showWhileAgentWorks();
+  // And every second, as the system does not report every way a window hides (a Mac reports no
+  // programmatic hide), so a window minimized or hidden during the work shows again.
+  yield* Effect.sync(keepWindowInView).pipe(
+    Effect.repeat(Schedule.spaced("1 second")),
+    Effect.forkScoped,
+  );
   const hiddenNotice = yield* Lifecycle.noticeOnce(
     path.join(Electron.app.getPath("userData"), "tray.json"),
     hooks.notice(text.tray.hiddenNotice),

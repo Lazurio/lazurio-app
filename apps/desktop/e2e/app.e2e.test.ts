@@ -216,9 +216,17 @@ describe("Lazurio App GEN4", () => {
     assert.isTrue(await inView());
     assert.isTrue(await shell.locator('[data-action="status-hide"]').isDisabled());
     await shell.evaluate(() => window.lazurio.setStatusPanel(false));
-    await app.evaluate(({ BaseWindow }) => {
-      BaseWindow.getAllWindows()[0]?.hide();
+    // Hidden, the window shows again; one that never does fails the test by its timeout.
+    const shownAgain = await app.evaluate(async ({ BaseWindow }) => {
+      const window = BaseWindow.getAllWindows()[0];
+      if (window === undefined) return false;
+      await new Promise<void>((resolve) => {
+        window.once("show", () => resolve());
+        window.hide();
+      });
+      return window.isVisible();
     });
+    assert.isTrue(shownAgain);
     assert.isTrue(await inView());
     assert.match(await problem.innerText(), /not known whether|nevíme, jestli/iu);
     assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
