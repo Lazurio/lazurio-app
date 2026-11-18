@@ -1,7 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import * as Clock from "effect/Clock";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -23,7 +21,10 @@ import type { Keystore } from "./NodeKeys.ts";
 // with the image already on the machine.
 
 const ENABLED = process.env.LAZURIO_KEYCLOAK_TEST === "1";
-const IMAGE = "quay.io/keycloak/keycloak:26.6.2";
+// Keycloak 26.7.3, pinned by digest exactly as HumanAndMachine-ai/Auth's workspace/Dockerfile
+// pins it.
+const IMAGE =
+  "quay.io/keycloak/keycloak@sha256:88943b6ad06d6293a239f0dfca5acec64218c9b3ab327bf9c936acf408a6ae3b";
 const USERNAME = "test-person";
 const PASSWORD = "keycloak-test-only-password";
 const ENVIRONMENT_ORIGIN = "https://launchpad.alice.example-org.lazurio.io";
@@ -94,6 +95,7 @@ const keycloak = Effect.gen(function* () {
 interface Exchange {
   readonly url: string;
   readonly authorization: string | null;
+  readonly requestBody: string;
   readonly status: number;
   readonly body: string;
 }
@@ -105,6 +107,14 @@ const recordingFetch = (exchanges: Array<Exchange>): typeof globalThis.fetch => 
     exchanges.push({
       url: input instanceof Request ? input.url : String(input),
       authorization: new Headers(init?.headers).get("authorization"),
+      requestBody:
+        typeof init?.body === "string"
+          ? init.body
+          : init?.body instanceof Uint8Array
+            ? new TextDecoder().decode(init.body)
+            : init?.body instanceof URLSearchParams
+              ? init.body.toString()
+              : "",
       status: response.status,
       body: await response.clone().text(),
     });
@@ -205,31 +215,29 @@ describe.runIf(ENABLED)("AuthClient against Keycloak", () => {
       assert.strictEqual(claimsOf(tokens.refresh_token).typ, "Refresh");
       assert.notInclude(String(tokens.scope).split(" "), "offline_access");
 
-      // A clock past the access token's expiry: the hand-over refreshes it first. Keycloak has
-      // no device-hand-over endpoint and answers 404, which the client maps as Auth's 404.
-      const clock = yield* Clock.Clock;
-      const ahead = Duration.toMillis(Duration.minutes(10));
-      const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN)).pipe(
-        Effect.provideService(Clock.Clock, {
-          currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe() + ahead,
-          currentTimeMillis: Effect.map(clock.currentTimeMillis, (now) => now + ahead),
-          currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe() + BigInt(ahead) * 1_000_000n,
-          currentTimeNanos: Effect.map(
-            clock.currentTimeNanos,
-            (now) => now + BigInt(ahead) * 1_000_000n,
-          ),
-          monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
-          monotonicTimeNanos: clock.monotonicTimeNanos,
-          sleep: (duration) => clock.sleep(duration),
-        }),
-      );
-      assert.isTrue(isHandOverError(error));
-      assert.strictEqual(isHandOverError(error) ? error.reason : "", "unknown-environment");
+      // Right before the hand-over the client refreshes with exactly scope=lazurio-device-entry
+      // and sends a token with that scope and its one audience. Keycloak has no device-hand-over
+      // endpoint and answers 404, mapped as Auth's 404.
+      const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
       const [, refreshed] = tokenCalls();
       assert.strictEqual(refreshed?.status, 200);
+      assert.strictEqual(
+        new URLSearchParams(refreshed?.requestBody).get("scope"),
+        DEVICE_ENTRY_SCOPE,
+      );
       const renewed = JSON.parse(refreshed?.body ?? "{}");
-      assert.notStrictEqual(renewed.access_token, tokens.access_token);
-      assert.include(audiencesOf(claimsOf(renewed.access_token)), DEVICE_ENTRY_SCOPE);
+      const scoped = claimsOf(renewed.access_token);
+      yield* Effect.logInfo(
+        `Keycloak answers to a refresh with scope=${DEVICE_ENTRY_SCOPE}: ${renewed.scope}`,
+      );
+      // Auth's contract (check 2) takes exactly lazurio-device-entry, and the pinned 26.7.3 answers
+      // exactly that, without openid (26.6.2 kept openid beside it:
+      // https://github.com/HumanAndMachine-ai/Auth/issues/136).
+      assert.strictEqual(renewed.scope, DEVICE_ENTRY_SCOPE);
+      assert.strictEqual(scoped.scope, renewed.scope);
+      assert.strictEqual(scoped.aud, DEVICE_ENTRY_SCOPE);
+      assert.strictEqual(scoped.azp, CLIENT_ID);
+      assert.strictEqual(isHandOverError(error) ? error.reason : "", "unknown-environment");
       const handOver = exchanges.find((exchange) => exchange.url.endsWith("/device-hand-over"));
       assert.strictEqual(handOver?.authorization, `Bearer ${renewed.access_token}`);
 

@@ -36,8 +36,6 @@ export const CLIENT_ID = "lazurio-app";
 export const DEVICE_ENTRY_SCOPE = "lazurio-device-entry";
 
 const DEFAULT_SIGN_IN_TIMEOUT = Duration.minutes(5);
-// An access token counts as expired this long before Lazurio Auth's own expiry.
-const EXPIRY_MARGIN_MILLIS = 30_000;
 // How far the computer's clock may differ from Lazurio Auth's for an ID token's times.
 const CLOCK_SKEW_SECONDS = 60;
 const REVOCATION_WITHIN = Duration.seconds(5);
@@ -109,9 +107,20 @@ export class SignOutError extends Schema.TaggedError<SignOutError>()("SignOutErr
   }
 }
 
+// The codes of the route's `{"error": "<code>"}` (Auth, docs/device-channel-entry.md).
+const HandOverRefusalCode = Schema.Literals([
+  "invalid_request",
+  "unauthorized",
+  "not_found",
+  "forbidden",
+  "agent_entry_not_member",
+  "environment_state_conflict",
+  "application_record_inconsistent",
+]);
+
 export class HandOverError extends Schema.TaggedError<HandOverError>()("HandOverError", {
-  // invalid-origin: no `https://<host>` origin; scope-not-granted: the sign-in has no
-  // lazurio-device-entry; then Auth's answers 404, 403, 409, 503 and 401 after a fresh token.
+  // invalid-origin: no `https://<host>` origin; scope-not-granted: no token with the scope
+  // lazurio-device-entry and its one audience; then Auth's 404, 403, 409, 503 and a second 401.
   reason: Schema.Literals([
     "invalid-origin",
     "scope-not-granted",
@@ -123,10 +132,13 @@ export class HandOverError extends Schema.TaggedError<HandOverError>()("HandOver
     "unexpected",
   ]),
   status: Schema.optional(Schema.Number),
+  // Auth's own code of a refusal, for a more precise reason to show.
+  code: Schema.optional(HandOverRefusalCode),
 }) {
   override get message(): string {
     const status = this.status === undefined ? "" : ` (HTTP ${this.status})`;
-    return `device hand-over: ${this.reason}${status}`;
+    const code = this.code === undefined ? "" : `, ${this.code}`;
+    return `device hand-over: ${this.reason}${status}${code}`;
   }
 }
 
@@ -205,6 +217,18 @@ const decodeIdTokenClaims = Schema.decodeUnknownOption(Schema.fromJsonString(IdT
 
 const HandOverResponse = Schema.Struct({ handOver: Schema.String, expiresIn: Schema.Number });
 const decodeHandOverResponse = Schema.decodeUnknownOption(HandOverResponse);
+const decodeHandOverRefusal = Schema.decodeUnknownOption(
+  Schema.Struct({ error: HandOverRefusalCode }),
+);
+
+// An access token's audiences, read only to check what Lazurio Auth answered; the token is
+// verified by Auth, which takes it.
+const AccessTokenClaims = Schema.Struct({
+  aud: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+});
+const decodeAccessTokenClaims = Schema.decodeUnknownOption(
+  Schema.fromJsonString(AccessTokenClaims),
+);
 
 const SessionRecord = Schema.Struct({
   issuer: Schema.String,
@@ -274,15 +298,9 @@ interface Endpoints {
   readonly revocation: string | undefined;
 }
 
-interface AccessToken {
-  readonly token: Redacted.Redacted<string>;
-  readonly expiresAt: number;
-}
-
 interface Session {
   readonly refreshToken: Redacted.Redacted<string>;
   readonly scope: string;
-  readonly access: Option.Option<AccessToken>;
 }
 
 // The return to the loopback address, and its answer, which only the first call sends.
@@ -441,7 +459,6 @@ export const layer = (options: AuthClientOptions) =>
         return Option.some<Session>({
           refreshToken: Redacted.make(opened.value.refreshToken),
           scope: opened.value.scope,
-          access: Option.none(),
         });
       });
 
@@ -489,15 +506,10 @@ export const layer = (options: AuthClientOptions) =>
         return { ended, removed };
       });
 
-      const accessTokenOf = (tokens: TokenResponse): Effect.Effect<AccessToken> =>
-        Clock.currentTimeMillis.pipe(
-          Effect.map((now) => ({
-            token: Redacted.make(tokens.access_token),
-            expiresAt: now + Math.max(0, tokens.expires_in * 1000 - EXPIRY_MARGIN_MILLIS),
-          })),
-        );
-
-      const refresh = Effect.fn("AuthClient.refresh")(function* (current: Session) {
+      // A refresh for an access token of exactly `scope`, which only narrows what the sign-in
+      // granted (RFC 6749 §6). The token serves one call and is never kept: every purpose asks
+      // for its own. A rotated refresh token is kept and sealed. Callers hold the lock.
+      const refresh = Effect.fn("AuthClient.refresh")(function* (current: Session, scope: string) {
         const unreachable = (status?: number) =>
           new AuthUnreachableError({ operation: "refresh", status });
         const found = yield* discover().pipe(Effect.mapError(() => unreachable()));
@@ -507,6 +519,7 @@ export const layer = (options: AuthClientOptions) =>
               grant_type: "refresh_token",
               refresh_token: Redacted.value(current.refreshToken),
               client_id: CLIENT_ID,
+              scope,
             }),
           ),
         ).pipe(Effect.mapError(() => unreachable()));
@@ -520,35 +533,47 @@ export const layer = (options: AuthClientOptions) =>
         if (Option.isNone(tokens) || tokens.value.token_type.toLowerCase() !== "bearer") {
           return yield* unreachable(200);
         }
-        const access = yield* accessTokenOf(tokens.value);
         const rotated = tokens.value.refresh_token;
-        const next: Session = {
-          refreshToken: rotated === undefined ? current.refreshToken : Redacted.make(rotated),
-          scope: current.scope,
-          access: Option.some(access),
+        if (rotated !== undefined) {
+          const next: Session = { refreshToken: Redacted.make(rotated), scope: current.scope };
+          session = Option.some(next);
+          yield* saveSession(next);
+        }
+        const claims = decodeAccessTokenClaims(
+          Result.getOrElse(
+            Base64Url.decodeString(tokens.value.access_token.split(".")[1] ?? ""),
+            () => "",
+          ),
+        );
+        const audience = Option.map(claims, ({ aud }) =>
+          aud === undefined ? [] : typeof aud === "string" ? [aud] : aud,
+        );
+        yield* Effect.logDebug("auth: scoped access token refreshed");
+        return {
+          token: Redacted.make(tokens.value.access_token),
+          scope: tokens.value.scope,
+          audiences: Option.getOrElse(audience, () => []),
         };
-        session = Option.some(next);
-        if (rotated !== undefined) yield* saveSession(next);
-        yield* Effect.logDebug("auth: access token refreshed");
-        return access.token;
       });
 
-      // A valid access token, refreshed when it expired or when Lazurio Auth no longer took the
-      // one given as `rejected`.
-      const accessToken = (rejected: Option.Option<Redacted.Redacted<string>>) =>
-        lock.withPermits(1)(
-          Effect.gen(function* () {
-            if (Option.isNone(session)) return yield* new SignedOutError();
-            const current = session.value;
-            const now = yield* Clock.currentTimeMillis;
-            if (Option.isSome(current.access)) {
-              const access = current.access.value;
-              const stillTaken = Option.isNone(rejected) || rejected.value !== access.token;
-              if (stillTaken && now < access.expiresAt) return access.token;
-            }
-            return yield* refresh(current);
-          }),
-        );
+      // A token for one call of device-hand-over: the scope lazurio-device-entry and its one
+      // audience. Whether the scope is exactly that one (route check 2) is Auth's to judge; the
+      // pinned Keycloak 26.7.3 answers exactly it, and an older one that kept openid gets Auth's
+      // 401.
+      const deviceEntryToken = lock.withPermits(1)(
+        Effect.gen(function* () {
+          if (Option.isNone(session)) return yield* new SignedOutError();
+          const scoped = yield* refresh(session.value, DEVICE_ENTRY_SCOPE);
+          if (
+            !scopesOf(scoped.scope ?? "").has(DEVICE_ENTRY_SCOPE) ||
+            scoped.audiences.length !== 1 ||
+            scoped.audiences[0] !== DEVICE_ENTRY_SCOPE
+          ) {
+            return yield* new HandOverError({ reason: "scope-not-granted" });
+          }
+          return scoped.token;
+        }),
+      );
 
       const exchange = Effect.fn("AuthClient.exchange")(function* (
         found: Endpoints,
@@ -650,11 +675,10 @@ export const layer = (options: AuthClientOptions) =>
         }
 
         const { tokens, refreshToken } = yield* exchange(found, code, redirectUri, verifier, nonce);
-        const access = yield* accessTokenOf(tokens);
+        // The sign-in's own access token is not kept: each call asks for a token of its scope.
         const next: Session = {
           refreshToken: Redacted.make(refreshToken),
           scope: tokens.scope ?? ["openid", ...requestedScopes].join(" "),
-          access: Option.some(access),
         };
         // A sign-out since the start wins, whenever it came.
         yield* lock.withPermits(1)(
@@ -767,14 +791,18 @@ export const layer = (options: AuthClientOptions) =>
           if (!scopesOf(session.value.scope).has(DEVICE_ENTRY_SCOPE)) {
             return yield* new HandOverError({ reason: "scope-not-granted" });
           }
-          const first = yield* accessToken(Option.none());
-          let response = yield* handOverWith(origin, first);
-          if (response.status === 401) {
-            const fresh = yield* accessToken(Option.some(first));
-            response = yield* handOverWith(origin, fresh);
-          }
+          // A fresh token right before each call, and once more after a 401.
+          const ask = deviceEntryToken.pipe(Effect.flatMap((token) => handOverWith(origin, token)));
+          let response = yield* ask;
+          if (response.status === 401) response = yield* ask;
+          const code =
+            response.status === 200
+              ? undefined
+              : Option.getOrUndefined(
+                  Option.map(decodeHandOverRefusal(yield* jsonOf(response)), ({ error }) => error),
+                );
           const refused = (reason: HandOverError["reason"]) =>
-            new HandOverError({ reason, status: response.status });
+            new HandOverError({ reason, status: response.status, code });
           switch (response.status) {
             case 200:
               break;

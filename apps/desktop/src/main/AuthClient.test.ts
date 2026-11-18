@@ -26,6 +26,7 @@ import {
   AuthUnreachableError,
   CLIENT_ID,
   DEVICE_ENTRY_SCOPE,
+  HandOverError,
   layer,
   type InvalidIssuerError,
   SignedOutError,
@@ -41,6 +42,7 @@ const isSignInError = Schema.is(SignInError);
 const isSignedOut = Schema.is(SignedOutError);
 const isUnreachable = Schema.is(AuthUnreachableError);
 const isSignOutError = Schema.is(SignOutError);
+const isHandOverError = Schema.is(HandOverError);
 // A sign-in's failure as its reason, or the tag of another error.
 const signInReason = (error: { readonly _tag: string }): string =>
   isSignInError(error) ? error.reason : error._tag;
@@ -86,6 +88,21 @@ interface HandOverRequest {
   readonly body: string;
 }
 
+interface IssuedToken {
+  readonly scope: string;
+  readonly audiences: ReadonlyArray<string>;
+}
+
+// Codes of the route's refusals, by status, as the contract's table gives them.
+const REFUSAL_CODES: Record<number, string> = {
+  400: "invalid_request",
+  401: "unauthorized",
+  403: "forbidden",
+  404: "not_found",
+  409: "environment_state_conflict",
+  503: "application_record_inconsistent",
+};
+
 interface FakeAuth {
   readonly issuer: string;
   readonly authorizations: Array<Authorization>;
@@ -95,9 +112,21 @@ interface FakeAuth {
   readonly revoked: Array<string>;
   // Every token, code and verifier the fake gave out or received, for the logs' check.
   readonly secrets: Array<string>;
-  readonly validAccessTokens: Set<string>;
+  // Every access token the fake issued, with what it was issued for.
+  readonly accessTokens: Map<string, IssuedToken>;
+  // The `scope` of each refresh, or null for a refresh without one.
+  readonly refreshScopes: Array<string | null>;
+  // Each request's Authorization header and body, wherever it went.
+  readonly received: Array<string>;
   settings: {
     accessTokenSeconds: number;
+    // How a refresh treats its `scope`: narrowing to it, as the contract says; keeping openid
+    // beside it, as Keycloak 26.6.2 did; adding another audience; or dropping it.
+    scopedRefresh: "exact" | "keeps-openid" | "two-audiences" | "drops-scope";
+    // Refuses this many hand-overs with 401 although their token is right.
+    rejectHandOvers: number;
+    // The code of a refused hand-over, instead of the table's.
+    handOverCode: string | undefined;
     refresh: "ok" | "reject" | "unavailable";
     handOverStatus: number;
     // The state the redirect carries back, when it should differ from the request's.
@@ -133,7 +162,8 @@ const fakeAuth = Effect.acquireRelease(
     let counter = 0;
     const next = (kind: string) => `${kind}-SECRET-${++counter}-${randomPart()}`;
     const codes = new Map<string, Authorization>();
-    const refreshTokens = new Set<string>();
+    // Each live refresh token with the scope its sign-in granted.
+    const refreshTokens = new Map<string, string>();
     const fake: FakeAuth = {
       issuer: "",
       authorizations: [],
@@ -142,9 +172,14 @@ const fakeAuth = Effect.acquireRelease(
       handOvers: [],
       revoked: [],
       secrets: [],
-      validAccessTokens: new Set(),
+      accessTokens: new Map(),
+      refreshScopes: [],
+      received: [],
       settings: {
         accessTokenSeconds: 300,
+        scopedRefresh: "exact",
+        rejectHandOvers: 0,
+        handOverCode: undefined,
         refresh: "ok",
         handOverStatus: 200,
         returnState: undefined,
@@ -170,12 +205,31 @@ const fakeAuth = Effect.acquireRelease(
         exp: issuedAt + 300,
       });
     };
-    const tokens = (scope: string, nonce: string | undefined) => {
-      const accessToken = next("access");
+    // `granted` stays with the refresh token; `scope` is this access token's.
+    const tokens = (
+      granted: string,
+      scope: string,
+      nonce: string | undefined,
+      extraAudience = false,
+    ) => {
+      const audiences = [
+        ...(scope.split(" ").includes(DEVICE_ENTRY_SCOPE) ? [DEVICE_ENTRY_SCOPE] : []),
+        ...(extraAudience ? ["lazurio-network-directory"] : []),
+      ];
+      const accessToken = unsignedJwt({
+        jti: next("access"),
+        iss: fake.issuer,
+        azp: CLIENT_ID,
+        sub: "person-1",
+        scope,
+        ...(audiences.length === 0
+          ? {}
+          : { aud: audiences.length === 1 ? audiences[0] : audiences }),
+      });
       const refreshToken = next("refresh");
       fake.secrets.push(accessToken, refreshToken);
-      fake.validAccessTokens.add(accessToken);
-      refreshTokens.add(refreshToken);
+      fake.accessTokens.set(accessToken, { scope, audiences });
+      refreshTokens.set(refreshToken, granted);
       return {
         access_token: accessToken,
         token_type: "Bearer",
@@ -191,6 +245,8 @@ const fakeAuth = Effect.acquireRelease(
     const handle = async (request: NodeHttp.IncomingMessage, response: NodeHttp.ServerResponse) => {
       const url = new URL(request.url ?? "/", fake.issuer);
       const path = url.pathname.slice(new URL(fake.issuer).pathname.length);
+      const body = request.method === "POST" ? await readBody(request) : "";
+      fake.received.push(`${request.headers.authorization ?? ""}\n${url.search}\n${body}`);
       if (request.method === "GET" && path === "/.well-known/openid-configuration") {
         return json(response, 200, {
           issuer: fake.issuer,
@@ -227,7 +283,7 @@ const fakeAuth = Effect.acquireRelease(
         return response.end();
       }
       if (request.method === "POST" && path === "/protocol/token") {
-        const form = new URLSearchParams(await readBody(request));
+        const form = new URLSearchParams(body);
         const grant = form.get("grant_type") ?? "";
         fake.grants.push(grant);
         if (form.get("client_id") !== CLIENT_ID || form.has("client_secret")) {
@@ -249,32 +305,54 @@ const fakeAuth = Effect.acquireRelease(
           ) {
             return json(response, 400, { error: "invalid_grant" });
           }
-          return json(response, 200, tokens(authorization.scope, authorization.nonce));
+          return json(
+            response,
+            200,
+            tokens(authorization.scope, authorization.scope, authorization.nonce),
+          );
         }
         if (grant === "refresh_token") {
           const presented = form.get("refresh_token") ?? "";
           if (fake.settings.refresh === "unavailable") {
             return json(response, 503, { error: "temporarily_unavailable" });
           }
-          if (fake.settings.refresh === "reject" || !refreshTokens.delete(presented)) {
+          const granted = refreshTokens.get(presented);
+          refreshTokens.delete(presented);
+          if (fake.settings.refresh === "reject" || granted === undefined) {
             return json(response, 400, {
               error: "invalid_grant",
               error_description: "Session not active",
             });
           }
-          return json(response, 200, tokens(`openid ${DEVICE_ENTRY_SCOPE}`, undefined));
+          const requested = form.get("scope");
+          fake.refreshScopes.push(requested);
+          // RFC 6749 §6: a refresh only narrows what the sign-in granted.
+          const mode = fake.settings.scopedRefresh;
+          const narrowed =
+            requested === null || mode === "keeps-openid"
+              ? granted
+              : mode === "drops-scope"
+                ? "openid"
+                : requested
+                    .split(" ")
+                    .filter((part) => granted.split(" ").includes(part))
+                    .join(" ");
+          return json(
+            response,
+            200,
+            tokens(granted, narrowed, undefined, fake.settings.scopedRefresh === "two-audiences"),
+          );
         }
         return json(response, 400, { error: "unsupported_grant_type" });
       }
       if (request.method === "POST" && path === "/protocol/revoke") {
-        const form = new URLSearchParams(await readBody(request));
+        const form = new URLSearchParams(body);
         fake.revoked.push(form.get("token") ?? "");
         refreshTokens.delete(form.get("token") ?? "");
         response.writeHead(200);
         return response.end();
       }
       if (path === "/lazurio-agent-entry/device-hand-over") {
-        const body = await readBody(request);
         const authorization = request.headers.authorization;
         fake.handOvers.push({
           method: request.method ?? "",
@@ -282,19 +360,24 @@ const fakeAuth = Effect.acquireRelease(
           contentType: request.headers["content-type"],
           body,
         });
-        if (!fake.validAccessTokens.has((authorization ?? "").replace(/^Bearer /u, ""))) {
-          return json(response, 401, { error: "invalid_token" });
+        // Check 2: exactly one audience and exactly the scope lazurio-device-entry.
+        const issued = fake.accessTokens.get((authorization ?? "").replace(/^Bearer /u, ""));
+        const exact =
+          issued !== undefined &&
+          issued.scope === DEVICE_ENTRY_SCOPE &&
+          issued.audiences.length === 1 &&
+          issued.audiences[0] === DEVICE_ENTRY_SCOPE;
+        if (!exact || fake.settings.rejectHandOvers > 0) {
+          fake.settings.rejectHandOvers = Math.max(0, fake.settings.rejectHandOvers - 1);
+          return json(response, 401, { error: "unauthorized" });
         }
         const status = fake.settings.handOverStatus;
         if (status === 200) {
           fake.secrets.push(HAND_OVER);
           return json(response, 200, { handOver: HAND_OVER, expiresIn: 60 });
         }
-        return json(
-          response,
-          status,
-          status === 409 ? { error: "environment_state_conflict" } : { error: "refused" },
-        );
+        const code = fake.settings.handOverCode ?? REFUSAL_CODES[status];
+        return json(response, status, code === undefined ? {} : { error: code });
       }
       response.writeHead(404);
       response.end();
@@ -744,19 +827,36 @@ describe("AuthClient session", () => {
     ),
   );
 
-  it.effect("refreshes the access token silently once it expired", () =>
+  it.effect("takes a fresh token of exactly lazurio-device-entry for every hand-over", () =>
     withHarness(({ fake, opened, client }) =>
       Effect.gen(function* () {
         const auth = yield* client();
         yield* signInThroughBrowser(auth, opened);
         yield* auth.handOver(ENVIRONMENT_ORIGIN);
-        assert.deepStrictEqual(fake.grants, ["authorization_code"]);
-        yield* TestClock.adjust(Duration.seconds(fake.settings.accessTokenSeconds));
         yield* auth.handOver(ENVIRONMENT_ORIGIN);
-        assert.deepStrictEqual(fake.grants, ["authorization_code", "refresh_token"]);
+        assert.deepStrictEqual(fake.grants, [
+          "authorization_code",
+          "refresh_token",
+          "refresh_token",
+        ]);
+        assert.deepStrictEqual(fake.refreshScopes, [DEVICE_ENTRY_SCOPE, DEVICE_ENTRY_SCOPE]);
         const [first, second] = fake.handOvers;
         assert.notStrictEqual(first?.authorization, second?.authorization);
         assert.strictEqual(yield* auth.state, "signedIn");
+      }),
+    ),
+  );
+
+  it.effect("keeps the rotated refresh token of a scoped refresh, sealed", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        yield* auth.handOver(ENVIRONMENT_ORIGIN);
+        // The fake rotates: only the newest refresh token still works, in memory and on disk.
+        yield* auth.handOver(ENVIRONMENT_ORIGIN);
+        yield* (yield* client()).handOver(ENVIRONMENT_ORIGIN);
+        assert.strictEqual(fake.handOvers.length, 3);
       }),
     ),
   );
@@ -775,7 +875,6 @@ describe("AuthClient session", () => {
         yield* Deferred.await(subscribed);
         yield* signInThroughBrowser(auth, opened);
         fake.settings.refresh = "reject";
-        yield* TestClock.adjust(Duration.seconds(fake.settings.accessTokenSeconds));
         const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
         assert.isTrue(isSignedOut(error));
         assert.strictEqual(yield* auth.state, "signedOut");
@@ -795,7 +894,6 @@ describe("AuthClient session", () => {
         const auth = yield* client();
         yield* signInThroughBrowser(auth, opened);
         fake.settings.refresh = "unavailable";
-        yield* TestClock.adjust(Duration.seconds(fake.settings.accessTokenSeconds));
         const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
         assert.isTrue(isUnreachable(error));
         assert.strictEqual(yield* auth.state, "signedIn");
@@ -877,8 +975,12 @@ describe("AuthClient.handOver", () => {
         assert.isDefined(request);
         if (request === undefined) return;
         assert.strictEqual(request.method, "POST");
-        assert.match(request.authorization ?? "", /^Bearer access-SECRET-\d+-[\w-]+$/u);
-        assert.isTrue(fake.validAccessTokens.has((request.authorization ?? "").slice(7)));
+        const token = (request.authorization ?? "").replace(/^Bearer /u, "");
+        assert.deepStrictEqual(fake.accessTokens.get(token), {
+          scope: DEVICE_ENTRY_SCOPE,
+          audiences: [DEVICE_ENTRY_SCOPE],
+        });
+        assert.deepStrictEqual(fake.refreshScopes, [DEVICE_ENTRY_SCOPE]);
         assert.strictEqual(request.contentType, "application/json");
         assert.strictEqual(request.body, JSON.stringify({ origin: ENVIRONMENT_ORIGIN }));
       }),
@@ -890,32 +992,131 @@ describe("AuthClient.handOver", () => {
       Effect.gen(function* () {
         const auth = yield* client();
         yield* signInThroughBrowser(auth, opened);
-        const reasons: Array<string> = [];
-        for (const status of [403, 404, 409, 503, 500]) {
+        const refusals: Array<readonly [string, string | undefined]> = [];
+        for (const [status, code] of [
+          [403, "forbidden"],
+          [403, "agent_entry_not_member"],
+          [404, undefined],
+          [409, undefined],
+          [503, undefined],
+          [400, undefined],
+          [500, undefined],
+          [409, "a_code_the_contract_does_not_name"],
+        ] as const) {
           fake.settings.handOverStatus = status;
+          fake.settings.handOverCode = code;
           const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
-          reasons.push(error._tag === "HandOverError" ? error.reason : error._tag);
+          refusals.push(
+            isHandOverError(error) ? [error.reason, error.code] : [error._tag, undefined],
+          );
         }
-        assert.deepStrictEqual(reasons, [
-          "not-permitted",
-          "unknown-environment",
-          "environment-state-conflict",
-          "unavailable",
-          "unexpected",
+        assert.deepStrictEqual(refusals, [
+          ["not-permitted", "forbidden"],
+          ["not-permitted", "agent_entry_not_member"],
+          ["unknown-environment", "not_found"],
+          ["environment-state-conflict", "environment_state_conflict"],
+          ["unavailable", "application_record_inconsistent"],
+          ["unexpected", "invalid_request"],
+          ["unexpected", undefined],
+          ["environment-state-conflict", undefined],
         ]);
       }),
     ),
   );
 
-  it.effect("asks again once with a refreshed token when Lazurio Auth no longer takes it", () =>
+  it.effect("asks once more with a new scoped token after a 401, then gives up", () =>
     withHarness(({ fake, opened, client }) =>
       Effect.gen(function* () {
         const auth = yield* client();
         yield* signInThroughBrowser(auth, opened);
-        fake.validAccessTokens.clear();
+        fake.settings.rejectHandOvers = 1;
         yield* auth.handOver(ENVIRONMENT_ORIGIN);
-        assert.deepStrictEqual(fake.grants, ["authorization_code", "refresh_token"]);
+        assert.deepStrictEqual(fake.refreshScopes, [DEVICE_ENTRY_SCOPE, DEVICE_ENTRY_SCOPE]);
         assert.strictEqual(fake.handOvers.length, 2);
+        assert.notStrictEqual(fake.handOvers[0]?.authorization, fake.handOvers[1]?.authorization);
+
+        fake.settings.rejectHandOvers = 5;
+        const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
+        assert.deepStrictEqual(isHandOverError(error) ? [error.reason, error.code] : [], [
+          "unauthorized",
+          "unauthorized",
+        ]);
+        assert.strictEqual(fake.handOvers.length, 4);
+        assert.strictEqual(fake.refreshScopes.length, 4);
+        assert.strictEqual(yield* auth.state, "signedIn");
+      }),
+    ),
+  );
+
+  it.effect("uses a token of exactly lazurio-device-entry for one hand-over and nowhere else", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        yield* auth.handOver(ENVIRONMENT_ORIGIN);
+        yield* auth.handOver(ENVIRONMENT_ORIGIN);
+        yield* auth.signOut;
+        const scoped = [...fake.accessTokens].filter(
+          ([, issued]) => issued.scope === DEVICE_ENTRY_SCOPE,
+        );
+        assert.strictEqual(scoped.length, 2);
+        for (const [token] of scoped) {
+          const uses = fake.received.filter((request) => request.includes(token));
+          assert.strictEqual(uses.length, 1);
+          assert.isTrue(
+            fake.handOvers.some((request) => request.authorization === `Bearer ${token}`),
+          );
+        }
+        // The sign-in's own access token, with openid, never goes to the hand-over.
+        const general = [...fake.accessTokens].filter(
+          ([, issued]) => issued.scope !== DEVICE_ENTRY_SCOPE,
+        );
+        for (const [token] of general) {
+          assert.isFalse(fake.received.some((request) => request.includes(token)));
+        }
+      }),
+    ),
+  );
+
+  it.effect("leaves openid beside the scope to Auth, which refuses it with 401", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        fake.settings.scopedRefresh = "keeps-openid";
+        const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
+        assert.deepStrictEqual(
+          isHandOverError(error) ? [error.reason, error.status, error.code] : [error._tag],
+          ["unauthorized", 401, "unauthorized"],
+        );
+        assert.deepStrictEqual(fake.refreshScopes, [DEVICE_ENTRY_SCOPE, DEVICE_ENTRY_SCOPE]);
+        assert.strictEqual(fake.handOvers.length, 2);
+        for (const request of fake.handOvers) {
+          const token = (request.authorization ?? "").replace(/^Bearer /u, "");
+          assert.deepStrictEqual(fake.accessTokens.get(token), {
+            scope: `openid ${DEVICE_ENTRY_SCOPE}`,
+            audiences: [DEVICE_ENTRY_SCOPE],
+          });
+        }
+        assert.strictEqual(yield* auth.state, "signedIn");
+      }),
+    ),
+  );
+
+  it.effect("sends no token with another audience or without the scope", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        const reasons: Array<string> = [];
+        for (const mode of ["two-audiences", "drops-scope"] as const) {
+          fake.settings.scopedRefresh = mode;
+          const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
+          reasons.push(isHandOverError(error) ? error.reason : error._tag);
+        }
+        assert.deepStrictEqual(reasons, ["scope-not-granted", "scope-not-granted"]);
+        assert.deepStrictEqual(fake.handOvers, []);
+        assert.strictEqual(yield* auth.state, "signedIn");
       }),
     ),
   );
@@ -975,7 +1176,6 @@ describe("AuthClient's secrets", () => {
         const auth = yield* client();
         yield* signInThroughBrowser(auth, opened);
         yield* auth.handOver(ENVIRONMENT_ORIGIN);
-        yield* TestClock.adjust(Duration.seconds(fake.settings.accessTokenSeconds));
         yield* auth.handOver(ENVIRONMENT_ORIGIN);
         const messages: Array<string> = [];
         fake.settings.handOverStatus = 409;
@@ -983,7 +1183,6 @@ describe("AuthClient's secrets", () => {
         yield* auth.signOut;
         yield* signInThroughBrowser(auth, opened);
         fake.settings.refresh = "reject";
-        yield* TestClock.adjust(Duration.seconds(fake.settings.accessTokenSeconds));
         const refused = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
         messages.push(refused.message, String(refused), JSON.stringify(refused));
 
