@@ -10,12 +10,20 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
+import * as HostProcess from "@lazurio/app-shared/HostProcess";
+import * as Effect from "effect/Effect";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const APP_DIRECTORY = NodePath.resolve(import.meta.dirname, "..");
 const osSandbox = process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true";
+// Windows and Linux keep the app in the notification area; a Mac keeps it in the Dock, with no
+// tray and no notice (Lifecycle.keepsRunningInTray). A test reads it from HostProcess.Platform.
+const withTray = (body: (hasTray: boolean) => Promise<void>) =>
+  Effect.flatMap(HostProcess.Platform, (platform) =>
+    Effect.promise(() => body(platform !== "darwin")),
+  );
 
 interface Launched {
   readonly app: ElectronApplication;
@@ -79,6 +87,22 @@ const clickTray = (launched: Launched, index: number) =>
     menu.items[item]?.click();
   }, index);
 
+// Opens the window again as the person does: the tray's Open, or a click on the Mac's Dock icon.
+const openWindow = (launched: Launched, hasTray: boolean) =>
+  hasTray
+    ? clickTray(launched, 0)
+    : launched.app.evaluate(({ app }) => {
+        app.emit("activate");
+      });
+
+// Quits as the person does: the tray's Quit, or Cmd+Q on a Mac (app.quit).
+const quitApp = (launched: Launched, hasTray: boolean) =>
+  hasTray
+    ? clickTray(launched, 1)
+    : launched.app.evaluate(({ app }) => {
+        app.quit();
+      });
+
 const helperPids = async (launched: Launched): Promise<ReadonlyArray<number>> => {
   const pids: unknown = await launched.app.evaluate(() =>
     Object.values(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}),
@@ -121,28 +145,39 @@ describe("Lazurio App's life outside its window", () => {
     removeUserData(userData);
   });
 
-  it("hides its window when it closes, and runs on with both helpers", async () => {
-    await windowVisible(first, true);
-    await closeWindow(first);
-    assert.strictEqual(await windowVisible(first, false), 1);
-    for (const pid of await helperPids(first)) assert.isTrue(isAlive(pid));
-    assert.isNull(first.app.process().exitCode);
-    // The first hidden window says once where the app went, and remembers it in userData.
-    await outputLine(first, "lazurio-app-e2e notice ");
-    assert.match(first.output.join(""), /notification area|oznamovací oblasti/u);
-    assert.deepStrictEqual(
-      JSON.parse(NodeFS.readFileSync(NodePath.join(userData, "tray.json"), "utf8")),
-      { hiddenNoticeShown: true },
-    );
-  });
+  it.effect("hides its window when it closes, and runs on with both helpers", () =>
+    withTray(async (hasTray) => {
+      await windowVisible(first, true);
+      await closeWindow(first);
+      assert.strictEqual(await windowVisible(first, false), 1);
+      for (const pid of await helperPids(first)) assert.isTrue(isAlive(pid));
+      assert.isNull(first.app.process().exitCode);
+      if (!hasTray) {
+        // A Mac keeps the app in the Dock and says nothing.
+        assert.strictEqual(countOf(first, "lazurio-app-e2e notice "), 0);
+        return;
+      }
+      // The first hidden window says once where the app went, and remembers it in userData.
+      await outputLine(first, "lazurio-app-e2e notice ");
+      assert.match(first.output.join(""), /notification area|oznamovací oblasti/u);
+      assert.deepStrictEqual(
+        JSON.parse(NodeFS.readFileSync(NodePath.join(userData, "tray.json"), "utf8")),
+        { hiddenNoticeShown: true },
+      );
+    }),
+  );
 
-  it("opens the window again from the tray, and says nothing the second time it hides", async () => {
-    await clickTray(first, 0);
-    await windowVisible(first, true);
-    await closeWindow(first);
-    await windowVisible(first, false);
-    assert.strictEqual(countOf(first, "lazurio-app-e2e notice "), 1);
-  });
+  it.effect(
+    "opens the window again from the tray (the Dock on a Mac), and says nothing the second time it hides",
+    () =>
+      withTray(async (hasTray) => {
+        await openWindow(first, hasTray);
+        await windowVisible(first, true);
+        await closeWindow(first);
+        await windowVisible(first, false);
+        assert.strictEqual(countOf(first, "lazurio-app-e2e notice "), hasTray ? 1 : 0);
+      }),
+  );
 
   it("ends a second start with the same data folder at once and shows the first one's window", async () => {
     const electron: unknown = await first.app.evaluate(() => process.execPath);
@@ -162,13 +197,15 @@ describe("Lazurio App's life outside its window", () => {
   });
 
   // Last: it ends the app.
-  it("quits from the tray, and its helpers end with it", async () => {
-    const pids = await helperPids(first);
-    const ended = exited(first);
-    await clickTray(first, 1);
-    await ended;
-    for (const pid of pids) assert.isFalse(isAlive(pid));
-  });
+  it.effect("quits from the tray (Cmd+Q on a Mac), and its helpers end with it", () =>
+    withTray(async (hasTray) => {
+      const pids = await helperPids(first);
+      const ended = exited(first);
+      await quitApp(first, hasTray);
+      await ended;
+      for (const pid of pids) assert.isFalse(isAlive(pid));
+    }),
+  );
 });
 
 describe("Lazurio App started with --hidden", () => {
@@ -185,14 +222,18 @@ describe("Lazurio App started with --hidden", () => {
     removeUserData(userData);
   });
 
-  it("shows no window until the tray opens it, with every switch off", async () => {
-    const visible = await hidden.app.evaluate(({ BaseWindow }) =>
-      BaseWindow.getAllWindows().map((window) => window.isVisible()),
-    );
-    assert.deepStrictEqual(visible, [false]);
-    const device = await hidden.shell.evaluate(() => window.lazurio.device.getState());
-    assert.isTrue(device.switches.every((entry) => entry.switch.phase === "off"));
-    await clickTray(hidden, 0);
-    await windowVisible(hidden, true);
-  });
+  it.effect(
+    "shows no window until the tray (the Dock on a Mac) opens it, with every switch off",
+    () =>
+      withTray(async (hasTray) => {
+        const visible = await hidden.app.evaluate(({ BaseWindow }) =>
+          BaseWindow.getAllWindows().map((window) => window.isVisible()),
+        );
+        assert.deepStrictEqual(visible, [false]);
+        const device = await hidden.shell.evaluate(() => window.lazurio.device.getState());
+        assert.isTrue(device.switches.every((entry) => entry.switch.phase === "off"));
+        await openWindow(hidden, hasTray);
+        await windowVisible(hidden, true);
+      }),
+  );
 });
