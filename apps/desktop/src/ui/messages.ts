@@ -29,6 +29,8 @@ export interface Text {
   readonly stateUnreadable: Advice;
   readonly updates: UpdatesText;
   readonly device: DeviceText;
+  // The remote page's place while a tailnet's page cannot be reached yet (Waiting.tsx).
+  readonly waiting: { readonly title: string; readonly lead: string };
 }
 
 // Agent Desktop in the window's column (docs/adr/0006, point 5). "{tool}", "{application}",
@@ -109,6 +111,10 @@ const cs: Text = {
     lead: `Uložený stav tohoto tailnetu nejde otevřít jeho klíčem, a proto se tailnet nespustil. Ukončete ${APP_NAME}, smažte tento soubor a tuto složku a aplikaci spusťte znovu:`,
     after: "Počítač se pak do tailnetu přihlásí znovu a jako nové zařízení čeká na schválení.",
   },
+  waiting: {
+    title: "Prostředí se zatím nenačetlo",
+    lead: `Toto zařízení nejspíš čeká na schválení v Organizaci, nebo se síť ještě nepřipojila. Jakmile bude Prostředí dostupné, ${APP_NAME} ho načte sama.`,
+  },
   updates: {
     title: "Aktualizace",
     channel: "Kanál",
@@ -182,6 +188,10 @@ const en: Text = {
     lead: `The saved state of this tailnet does not open with its key, so the tailnet did not start. Quit ${APP_NAME}, delete this file and this folder, and start the app again:`,
     after:
       "The computer then signs in to the tailnet again and waits for approval as a new device.",
+  },
+  waiting: {
+    title: "The Environment has not loaded yet",
+    lead: `This device most likely waits for its approval in the Organization, or the network has not connected yet. ${APP_NAME} loads the Environment by itself once it can be reached.`,
   },
   updates: {
     title: "Updates",
