@@ -411,6 +411,20 @@ describe("Agent Desktop's switch", () => {
     assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
     await screenshot("stop-not-confirmed.png");
   });
+
+  // Last: it restarts the app, signed in from the test before, with a Device helper that does not
+  // start. The section still shows the app's real account and signs it out.
+  it("shows and signs out the app's account when the Device helper failed", async () => {
+    await app.close();
+    await launch({
+      LAZURIO_APP_E2E_DEVICE_HELPER: NodePath.resolve(import.meta.dirname, "no-such-helper.ts"),
+    });
+    const failed = shell.locator('section[data-device-state="failed"]');
+    await failed.locator('[data-device-account="signed-in"]').waitFor();
+    await failed.locator('[data-action="device-sign-out"]').click();
+    await failed.locator('[data-device-account="signed-out"]').waitFor();
+    await screenshot("failed-helper-signed-out.png");
+  });
 });
 
 // Signal 0 checks that the process exists and ends nothing.
