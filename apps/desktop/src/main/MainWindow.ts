@@ -98,6 +98,10 @@ const serveStatus = (status: () => AppStatus) =>
 // the seconds since the last input, which a long idle time points to.
 const PAGE_STATE = `({ visibility: document.visibilityState, width: innerWidth, height: innerHeight })`;
 
+// A view of the app's own pages with the bridge: sandboxed, isolated, no Node (DevicePanel.ts).
+export const localViewOptions = (preloadPath: string): Electron.WebContentsViewConstructorOptions =>
+  viewOptions({ preload: preloadPath });
+
 const viewOptions = (
   preferences: Electron.WebPreferences,
 ): Electron.WebContentsViewConstructorOptions => ({
@@ -258,15 +262,12 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     const { width, height } = window.contentView.getBounds();
     const shown = remote === undefined || options.statusShown();
     const column = remote === undefined ? width : shown ? Math.min(LOCAL_COLUMN_WIDTH, width) : 0;
-    local.setVisible(shown);
-    local.setBounds({ x: 0, y: 0, width: column, height });
+    // The bar spans the whole width over the column and the page, so its message, Stop and Agent
+    // Desktop stay usable in a narrow window and without a remote page (review of #62).
     const bar = Math.min(options.topBar?.height() ?? 0, height);
-    options.topBar?.view.setBounds({
-      x: column,
-      y: 0,
-      width: Math.max(0, width - column),
-      height: bar,
-    });
+    options.topBar?.view.setBounds({ x: 0, y: 0, width, height: bar });
+    local.setVisible(shown);
+    local.setBounds({ x: 0, y: bar, width: column, height: height - bar });
     const page = { x: column, y: bar, width: Math.max(0, width - column), height: height - bar };
     remote?.setBounds(page);
     waiting?.setBounds(page);

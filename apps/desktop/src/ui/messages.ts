@@ -73,6 +73,10 @@ export interface TrayText {
   readonly open: string;
   // Opens the window with the app's status column.
   readonly status: string;
+  readonly agentDesktop: string;
+  readonly stopAgent: string;
+  // The icon's tooltip while an agent works.
+  readonly workingTooltip: string;
   readonly quit: string;
   readonly hiddenNotice: string;
 }
@@ -121,6 +125,12 @@ export interface DeviceText {
   readonly retryingChannel: string;
   // The app waits for the helper to confirm that the channel is closed.
   readonly stopping: string;
+  // The column's way into the Agent Desktop window, the bar's button, and the label of "?".
+  readonly openWindow: string;
+  readonly barOpen: string;
+  readonly help: string;
+  // The technical code beside a sentence, for whoever helps the person.
+  readonly code: string;
   readonly problems: SwitchProblemText;
 }
 
@@ -241,14 +251,14 @@ const cs: Text = {
     off: "Vypnuto",
     connecting: "Připojuje se",
     connected: "Připojeno",
-    refused: "Odmítnuto ({reason})",
-    needsHandOver: "Odpojeno ({reason})",
+    refused: "Prostředí připojení odmítlo",
+    needsHandOver: "Připojuje se znovu…",
     agentDesktopPaired: "Na tomto počítači je spárovaná utilita Lazurio Agent Desktop.",
     agentDesktopCheckFailed:
       "Nepodařilo se ověřit, jestli je na tomto počítači spárovaná utilita Lazurio Agent Desktop.",
     working: "Pracuje agent: {tool}",
     workingIn: "Pracuje agent: {tool} v {application}",
-    agentWorking: "Na tomto počítači pracuje agent z Prostředí {label}.",
+    agentWorking: "Agent z Prostředí {label} pracuje na tomto počítači.",
     stop: "Zastavit",
     stopFailed: "Agenta se nepodařilo zastavit. Zkuste to znovu.",
     signedIn: "Přihlášeno k Lazurio účtu.",
@@ -261,9 +271,13 @@ const cs: Text = {
     actionFailed: "To se nepovedlo. Zkuste to znovu.",
     switchLabel: "Agent Desktop pro {host}",
     signingIn: "Přihlaste se v prohlížeči.",
-    retryingAuth: "Lazurio Auth teď neodpovídá. Zkusí se to znovu.",
+    retryingAuth: "Lazurio teď neodpovídá. Zkusí se to znovu.",
     retryingChannel: "Spojení skončilo. Připojuje se znovu…",
     stopping: "Vypíná se…",
+    openWindow: "Otevřít Agent Desktop",
+    barOpen: "Agent Desktop",
+    help: "Nápověda",
+    code: "Kód: {code}",
     problems: {
       signInFailed: "Přihlášení se nedokončilo. Zapněte vypínač znovu a přihlaste se v prohlížeči.",
       signedOut: "Přihlášení k Lazurio účtu skončilo. Zapněte vypínač znovu a přihlaste se.",
@@ -276,7 +290,7 @@ const cs: Text = {
       environmentStateConflict:
         "Prostředí teď počítač připojit nemůže, například proto, že se zrovna mění. Zapněte vypínač znovu později.",
       rejected:
-        "Lazurio Auth připojení odmítlo. Zapněte vypínač znovu. Když se to opakuje, odhlaste se a přihlaste znovu.",
+        "Lazurio připojení odmítlo. Zapněte vypínač znovu. Když se to opakuje, odhlaste se a přihlaste znovu.",
       helperUnavailable: `Agent Desktop připojení nepřevzal. Ukončete ${APP_NAME} a spusťte ji znovu.`,
       stopNotConfirmed: `Agent Desktop nepotvrdil vypnutí, a proto ho ${APP_NAME} ukončila i se všemi připojeními. Žádný agent teď na tomto počítači nepracuje. Agent Desktop znovu zapnete, až ${APP_NAME} ukončíte a spustíte znovu.`,
       agentDesktopPaired:
@@ -290,14 +304,19 @@ const cs: Text = {
       contractMismatch: `Prostředí se připojuje jinou verzí než ${APP_NAME}. Aktualizujte ${APP_NAME} a vypínač zapněte znovu.`,
       alreadyAttached:
         "Prostředí má z tohoto počítače ještě jiné spojení. Počkejte minutu a vypínač zapněte znovu.",
-      upgradeRefused: "Prostředí připojení odmítlo (HTTP {status}).",
+      upgradeRefused:
+        "Prostředí připojení odmítlo. Zapněte vypínač později znovu. Když se to opakuje, pošlete Adminovi své Organizace kód níže.",
       invalidAttachUrl: "Adresa tohoto Prostředí není platná. Odeberte ho a přidejte znovu.",
-      other: "Prostředí připojení odmítlo ({reason}).",
+      other:
+        "Prostředí připojení odmítlo. Když se to opakuje, pošlete Adminovi své Organizace kód níže.",
     },
   },
   tray: {
     open: `Otevřít ${APP_NAME}`,
     status: "Stav aplikace",
+    agentDesktop: "Agent Desktop…",
+    stopAgent: "Zastavit agenta",
+    workingTooltip: `${APP_NAME}: agent pracuje na tomto počítači`,
     quit: `Ukončit ${APP_NAME}`,
     hiddenNotice: `${APP_NAME} běží dál v oznamovací oblasti. Zapnutý Agent Desktop zůstává připojený. Ukončíte ji přes ikonu v oznamovací oblasti.`,
   },
@@ -399,8 +418,8 @@ const en: Text = {
     off: "Off",
     connecting: "Connecting",
     connected: "Connected",
-    refused: "Refused ({reason})",
-    needsHandOver: "Disconnected ({reason})",
+    refused: "The Environment refused the connection",
+    needsHandOver: "Reconnecting…",
     agentDesktopPaired: "The utility Lazurio Agent Desktop is paired on this computer.",
     agentDesktopCheckFailed:
       "Could not check whether the utility Lazurio Agent Desktop is paired on this computer.",
@@ -419,9 +438,13 @@ const en: Text = {
     actionFailed: "That did not work. Try again.",
     switchLabel: "Agent Desktop for {host}",
     signingIn: "Sign in in your browser.",
-    retryingAuth: "Lazurio Auth is not answering. Trying again.",
+    retryingAuth: "Lazurio is not answering. Trying again.",
     retryingChannel: "The connection ended. Reconnecting…",
     stopping: "Turning off…",
+    openWindow: "Open Agent Desktop",
+    barOpen: "Agent Desktop",
+    help: "Help",
+    code: "Code: {code}",
     problems: {
       signInFailed:
         "The sign-in did not finish. Turn the switch on again and sign in in your browser.",
@@ -434,7 +457,7 @@ const en: Text = {
       environmentStateConflict:
         "The Environment cannot connect a computer right now, for example because it is changing. Turn the switch on again later.",
       rejected:
-        "Lazurio Auth refused the connection. Turn the switch on again. If it keeps happening, sign out and sign in again.",
+        "Lazurio refused the connection. Turn the switch on again. If it keeps happening, sign out and sign in again.",
       helperUnavailable: `Agent Desktop did not take the connection. Quit ${APP_NAME} and start it again.`,
       stopNotConfirmed: `Agent Desktop did not confirm that it turned off, so ${APP_NAME} ended it with every connection. No agent is working on this computer now. To turn Agent Desktop on again, quit ${APP_NAME} and start it again.`,
       agentDesktopPaired:
@@ -449,14 +472,19 @@ const en: Text = {
       contractMismatch: `The Environment connects with another version than ${APP_NAME}. Update ${APP_NAME} and turn the switch on again.`,
       alreadyAttached:
         "The Environment still has another connection from this computer. Wait a minute and turn the switch on again.",
-      upgradeRefused: "The Environment refused the connection (HTTP {status}).",
+      upgradeRefused:
+        "The Environment refused the connection. Turn the switch on again later. If it keeps happening, send the code below to your Organization's Admin.",
       invalidAttachUrl: "The address of this Environment is not valid. Remove it and add it again.",
-      other: "The Environment refused the connection ({reason}).",
+      other:
+        "The Environment refused the connection. If it keeps happening, send the code below to your Organization's Admin.",
     },
   },
   tray: {
     open: `Open ${APP_NAME}`,
     status: "App status",
+    agentDesktop: "Agent Desktop…",
+    stopAgent: "Stop the agent",
+    workingTooltip: `${APP_NAME}: an agent is working on this computer`,
     quit: `Quit ${APP_NAME}`,
     hiddenNotice: `${APP_NAME} keeps running in the notification area. An Agent Desktop that is on stays connected. Quit it from its icon in the notification area.`,
   },

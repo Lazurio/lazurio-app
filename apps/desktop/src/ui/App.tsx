@@ -2,7 +2,8 @@ import { use, useEffect, useState } from "react";
 
 import { APP_NAME } from "../shared/appName.ts";
 import type { AppStatus, DeviceStatus } from "../shared/bridge.ts";
-import { AgentDesktopSection } from "./AgentDesktopSection.tsx";
+
+import { AgentDesktopSection } from "./AgentDesktopWindow.tsx";
 import { localeOf, messages } from "./messages.ts";
 import { tailnetLabel } from "./tailnetLabel.ts";
 import { UpdatesSection } from "./UpdatesSection.tsx";
@@ -76,6 +77,8 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
           )}
         </div>
       </header>
+      {/* While an agent works, or may (the helper was lost unconfirmed), the column shows Agent
+          Desktop's section with Stop or its warning first, as in the Agent Desktop window. */}
       {agentWorks ? <AgentDesktopSection status={device} text={text.device} /> : null}
       <section aria-label={text.tailnets}>
         <h2>{text.tailnets}</h2>
@@ -122,7 +125,20 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
         text={text.updates}
         deviceUnreachable={device?.state === "lost"}
       />
-      {agentWorks ? null : <AgentDesktopSection status={device} text={text.device} />}
+      {/* Otherwise Agent Desktop lives in its own window (DevicePanel.ts). */}
+      {device === null || device.state === "absent" || agentWorks ? null : (
+        <section aria-label={text.device.title} className="shell__device">
+          <h2>{text.device.title}</h2>
+          <button
+            type="button"
+            className="shell__link"
+            data-action="device-open-window"
+            onClick={() => void window.lazurio.device.openWindow()}
+          >
+            {text.device.openWindow}
+          </button>
+        </section>
+      )}
       <details className="shell__details" data-details="">
         <summary>{text.status.details}</summary>
         <dl className="shell__facts">

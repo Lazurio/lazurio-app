@@ -2,6 +2,7 @@ import * as Electron from "electron";
 
 import {
   DEVICE_ADD_ENVIRONMENT_CHANNEL,
+  DEVICE_OPEN_WINDOW_CHANNEL,
   DEVICE_REMOVE_ENVIRONMENT_CHANNEL,
   DEVICE_SET_SWITCH_CHANNEL,
   DEVICE_SIGN_OUT_CHANNEL,
@@ -66,6 +67,9 @@ const bridge: LazurioBridge = {
     },
     signOut: async () => {
       await Electron.ipcRenderer.invoke(DEVICE_SIGN_OUT_CHANNEL);
+    },
+    openWindow: async () => {
+      await Electron.ipcRenderer.invoke(DEVICE_OPEN_WINDOW_CHANNEL);
     },
   },
 };

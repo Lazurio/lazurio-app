@@ -19,6 +19,8 @@ export const DEVICE_REMOVE_ENVIRONMENT_CHANNEL = "lazurio:device-remove-environm
 export const DEVICE_SIGN_OUT_CHANNEL = "lazurio:device-sign-out";
 export const STATUS_PANEL_CHANNEL = "lazurio:status-panel";
 export const COPY_STATUS_CHANNEL = "lazurio:copy-status";
+// Opens the Agent Desktop window (DevicePanel.ts), from the bar that says an agent works.
+export const DEVICE_OPEN_WINDOW_CHANNEL = "lazurio:device-open-window";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -197,4 +199,6 @@ interface DeviceBridge {
   readonly removeEnvironment: (origin: string) => Promise<void>;
   // Signs out of the app's Lazurio account and turns every switch off.
   readonly signOut: () => Promise<void>;
+  // Opens the Agent Desktop window, or brings it to the front.
+  readonly openWindow: () => Promise<void>;
 }

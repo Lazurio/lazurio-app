@@ -2,9 +2,8 @@ import * as Effect from "effect/Effect";
 
 import * as Electron from "electron";
 
-import { APP_NAME } from "../shared/appName.ts";
 import type { TrayText } from "../ui/messages.ts";
-import { trayMenu } from "./Lifecycle.ts";
+import { trayMenu, trayTooltip } from "./Lifecycle.ts";
 
 // The app's icon in the notification area (Windows and Linux) for as long as the scope lives:
 // the tooltip names the app, its menu opens the window or quits, and a click or double-click shows
@@ -14,7 +13,14 @@ export interface TrayOptions {
   readonly text: TrayText;
   readonly show: () => void;
   readonly showStatus: () => void;
+  readonly agentDesktop: () => void;
+  readonly stopAgent: () => void;
   readonly quit: () => void;
+  // Whether an agent works now, and every change of that: the menu and tooltip follow it.
+  readonly agentWorking: () => boolean;
+  readonly changes: (listener: () => void) => () => void;
+  // Each menu the tray shows, for the end-to-end tests.
+  readonly menuBuilt: (menu: Electron.Menu) => void;
 }
 
 // The package carries no image of its own (electron-builder.yml names no icon), so the tray takes
@@ -34,12 +40,26 @@ export const serve = Effect.fn("Tray.serve")(function* (options: TrayOptions) {
         if (!tray.isDestroyed()) tray.destroy();
       }),
   );
-  tray.setToolTip(APP_NAME);
-  const menu = Electron.Menu.buildFromTemplate(
-    trayMenu(options.text, options).map((item) => ({ label: item.label, click: item.click })),
+  let shownWorking: boolean | undefined;
+  const update = () => {
+    const working = options.agentWorking();
+    if (working === shownWorking || tray.isDestroyed()) return;
+    shownWorking = working;
+    tray.setToolTip(trayTooltip(options.text, working));
+    const menu = Electron.Menu.buildFromTemplate(
+      trayMenu(options.text, options, working).map((item) => ({
+        label: item.label,
+        click: item.click,
+      })),
+    );
+    tray.setContextMenu(menu);
+    options.menuBuilt(menu);
+  };
+  update();
+  yield* Effect.acquireRelease(
+    Effect.sync(() => options.changes(update)),
+    (stop) => Effect.sync(stop),
   );
-  tray.setContextMenu(menu);
   tray.on("click", options.show);
   tray.on("double-click", options.show);
-  return menu;
 });

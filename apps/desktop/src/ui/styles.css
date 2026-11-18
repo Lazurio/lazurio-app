@@ -303,3 +303,89 @@ body {
   font-size: 13px;
   font-weight: 600;
 }
+
+/* The Agent Desktop window (DevicePanel.ts): the column's look in a window of its own. */
+.device-window {
+  max-width: none;
+}
+
+/* An explanation behind "?", shown on request. */
+.device__help summary {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.device__help summary::-webkit-details-marker {
+  display: none;
+}
+
+.device__help p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.shell__problem .shell__detail {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* The bar across the main window while an agent works (AgentBar.tsx), 36 px tall. */
+.agent-bar {
+  box-sizing: border-box;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.agent-bar__text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-bar button {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--surface);
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-bar .agent-bar__secondary {
+  background: transparent;
+  color: var(--text);
+}
+
+.agent-bar button:focus-visible,
+.device__help summary:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.agent-bar button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

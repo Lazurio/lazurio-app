@@ -1,4 +1,5 @@
-// End-to-end: Agent Desktop's switch in the local window (docs/adr/0006, contract v3 in the app).
+// End-to-end: Agent Desktop's switch in its window (docs/adr/0006, contract v3 in the app), which
+// --show-agent-desktop opens at the start, as a coordinator does over SSH.
 // The person adds the Environment the main window shows, turns its switch on, signs in in the
 // "system's browser" (the test follows the address the app hands over), and the app gives the
 // Device helper a hand-over from Lazurio Auth. A fake Lazurio Auth on the loopback, a fake Device
@@ -16,6 +17,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
+import { COLUMN_PAGE, localPage } from "./local-page.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const ENVIRONMENT_HOST = "launchpad.e2e.lazurio.io";
@@ -27,6 +29,8 @@ let issuer: string;
 let userData: string;
 let app: ElectronApplication;
 let shell: Page;
+// The main window's status column, hidden unless shown.
+let column: Page;
 let launchpadPort = 0;
 const output: Array<string> = [];
 // What the fake Lazurio Auth saw: each hand-over's origin, and each hand-over it gave.
@@ -173,8 +177,7 @@ const launch = async (fakeHelperSettings: Record<string, string> = {}) => {
   app = await _electron.launch({
     args: [
       NodePath.resolve(import.meta.dirname, ".."),
-      // The status column, hidden by default, is what this test reads.
-      "--show-status",
+      "--show-agent-desktop",
       `--host-resolver-rules=${rules.join(", ")}`,
       "--ignore-certificate-errors",
     ],
@@ -200,7 +203,13 @@ const launch = async (fakeHelperSettings: Record<string, string> = {}) => {
     },
   });
   app.process().stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
-  shell = await app.firstWindow();
+  await app.firstWindow();
+  // Every switch lives in the Agent Desktop window, which --show-agent-desktop opens before the
+  // column: the column is found by its address.
+  shell = await localPage(app, "view=agent-desktop");
+  column =
+    app.windows().find((page) => page.url() === COLUMN_PAGE) ??
+    (await app.waitForEvent("window", { predicate: (page) => page.url() === COLUMN_PAGE }));
 };
 
 beforeAll(async () => {
@@ -296,6 +305,7 @@ describe("Agent Desktop's switch", () => {
     assert.deepStrictEqual(calls, [
       "addEnvironment",
       "getState",
+      "openWindow",
       "removeEnvironment",
       "setSwitch",
       "signOut",
@@ -387,7 +397,7 @@ describe("Agent Desktop's switch", () => {
   // the window from within the minimize. A window that never comes back fails by the timeout.
   const backInView = (how: "hide" | "minimize") =>
     app.evaluate(async ({ BaseWindow }, action) => {
-      const window = BaseWindow.getAllWindows()[0];
+      const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
       if (window === undefined) return false;
       await new Promise<void>((resolve) => {
         if (action === "hide") {
@@ -401,9 +411,10 @@ describe("Agent Desktop's switch", () => {
       return window.isVisible() && !window.isMinimized();
     }, how);
 
-  // It restarts the app with an agent that works as soon as its channel opens: the status column
-  // stays visible, whatever Hide or View asks, until the work ends (docs/adr/0006).
-  it("keeps the status column and Stop visible while an agent works", async () => {
+  // It restarts the app with an agent that works as soon as its channel opens: the bar with Stop
+  // shows over the page while the work lasts, and a status column opened meanwhile stays
+  // (docs/adr/0006: Stop is never hidden while an agent works).
+  it("shows the bar with Stop and keeps the status column in view while an agent works", async () => {
     await app.close();
     await launch({ LAZURIO_FAKE_DEVICE_OUTCOMES: "working" });
     await shell.locator('[data-action="device-add"]').click();
@@ -412,25 +423,33 @@ describe("Agent Desktop's switch", () => {
     // @effect-diagnostics-next-line globalFetch:off - The person's browser, outside the app and Effect.
     await fetch(await handedToBrowser(from));
     await inPhase("channel", "working");
-    await shell.locator('[data-action="device-stop"]').waitFor();
-    assert.isTrue(await shell.locator('[data-action="status-hide"]').isDisabled());
+    const bar = await localPage(app, "view=agent-bar");
+    await bar.locator('[data-action="device-stop"]').waitFor();
     const columnShown = () =>
       app.evaluate(({ BaseWindow }) => {
-        const local = BaseWindow.getAllWindows()[0]?.contentView.children[0];
+        const local = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null)
+          ?.contentView.children[0];
         return local?.getVisible() === true && (local?.getBounds().width ?? 0) > 0;
       });
-    // Hide through the bridge, then View → App status in the window's menu: neither hides it.
-    await shell.evaluate(() => window.lazurio.setStatusPanel(false));
+    // The column opens by itself and stays (the safety net of #61), and the bar says that an agent
+    // works, with Stop.
+    assert.isTrue(await columnShown());
+    // Opened while an agent works, it stays: neither Hide nor View → App status hides it.
+    await column.evaluate(() => window.lazurio.setStatusPanel(true));
+    await column.evaluate(() => window.lazurio.status());
+    assert.isTrue(await columnShown());
+    assert.isTrue(await column.locator('[data-action="status-hide"]').isDisabled());
+    await column.evaluate(() => window.lazurio.setStatusPanel(false));
     assert.isTrue(await columnShown());
     await app.evaluate(({ Menu }) => {
       const items = Menu.getApplicationMenu()?.items.flatMap((item) => item.submenu?.items ?? []);
       items?.find((item) => item.accelerator === "CmdOrCtrl+Shift+D")?.click();
     });
-    await shell.evaluate(() => window.lazurio.status());
+    await column.evaluate(() => window.lazurio.status());
     assert.isTrue(await columnShown());
     // Closing the window, as with its X, keeps it shown while the agent works.
     const shownAfterClose = await app.evaluate(({ BaseWindow }) => {
-      const window = BaseWindow.getAllWindows()[0];
+      const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
       window?.close();
       return window?.isVisible() === true;
     });
@@ -441,13 +460,13 @@ describe("Agent Desktop's switch", () => {
     assert.isTrue(await backInView("hide"));
     const linux = (await shell.evaluate(() => navigator.platform)).startsWith("Linux");
     if (!linux) assert.isTrue(await backInView("minimize"));
-    // Once the work ends, Hide works again.
+    // Once the work ends, the bar goes and Hide works again.
     await environmentRow().locator('[data-action="device-switch"]').click();
     await inPhase("off");
-    await shell.locator('[data-action="status-hide"]:not([disabled])').click();
-    await shell.evaluate(() => window.lazurio.status());
+    await bar.locator('[data-agent-bar="none"]').waitFor();
+    await column.locator('[data-action="status-hide"]:not([disabled])').click();
+    await column.evaluate(() => window.lazurio.status());
     assert.isFalse(await columnShown());
-    await shell.evaluate(() => window.lazurio.setStatusPanel(true));
     await environmentRow().locator('[data-action="device-remove"]').click();
     await shell.locator('[data-device-environments="none"]').waitFor();
     // The next test signs in again.

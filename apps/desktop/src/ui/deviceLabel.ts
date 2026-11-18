@@ -23,10 +23,10 @@ export const channelLabel = (channel: DeviceChannelState, text: DeviceText): str
         case "agent_desktop_check_failed":
           return text.agentDesktopCheckFailed;
         default:
-          return text.refused.replace("{reason}", channel.reason);
+          return text.refused;
       }
     case "needs-hand-over":
-      return text.needsHandOver.replace("{reason}", channel.reason);
+      return text.needsHandOver;
     case "working":
       return channel.application === ""
         ? text.working.replace("{tool}", channel.tool)
@@ -77,14 +77,22 @@ export const problemLabel = (problem: DeviceSwitchProblem, text: DeviceText): st
         case "already-attached":
           return problems.alreadyAttached;
         case "upgrade_refused":
-          return problems.upgradeRefused.replace("{status}", String(problem.httpStatus));
+          return problems.upgradeRefused;
         case "invalid_attach_url":
           return problems.invalidAttachUrl;
         default:
-          return problems.other.replace("{reason}", problem.reason);
+          return problems.other;
       }
   }
 };
+
+// The helper's code of a refusal, with its HTTP status, shown small beside the sentence.
+export const problemCode = (problem: DeviceSwitchProblem): string | null =>
+  problem.from !== "helper"
+    ? null
+    : problem.httpStatus === 0
+      ? problem.reason
+      : `${problem.reason} ${problem.httpStatus}`;
 
 // Where an Environment's switch is in words, and the problem that turned it off, if one did.
 export const switchLabel = (
