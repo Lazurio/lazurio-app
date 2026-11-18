@@ -4,6 +4,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@lazurio/app-shared/HostProcess";
 import * as Config from "effect/Config";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -16,8 +17,9 @@ import * as Stream from "effect/Stream";
 
 import * as Electron from "electron";
 
+import { APP_NAME } from "../shared/appName.ts";
 import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
-import { localeOf } from "../ui/messages.ts";
+import { localeOf, messages } from "../ui/messages.ts";
 
 import * as AuthClient from "./AuthClient.ts";
 import { DeviceActivity } from "./DeviceActivity.ts";
@@ -29,6 +31,7 @@ import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
 import * as KeystoreCheck from "./KeystoreCheck.ts";
 import * as Helpers from "./Helpers.ts";
+import * as Lifecycle from "./Lifecycle.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
 import * as NodeKeys from "./NodeKeys.ts";
@@ -37,6 +40,7 @@ import * as Tailnet from "./Tailnet.ts";
 import * as ReleaseFeed from "./ReleaseFeed.ts";
 import * as TailnetDirectory from "./TailnetDirectory.ts";
 import * as TailnetPolicy from "./TailnetPolicy.ts";
+import * as Tray from "./Tray.ts";
 import * as Updates from "./Updates.ts";
 import * as UpdatesIpc from "./UpdatesIpc.ts";
 
@@ -51,6 +55,14 @@ const openInSystemBrowser = (address: string) =>
   Effect.tryPromise({
     try: () => Electron.shell.openExternal(address),
     catch: () => new AuthClient.SignInError({ reason: "browser" }),
+  });
+
+// The notice of the first hidden window, as the system shows it.
+const systemNotice = (body: string) =>
+  Effect.sync(() => {
+    if (Electron.Notification.isSupported()) {
+      new Electron.Notification({ title: APP_NAME, body }).show();
+    }
   });
 
 // End-to-end tests only, and never in a packaged app: a remote page to load, and an observer
@@ -68,6 +80,9 @@ const testHooks = Effect.gen(function* () {
       authIssuer: Option.none<string>(),
       openBrowser: openInSystemBrowser,
       helperStarted: (_name: string, _pid: number) => {},
+      notice: systemNotice,
+      secondInstance: () => {},
+      trayMenu: (_menu: Electron.Menu) => {},
     };
   }
   // A launch may keep its data apart from the development profile, before the app is ready.
@@ -114,7 +129,21 @@ const testHooks = Effect.gen(function* () {
     helperPids[name] = pid;
   };
   const openBrowser = (address: string) => Effect.sync(() => observer.openExternally(address));
+  // The notice, a second start and the tray's menu, where a test can see and use them.
+  const notice = (body: string) =>
+    Effect.sync(() => {
+      process.stdout.write(`lazurio-app-e2e notice ${body}\n`);
+    });
+  const secondInstance = () => {
+    process.stdout.write("lazurio-app-e2e second-instance\n");
+  };
+  const trayMenu = (menu: Electron.Menu) => {
+    Reflect.set(globalThis, "lazurioAppE2eTrayMenu", menu);
+  };
   return {
+    notice,
+    secondInstance,
+    trayMenu,
     observer,
     remoteUrl,
     tailnetHelper,
@@ -270,7 +299,51 @@ const program = Effect.gen(function* () {
   const path = yield* Path.Path;
   Electron.app.setPath("userData", path.join(Electron.app.getPath("appData"), DATA_FOLDER));
   const hooks = yield* testHooks;
+  // One app per data folder, before any helper starts: a second start only shows the first one's
+  // window. The lock follows userData, so each end-to-end launch with its own has its own.
+  if (!Electron.app.requestSingleInstanceLock()) {
+    yield* Effect.logInfo("the app already runs; its window shows");
+    return;
+  }
+  const platform = yield* HostProcess.Platform;
+  // The window, once it exists, and whether it should show: a start at the sign-in to Windows is
+  // hidden until the person opens the app.
+  let mainWindow = Option.none<Electron.BaseWindow>();
+  let showWanted = !Lifecycle.startsHidden(process.argv);
+  const showWindow = () => {
+    showWanted = true;
+    if (Option.isNone(mainWindow) || mainWindow.value.isDestroyed()) return;
+    const window = mainWindow.value;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const secondInstance = () => {
+        hooks.secondInstance();
+        showWindow();
+      };
+      Electron.app.on("second-instance", secondInstance);
+      // A Mac's Dock shows the window again.
+      Electron.app.on("activate", showWindow);
+      return secondInstance;
+    }),
+    (secondInstance) =>
+      Effect.sync(() => {
+        Electron.app.off("second-instance", secondInstance);
+        Electron.app.off("activate", showWindow);
+      }),
+  );
   yield* Effect.promise(() => Electron.app.whenReady());
+  // A packaged app on Windows starts, hidden, when the person signs in (Lifecycle.loginItem).
+  const loginItem = Lifecycle.loginItem({ platform, packaged: Electron.app.isPackaged });
+  if (Option.isSome(loginItem)) {
+    Electron.app.setLoginItemSettings({
+      openAtLogin: loginItem.value.openAtLogin,
+      args: [...loginItem.value.args],
+    });
+  }
   const appPath = Electron.app.getAppPath();
 
   yield* Hardening.guardAllWebContents(hooks.observer);
@@ -464,32 +537,42 @@ const program = Effect.gen(function* () {
   yield* UpdatesIpc.serve(updates);
   // Only the app's local windows see Agent Desktop's state and may press Stop (DeviceIpc.ts).
   yield* DeviceIpc.serve(deviceControls);
-  // The app ends when its windows are closed, also while the main window is still opening (its
-  // remote page may wait for a tailnet's sign-in), and when opening it fails.
-  const allWindowsClosed = Effect.callback<void>((resume) => {
-    const listener = () => resume(Effect.void);
-    Electron.app.once("window-all-closed", listener);
-    return Effect.sync(() => {
-      Electron.app.off("window-all-closed", listener);
-    });
-  });
-  // Quitting the app another way than closing its windows (Cmd+Q on a Mac, SIGTERM from a session
-  // that logs out, or the update test on Linux) installs a downloaded update first, and a quit while
-  // that install waits for the computer joins it (Updates.quitDecision). The install quits the app
+  // The app ends only when it quits: Quit in the tray, Cmd+Q on a Mac, a session that ends, or
+  // opening the window failing. Closing the window hides it (Lifecycle.closeStep), so the app and
+  // Agent Desktop run on.
+  const quitRequested = yield* Deferred.make<void>();
+  const endProgram = () => {
+    Deferred.doneUnsafe(quitRequested, Effect.void);
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      // Only a window that is truly gone gets here; the app then has nothing to show.
+      Electron.app.on("window-all-closed", endProgram);
+    }),
+    () => Effect.sync(() => Electron.app.off("window-all-closed", endProgram)),
+  );
+  // Every quit while the program runs goes through its end (Lifecycle.beforeQuitStep): a
+  // downloaded update installs first, a quit while that install waits for the computer joins it
+  // (Updates.quitDecision), and the helpers stop before the app quits. The install quits the app
   // once its installer started.
   const services = yield* Effect.context<never>();
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       const beforeQuit = (event: Electron.Event) => {
         quitting = true;
-        const decision = Updates.quitDecision(
-          updates.current().state.phase,
-          Effect.runSyncWith(services)(deviceActivity.reachable),
-        );
-        if (decision === "quit") return;
         event.preventDefault();
+        const step = Lifecycle.beforeQuitStep(
+          Updates.quitDecision(
+            updates.current().state.phase,
+            Effect.runSyncWith(services)(deviceActivity.reachable),
+          ),
+        );
+        if (step === "end-program") {
+          endProgram();
+          return;
+        }
         // An install that does not start (the channel changed meanwhile) lets the quit through.
-        if (decision === "install") {
+        if (step === "install") {
           Effect.runForkWith(services)(
             updates.installOnQuit.pipe(
               Effect.flatMap((installed) =>
@@ -507,6 +590,18 @@ const program = Effect.gen(function* () {
         Electron.app.off("before-quit", beforeQuit);
       }),
   );
+  // The icon in the notification area keeps the app reachable while its window is hidden; a Mac
+  // keeps it in the Dock instead.
+  const text = messages[localeOf(Electron.app.getLocale())];
+  if (Lifecycle.keepsRunningInTray(platform)) {
+    hooks.trayMenu(
+      yield* Tray.serve({ text: text.tray, show: showWindow, quit: () => Electron.app.quit() }),
+    );
+  }
+  const hiddenNotice = yield* Lifecycle.noticeOnce(
+    path.join(Electron.app.getPath("userData"), "tray.json"),
+    hooks.notice(text.tray.hiddenNotice),
+  );
   yield* Effect.raceFirst(
     MainWindow.open({
       preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
@@ -520,8 +615,18 @@ const program = Effect.gen(function* () {
         const url = URL.parse(address);
         return url !== null && Option.isSome(tailnets.proxyFor(url.hostname));
       },
+      created: (window) => {
+        mainWindow = Option.some(window);
+      },
+      showOnLoad: () => showWanted,
+      closeStep: () => Lifecycle.closeStep(quitting),
+      hidden: () => {
+        showWanted = false;
+        if (Lifecycle.keepsRunningInTray(platform)) Effect.runForkWith(services)(hiddenNotice);
+      },
+      sessionEnds: () => Electron.app.quit(),
     }).pipe(Effect.andThen(Effect.never)),
-    allWindowsClosed,
+    Deferred.await(quitRequested),
   );
   // A downloaded update installs when the app ends, or the install a quit started finishes first.
   quitting = true;

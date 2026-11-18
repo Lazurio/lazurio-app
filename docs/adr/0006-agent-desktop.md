@@ -132,6 +132,12 @@ There is no device key in Auth and no Environment-side registry of computer keys
   - Stop and every other end of an engine ending its whole process tree (point 8).
 - **In, once contract v3 is set:** the app's sign-in and the token per Environment, each Environment's switch, and the Device helper's channel signing in with the token instead of v1's signature.
 - **Later:** the icon in the menu bar or notification area, showing the history (the helper keeps writing it), the macOS permission guide, the switch for commands, and macOS builds.
+  - **Brought forward for the pilot on Windows (2026-11-18):** the icon in the notification area and the start at the sign-in to Windows. Without them the agent loses the computer as soon as the person closes the window or signs in again.
+    - Closing the window hides it on Windows and Linux. The app, its helpers and every switch that is on run on.
+    - The icon's menu opens the window or quits. A quit always goes through the app's own end, which installs a downloaded update first and stops the helpers.
+    - A packaged app on Windows starts hidden at the person's sign-in (`--hidden`) with every switch off, because the consent lasts one run.
+    - One app runs per data folder; a second start shows the first one's window.
+    - A Mac keeps the Dock's behaviour and gets neither the icon in the menu bar nor a start at login yet.
 
 ### Contract v3 in the app (2026-11-17)
 
