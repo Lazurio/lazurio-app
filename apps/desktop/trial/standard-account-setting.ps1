@@ -71,3 +71,7 @@ finally {
   Remove-LocalUser -Name $name -ErrorAction SilentlyContinue
   Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
+
+# The runner's shell ends with the last native command's exit code; the expected missing key
+# above left 1 there.
+exit 0
