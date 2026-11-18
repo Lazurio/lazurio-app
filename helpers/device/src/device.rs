@@ -1509,21 +1509,28 @@ mod tests {
 
     /// The utility is paired right after a periodic check read the keychain, the worst moment:
     /// the channel closes within the window, counted from the pairing, whether the next check
-    /// answers `Paired` or hangs until its limit. The times are the guard's shortened 25 times
-    /// (window 600 ms, period 400 ms, limit 200 ms), and each check takes 180 ms, so a period
-    /// counted from the end of a check would overshoot the window.
+    /// answers `Paired` or hangs until its limit. The times are the guard's shortened (window
+    /// 2 s, period 1 s, limit 1 s) and each check takes 700 ms: 300 ms below the limit, so a slow
+    /// runner still answers in time, and long enough that a period counted from the end of a
+    /// check (1 s + 2 × 700 ms) would overshoot the window and its tolerance.
     #[test]
     fn a_utility_paired_while_a_channel_is_open_closes_it_within_the_window() {
         use crate::lazurio::app::device::v1::Connected;
         use crate::testkit::{FakeEnvironment, FakeUtility, PATIENCE, Session};
 
-        const WINDOW: Duration = Duration::from_millis(600);
-        const EVERY: Duration = Duration::from_millis(400);
-        const LIMIT: Duration = Duration::from_millis(200);
-        // Waking the guard's thread and closing the channel; far below what a period counted
-        // from the end of a check adds (180 ms).
-        const TOLERANCE: Duration = Duration::from_millis(120);
+        const WINDOW: Duration = Duration::from_millis(2000);
+        const EVERY: Duration = Duration::from_millis(1000);
+        const LIMIT: Duration = Duration::from_millis(1000);
+        const TAKES: Duration = Duration::from_millis(700);
+        // Waking the guard's thread and closing the channel; below what a period counted from
+        // the end of a check adds (700 ms).
+        const TOLERANCE: Duration = Duration::from_millis(250);
         const _: () = assert!(EVERY.as_millis() + LIMIT.as_millis() <= WINDOW.as_millis());
+        // A period from the end of a check overshoots: EVERY + 2 × TAKES > WINDOW + TOLERANCE.
+        const _: () = assert!(
+            EVERY.as_millis() + 2 * TAKES.as_millis() > WINDOW.as_millis() + TOLERANCE.as_millis()
+        );
+        const _: () = assert!(TAKES.as_millis() + 300 <= LIMIT.as_millis());
 
         for hangs in [false, true] {
             let environment = FakeEnvironment::start(|session: &mut Session| {
@@ -1532,7 +1539,7 @@ mod tests {
                 }
             });
             let utility = FakeUtility::absent();
-            utility.take(Duration::from_millis(180));
+            utility.take(TAKES);
             let (mut device, states, _locks, _) =
                 guarded_device(&environment, &utility, EVERY, LIMIT, None);
             start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
