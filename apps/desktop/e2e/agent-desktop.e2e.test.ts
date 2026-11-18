@@ -70,6 +70,36 @@ const idToken = (nonce: string) => {
   ].join(".");
 };
 
+// An unsigned access token as Auth narrows it: a refresh with exactly scope=lazurio-device-entry
+// answers that scope and its one audience (HumanAndMachine-ai/Auth docs/device-channel-entry.md).
+const accessToken = (scope: string) =>
+  [
+    segment({ alg: "none", typ: "JWT" }),
+    segment({
+      iss: issuer,
+      aud: scope === "lazurio-device-entry" ? "lazurio-device-entry" : "account",
+      azp: "lazurio-app",
+      sub: "e2e-person",
+      scope,
+      iat: 1_600_000_000,
+      exp: 4_102_444_800,
+    }),
+    "",
+  ].join(".");
+// Check 2 of device-hand-over: exactly the scope lazurio-device-entry and its one audience.
+const takesHandOver = (authorization: string | undefined) => {
+  const token = (authorization ?? "").replace(/^Bearer /u, "");
+  try {
+    const claims = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString()) as {
+      readonly scope?: string;
+      readonly aud?: string;
+    };
+    return claims.scope === "lazurio-device-entry" && claims.aud === "lazurio-device-entry";
+  } catch {
+    return false;
+  }
+};
+
 const json = (response: NodeHttp.ServerResponse, status: number, body: unknown) => {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
@@ -108,11 +138,11 @@ const serveAuth = async (request: NodeHttp.IncomingMessage, response: NodeHttp.S
         ...(form.get("grant_type") === "authorization_code" && nonce !== undefined
           ? { id_token: idToken(nonce) }
           : {}),
-        access_token: `access-${randomPart(16)}`,
+        access_token: accessToken(form.get("scope") ?? "openid lazurio-device-entry"),
         token_type: "Bearer",
         expires_in: 300,
         refresh_token: `refresh-${randomPart(16)}`,
-        scope: "openid lazurio-device-entry",
+        scope: form.get("scope") ?? "openid lazurio-device-entry",
         grant: form.get("grant_type"),
       });
     }
@@ -121,8 +151,8 @@ const serveAuth = async (request: NodeHttp.IncomingMessage, response: NodeHttp.S
       response.end();
       return;
     case "POST /lazurio-agent-entry/device-hand-over": {
-      if (!(request.headers.authorization ?? "").startsWith("Bearer access-")) {
-        return json(response, 401, {});
+      if (!takesHandOver(request.headers.authorization)) {
+        return json(response, 401, { error: "unauthorized" });
       }
       const origin = (JSON.parse(body) as { readonly origin?: string }).origin ?? "";
       handOverOrigins.push(origin);
