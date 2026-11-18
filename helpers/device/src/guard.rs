@@ -688,11 +688,12 @@ mod tests {
     /// - (b) once it is deleted, `Absent`;
     /// - (c) an entry in a keychain of the test's own. Unlocked it is `Paired`. The test locks it
     ///   with `security lock-keychain` (`security-framework` 3.7.0 can neither lock a keychain
-    ///   nor read its status) and proves the lock: reading the entry's data with the user
-    ///   interface off works while the keychain is unlocked and fails with
-    ///   `errSecInteractionNotAllowed` once it is locked. Then the check on the locked keychain
-    ///   is `Paired` or `Failed`, or does not answer within 10 s, which the guard's limit of 5 s
-    ///   turns into `Failed` and the test prints as "Failed (timed out)". Only `Absent` fails.
+    ///   nor read its status). The check on the locked keychain is `Paired` or `Failed`, or does
+    ///   not answer within 10 s, which the guard's limit of 5 s turns into `Failed` and the test
+    ///   prints as "Failed (timed out)". Only `Absent` fails. Then it proves the lock: reading the
+    ///   entry's data answered at once while the keychain was unlocked, and once it is locked it
+    ///   fails with `errSecInteractionNotAllowed` or waits for an unlock (macOS 26 then shows a
+    ///   prompt despite the user interface being off); a check that waited proves it too.
     ///
     /// An entry that needs authentication (an access control with user presence) lives in the
     /// data protection keychain, which an unsigned test binary without the
@@ -889,27 +890,47 @@ mod tests {
         })
         .expect("security runs");
         assert!(locked.success(), "(c) security lock-keychain: {locked}");
-        let (probed, owner) = (own.clone(), service.clone());
-        match must(began, "(c) probe the locked keychain", move || {
-            read_data(&probed, &owner)
-        }) {
-            Err(INTERACTION_NOT_ALLOWED) => {}
-            Ok(()) => panic!("(c) the keychain did not lock: its entry's data is still readable"),
-            Err(code) => panic!("(c) the keychain did not lock as expected: error {code}"),
-        }
-        assert!(ui_on(), "the user interface is on again after the probe");
-
-        match check("(c) keychain_check on the locked keychain", Some(own)) {
+        // The search comes first and the proof of the lock after it: on macOS 26 the probe's
+        // read of a locked keychain raises a prompt even with the user interface off (the test
+        // Mac, 2026-11-18), and a prompt that waits would hold the lock the guard's search needs.
+        // Nothing unlocks the keychain between the two steps.
+        let searched = check(
+            "(c) keychain_check on the locked keychain",
+            Some(own.clone()),
+        );
+        match &searched {
             // The guard's own limit of 5 s makes this Failed, and the channel stays closed.
             None => eprintln!("(c) a locked keychain: Failed (timed out)"),
             Some((found, took)) => {
                 eprintln!("(c) a locked keychain: {found:?} in {took:?}");
                 assert_ne!(
-                    found,
+                    *found,
                     Pairing::Absent,
                     "(c) a locked keychain is never Absent"
                 );
                 assert!(ui_on(), "the user interface is on again after a search");
+            }
+        }
+        if searched.is_none() {
+            // A search that waited past 10 s on a keychain that answered in milliseconds while
+            // unlocked waited for it to be unlocked; the probe would only queue behind it.
+            eprintln!("(c) the lock: proven by the search that waited for an unlock");
+        } else {
+            let (probed, owner) = (own.clone(), service.clone());
+            match step(began, "(c) probe the locked keychain", move || {
+                read_data(&probed, &owner)
+            }) {
+                // The unlocked probe answered at once, so a probe that waits asks for an unlock.
+                None => eprintln!("(c) the lock: proven by a probe that waits for an unlock"),
+                Some(Err(INTERACTION_NOT_ALLOWED)) => {
+                    eprintln!("(c) the lock: proven by errSecInteractionNotAllowed");
+                }
+                Some(Ok(())) => {
+                    panic!("(c) the keychain did not lock: its entry's data is still readable");
+                }
+                Some(Err(code)) => {
+                    panic!("(c) the keychain did not lock as expected: error {code}")
+                }
             }
         }
         drop(cleanup);
