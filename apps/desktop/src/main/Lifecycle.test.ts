@@ -11,6 +11,7 @@ import {
   beforeQuitStep,
   secondStart,
   showsStatus,
+  statusShownAfter,
   closeStep,
   keepsRunningInTray,
   loginItem,
@@ -175,4 +176,11 @@ describe("Lifecycle", () => {
       assert.strictEqual(shown, 1);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  it("keeps the status column while an agent works, whatever Hide or View asks", () => {
+    assert.isTrue(statusShownAfter(false, true));
+    assert.isTrue(statusShownAfter(true, true));
+    assert.isTrue(statusShownAfter(true, false));
+    assert.isFalse(statusShownAfter(false, false));
+  });
 });

@@ -1,8 +1,9 @@
 import type { AppStatus, DeviceStatus } from "./bridge.ts";
 
 // The app's status as plain text to paste into a message for support or an agent ("Copy status"
-// in the status column). It carries no secret and no address inside a tailnet: names, states,
-// versions and the problems the app itself words, nothing a person typed or Lazurio Auth issued.
+// in the status column). It carries no secret and no address: names, states, versions and codes
+// only. No problem text (a helper's, the updater's or a node's may name a path, a host or a feed),
+// no Environment's host and nothing a person typed or Lazurio Auth issued.
 export const statusText = (options: {
   readonly appName: string;
   readonly platform: string;
@@ -22,21 +23,20 @@ export const statusText = (options: {
       : status.tailnets.map(
           (tailnet) =>
             `  ${tailnet.tailnet}: ${tailnet.state}${
-              tailnet.state === "stopped"
-                ? ` (${tailnet.reason ?? "problem"}: ${tailnet.problem})`
-                : ""
+              tailnet.state === "stopped" ? ` (${tailnet.reason ?? "problem"})` : ""
             }`,
         )),
     "Helper programs:",
     ...status.helpers.map((helper) =>
       helper.state === "ready"
         ? `  ${helper.name}: ready ${helper.version}`
-        : `  ${helper.name}: failed (${helper.problem})`,
+        : `  ${helper.name}: failed`,
     ),
     `Agent Desktop: ${device.state}; account ${device.account}; agent ${agentLine(device.agent)}`,
+    // Each Environment by its place in the list, never by its host.
     ...device.switches.map(
-      (entry) =>
-        `  ${entry.host}: ${entry.switch.phase}${
+      (entry, index) =>
+        `  Environment ${index + 1}: ${entry.switch.phase}${
           entry.switch.phase === "off" && entry.switch.problem !== null
             ? ` (${entry.switch.problem.from}: ${entry.switch.problem.reason})`
             : ""
@@ -51,7 +51,7 @@ const updateLine = (state: AppStatus["updates"]["state"]): string => {
     case "off":
       return `off (${state.reason})`;
     case "failed":
-      return `failed (${state.problem})`;
+      return "failed";
     case "downloading":
     case "ready":
     case "installing":

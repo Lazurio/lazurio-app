@@ -45,6 +45,12 @@ const SHOW_STATUS_ARGUMENT = "--show-status";
 export const showsStatus = (argv: ReadonlyArray<string>): boolean =>
   argv.includes(SHOW_STATUS_ARGUMENT);
 
+// Whether the status column shows after a request: while an agent holds the computer it stays,
+// whatever Hide or View asked, so the window never hides that an agent works or its Stop
+// (docs/adr/0006); once the work ends, the person's choice counts again.
+export const statusShownAfter = (requested: boolean, agentWorks: boolean): boolean =>
+  requested || agentWorks;
+
 export const secondStart = (argv: ReadonlyArray<string>): "quit" | "show-status" | "show" =>
   argv.includes(QUIT_ARGUMENT) ? "quit" : showsStatus(argv) ? "show-status" : "show";
 

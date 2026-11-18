@@ -12,7 +12,12 @@ const STATUS: AppStatus = {
   ],
   tailnets: [
     { tailnet: "example-org", state: "running", addresses: ["100.64.0.7", "fd7a:115c:a1e0::7"] },
-    { tailnet: "other-org", state: "stopped", problem: "no keystore", reason: "no-keystore" },
+    {
+      tailnet: "other-org",
+      state: "stopped",
+      problem: "C:\\Users\\ada\\AppData\\Roaming\\Lazurio App\\tailnets\\other-org.key",
+      reason: "no-keystore",
+    },
   ],
   updates: { channel: "latest", state: { phase: "ready", version: "0.1.1" } },
 };
@@ -50,16 +55,42 @@ describe("statusText", () => {
         "Update channel: latest; update: ready 0.1.1",
         "Networks:",
         "  example-org: running",
-        "  other-org: stopped (no-keystore: no keystore)",
+        "  other-org: stopped (no-keystore)",
         "Helper programs:",
         "  lazurio-tailnet: ready 0.1.0-nightly.20261118.17",
-        "  lazurio-device: failed (the helper did not answer)",
+        "  lazurio-device: failed",
         "Agent Desktop: ready; account signed-in; agent working for Ada's Environment",
-        "  launchpad.ada.example-org.lazurio.io: off (auth: unknown-environment); channel off",
+        "  Environment 1: off (auth: unknown-environment); channel off",
         "",
       ].join("\n"),
     );
     assert.notInclude(text, "100.64");
     assert.notInclude(text, "fd7a");
+    // No Environment's host, and no problem text, which may name a path, host or feed.
+    assert.notInclude(text, "lazurio.io");
+    assert.notInclude(text, "C:\\Users");
+    assert.notInclude(text, "objects.githubusercontent.com");
+  });
+
+  it("names a failed update by its phase only, never by the updater's text", () => {
+    const text = statusText({
+      appName: "Lazurio App (Alpha)",
+      platform: "win32",
+      status: {
+        ...STATUS,
+        updates: {
+          channel: "nightly",
+          state: {
+            phase: "failed",
+            problem: "net::ERR_FAILED https://objects.githubusercontent.com/feed?token=secret",
+          },
+        },
+      },
+      device: DEVICE,
+      at: "2026-11-18T23:00:00.000Z",
+    });
+    assert.include(text, "Update channel: nightly; update: failed\n");
+    assert.notInclude(text, "token");
+    assert.notInclude(text, "objects.githubusercontent.com");
   });
 });

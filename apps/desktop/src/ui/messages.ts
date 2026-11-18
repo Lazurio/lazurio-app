@@ -40,6 +40,8 @@ export interface Text {
 interface StatusText {
   readonly title: string;
   readonly hide: string;
+  // Why Hide does not work while an agent holds the computer.
+  readonly hideWhileAgentWorks: string;
   readonly copy: string;
   readonly copied: string;
   readonly copyFailed: string;
@@ -303,6 +305,7 @@ const cs: Text = {
   status: {
     title: "Stav aplikace",
     hide: "Skrýt",
+    hideWhileAgentWorks: "Dokud agent pracuje na tomto počítači, stav aplikace zůstane vidět.",
     copy: "Kopírovat stav",
     copied: "Stav je zkopírovaný. Vložte ho do zprávy.",
     copyFailed: "Stav se nepodařilo zkopírovat.",
@@ -461,6 +464,7 @@ const en: Text = {
   status: {
     title: "App status",
     hide: "Hide",
+    hideWhileAgentWorks: "While an agent works on this computer, the app's status stays visible.",
     copy: "Copy status",
     copied: "The status is copied. Paste it into a message.",
     copyFailed: "The status could not be copied.",

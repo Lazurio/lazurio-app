@@ -369,7 +369,10 @@ const program = Effect.gen(function* () {
   let statusShown = Lifecycle.showsStatus(process.argv);
   let windowControls = Option.none<MainWindow.MainWindowControls>();
   let refreshMenu = () => {};
-  const setStatusShown = (shown: boolean) => {
+  // Set once Agent Desktop's controls exist; until then no agent can work.
+  let agentWorksNow = () => false;
+  const setStatusShown = (requested: boolean) => {
+    const shown = Lifecycle.statusShownAfter(requested, agentWorksNow());
     statusShown = shown;
     if (shown) showWindow();
     if (Option.isSome(windowControls)) windowControls.value.relayout();
@@ -715,10 +718,13 @@ const program = Effect.gen(function* () {
   // While an agent works on the computer, the status column with its Stop shows by itself: the
   // window then never hides that an agent holds the computer (docs/adr/0006), until Agent Desktop
   // has a bar of its own.
+  agentWorksNow = () => {
+    const agent = deviceControls.current().agent;
+    return agent !== null && agent !== "unknown";
+  };
   let agentWorked = false;
   const showWhileAgentWorks = () => {
-    const agent = deviceControls.current().agent;
-    const works = agent !== null && agent !== "unknown";
+    const works = agentWorksNow();
     if (works && !agentWorked) setStatusShown(true);
     agentWorked = works;
   };

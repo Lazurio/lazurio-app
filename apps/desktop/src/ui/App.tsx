@@ -48,12 +48,18 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
             type="button"
             className="shell__link"
             data-action="status-hide"
+            disabled={agentWorks}
             onClick={() => void window.lazurio.setStatusPanel(false)}
           >
             {text.status.hide}
           </button>
         </div>
         <p className="shell__subtitle">{text.status.title}</p>
+        {agentWorks ? (
+          <p className="shell__subtitle" data-status-stays="">
+            {text.status.hideWhileAgentWorks}
+          </p>
+        ) : null}
         <dl className="shell__facts">
           <dt>{text.version}</dt>
           <dd>{current.appVersion}</dd>
