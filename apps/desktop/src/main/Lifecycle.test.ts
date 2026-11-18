@@ -115,6 +115,27 @@ describe("Lifecycle", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("has saved the notice before it says it", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const directory = yield* fileSystem.makeTempDirectoryScoped();
+      const path = (yield* Path.Path).join(directory, "tray.json");
+      let savedWhenShown: unknown = null;
+      const notice = yield* noticeOnce(
+        path,
+        fileSystem.readFileString(path).pipe(
+          Effect.map((text) => JSON.parse(text)),
+          Effect.orElseSucceed(() => "missing"),
+          Effect.map((saved) => {
+            savedWhenShown = saved;
+          }),
+        ),
+      );
+      yield* notice;
+      assert.deepStrictEqual(savedWhenShown, { hiddenNoticeShown: true });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("shows the notice once per run when it cannot be saved", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

@@ -92,6 +92,7 @@ export const noticeOnce = Effect.fn("Lifecycle.noticeOnce")(function* (
   return Effect.suspend(() => {
     if (shown) return Effect.void;
     shown = true;
-    return show.pipe(Effect.andThen(save));
+    // Saved first, then said: whoever hears the notice finds it remembered (review of #57).
+    return save.pipe(Effect.andThen(show));
   });
 });

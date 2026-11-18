@@ -2329,17 +2329,18 @@ mod tests {
                 .expect("the cancelled call ended on the lock"),
             "env-a"
         );
-        lock.with(|lock| lock.try_begin("env-b", "Environment B", Instant::now(), 2))
-            .expect("another Environment takes the computer");
-
         // A new engine, initialized again, serves the session; nothing answered the cancelled
-        // call.
+        // call. It is waited for before another Environment takes the computer: between fork and
+        // exec the new engine's process still holds a copy of the device lock's descriptor, so a
+        // try right then sees another process holding it (the macOS job of #57).
         assert!(matches!(
             tapped
                 .engines
                 .until(|event| matches!(event, EngineEvent::Started(_))),
             EngineEvent::Started(_)
         ));
+        lock.with(|lock| lock.try_begin("env-b", "Environment B", Instant::now(), 2))
+            .expect("another Environment takes the computer");
         tapped.send(json!({"jsonrpc": "2.0", "id": "p9", "method": "ping"}));
         let (_, before) = tapped.environment.answer(&json!("p9"));
         assert!(
