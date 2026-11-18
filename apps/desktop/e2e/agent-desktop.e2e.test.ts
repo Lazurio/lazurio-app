@@ -382,20 +382,17 @@ describe("Agent Desktop's switch", () => {
     await shell.locator(`[data-device-add="${ENVIRONMENT}"]`).waitFor();
   });
 
-  // Hides or minimizes the window and waits until it shows again: after "show", or after
-  // "minimize" and then "restore". A window that never comes back fails the test by its timeout.
+  // Hides or minimizes the window and waits until it shows again ("show" after a hide, "restore"
+  // after a minimize). The listener is in place before the action: on Windows the app restores
+  // the window from within the minimize. A window that never comes back fails by the timeout.
   const backInView = (how: "hide" | "minimize") =>
     app.evaluate(async ({ BaseWindow }, action) => {
       const window = BaseWindow.getAllWindows()[0];
       if (window === undefined) return false;
       await new Promise<void>((resolve) => {
-        if (action === "hide") {
-          window.once("show", () => resolve());
-          window.hide();
-        } else {
-          window.once("minimize", () => window.once("restore", () => resolve()));
-          window.minimize();
-        }
+        window.once(action === "hide" ? "show" : "restore", () => resolve());
+        if (action === "hide") window.hide();
+        else window.minimize();
       });
       return window.isVisible() && !window.isMinimized();
     }, how);
