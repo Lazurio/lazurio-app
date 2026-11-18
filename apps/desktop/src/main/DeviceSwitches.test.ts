@@ -59,6 +59,7 @@ const fakeAuth = (initial: AuthState) =>
         if (answer !== "ok") return yield* answer;
         yield* SubscriptionRef.set(state, "signedIn");
       }),
+      networks: Effect.succeed([]),
       signOut: Effect.gen(function* () {
         calls.signOut += 1;
         yield* SubscriptionRef.set(state, "signedOut");

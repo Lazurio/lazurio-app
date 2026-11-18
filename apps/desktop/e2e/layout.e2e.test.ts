@@ -192,6 +192,8 @@ describe("Lazurio App GEN4 with a remote page", () => {
           addresses: ["100.64.0.12", "fd7a:115c:a1e0:ab12:4843:cd96:6240:c"],
         },
       ],
+      tailnetSource: "development",
+      account: "signed-out",
       updates: { channel: "nightly", state: { phase: "off", reason: "unpackaged" } },
     };
     await app.evaluate(

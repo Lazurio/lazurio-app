@@ -30,6 +30,23 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
     return stop;
   }, []);
   const text = messages[localeOf(navigator.language)];
+  // The sign-in for the person's networks; the app starts again once it has them.
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInFailed, setSignInFailed] = useState(false);
+  const signIn = () => {
+    setSigningIn(true);
+    setSignInFailed(false);
+    window.lazurio.signIn().then(
+      () => setSigningIn(false),
+      () => {
+        setSigningIn(false);
+        setSignInFailed(true);
+      },
+    );
+  };
+  const offersSignIn =
+    current.account === "signed-out" &&
+    (current.tailnetSource === "built-in" || current.tailnetSource === "lazurio-auth");
   return (
     <main className="shell" data-status={live ? "live" : "initial"}>
       <header className="shell__header">
@@ -59,6 +76,24 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
       </section>
       <section aria-label={text.tailnets}>
         <h2>{text.tailnets}</h2>
+        {offersSignIn ? (
+          <div className="shell__sign-in" data-networks-sign-in="">
+            <p>{text.networksSignInHint}</p>
+            <button
+              type="button"
+              data-action="networks-sign-in"
+              disabled={signingIn}
+              onClick={signIn}
+            >
+              {text.networksSignIn}
+            </button>
+            {signInFailed ? (
+              <p className="shell__reason shell__problem" role="alert">
+                {text.networksSignInFailed}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {current.tailnets.length === 0 ? (
           <p className="shell__empty">{text.noTailnets}</p>
         ) : (
