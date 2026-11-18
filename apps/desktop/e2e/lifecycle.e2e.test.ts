@@ -27,6 +27,9 @@ const withTray = (body: (hasTray: boolean) => Promise<void>) =>
 
 interface Launched {
   readonly app: ElectronApplication;
+  // The app's process, kept at launch: once the app has quit, Playwright on Windows no longer
+  // answers `app.process()`.
+  readonly child: ReturnType<ElectronApplication["process"]>;
   readonly shell: Page;
   readonly output: Array<string>;
 }
@@ -38,12 +41,13 @@ const launch = async (userData: string, args: ReadonlyArray<string> = []): Promi
     chromiumSandbox: osSandbox,
     env: { ...process.env, LAZURIO_APP_E2E: "true", LAZURIO_APP_E2E_USER_DATA: userData },
   });
-  app.process().stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
+  const child = app.process();
+  child.stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
   const shell = await app.firstWindow();
   await shell.locator('main[data-status="live"]').waitFor();
   await shell.locator('[data-helper="lazurio-tailnet"][data-state="ready"]').waitFor();
   await shell.locator('[data-helper="lazurio-device"][data-state="ready"]').waitFor();
-  return { app, shell, output };
+  return { app, child, shell, output };
 };
 
 // Resolves once the app has written the line, including earlier output.
@@ -51,10 +55,10 @@ const outputLine = (launched: Launched, line: string): Promise<void> =>
   new Promise((resolve) => {
     const check = () => {
       if (!launched.output.join("").includes(line)) return;
-      launched.app.process().stdout?.off("data", check);
+      launched.child.stdout?.off("data", check);
       resolve();
     };
-    launched.app.process().stdout?.on("data", check);
+    launched.child.stdout?.on("data", check);
     check();
   });
 const countOf = (launched: Launched, line: string): number =>
@@ -123,7 +127,7 @@ const isAlive = (pid: number): boolean => {
 
 const exited = (launched: Launched): Promise<void> =>
   new Promise((resolve) => {
-    const child = launched.app.process();
+    const child = launched.child;
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
     child.once("exit", () => resolve());
   });
@@ -138,7 +142,7 @@ describe("Lazurio App's life outside its window", () => {
   });
 
   afterAll(async () => {
-    const child = first?.app.process();
+    const child = first?.child;
     if (child !== undefined && child.exitCode === null && child.signalCode === null) {
       await first.app.close();
     }
@@ -151,7 +155,7 @@ describe("Lazurio App's life outside its window", () => {
       await closeWindow(first);
       assert.strictEqual(await windowVisible(first, false), 1);
       for (const pid of await helperPids(first)) assert.isTrue(isAlive(pid));
-      assert.isNull(first.app.process().exitCode);
+      assert.isNull(first.child.exitCode);
       if (!hasTray) {
         // A Mac keeps the app in the Dock and says nothing.
         assert.strictEqual(countOf(first, "lazurio-app-e2e notice "), 0);
