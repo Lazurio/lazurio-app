@@ -322,9 +322,10 @@ const program = Effect.gen(function* () {
   };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const secondInstance = () => {
+      const secondInstance = (_event: Electron.Event, argv: ReadonlyArray<string>) => {
         hooks.secondInstance();
-        showWindow();
+        if (Lifecycle.secondStart(argv) === "quit") Electron.app.quit();
+        else showWindow();
       };
       Electron.app.on("second-instance", secondInstance);
       // A Mac's Dock shows the window again.

@@ -9,6 +9,7 @@ import { messages } from "../ui/messages.ts";
 import {
   APP_USER_MODEL_ID,
   beforeQuitStep,
+  secondStart,
   closeStep,
   keepsRunningInTray,
   loginItem,
@@ -41,6 +42,12 @@ describe("Lifecycle", () => {
     assert.isTrue(startsHidden(["Lazurio App.exe", "--hidden"]));
     assert.isFalse(startsHidden(["Lazurio App.exe"]));
     assert.isFalse(startsHidden(["electron", ".", "--hidden-thing"]));
+  });
+
+  it("quits on a second start with --quit, and shows the window on any other", () => {
+    assert.strictEqual(secondStart(["Lazurio App.exe", "--quit"]), "quit");
+    assert.strictEqual(secondStart(["Lazurio App.exe"]), "show");
+    assert.strictEqual(secondStart(["Lazurio App.exe", "--hidden"]), "show");
   });
 
   it("starts at the sign-in to Windows only from a packaged app on Windows", () => {

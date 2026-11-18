@@ -212,6 +212,44 @@ describe("Lazurio App's life outside its window", () => {
   );
 });
 
+describe("Lazurio App asked to quit by a second start with --quit", () => {
+  let userData: string;
+  let running: Launched;
+
+  beforeAll(async () => {
+    userData = temporaryUserData();
+    running = await launch(userData);
+  });
+
+  afterAll(async () => {
+    if (running?.child.exitCode === null && running.child.signalCode === null) {
+      await running.app.close();
+    }
+    removeUserData(userData);
+  });
+
+  it("quits as with the tray's Quit, and its helpers end with it", async () => {
+    const pids = await helperPids(running);
+    const ended = exited(running);
+    const electron: unknown = await running.app.evaluate(() => process.execPath);
+    if (typeof electron !== "string") return assert.fail("no Electron to start");
+    const second = NodeChildProcess.spawn(
+      electron,
+      [APP_DIRECTORY, "--quit", ...(osSandbox ? [] : ["--no-sandbox"])],
+      {
+        env: { ...process.env, LAZURIO_APP_E2E: "true", LAZURIO_APP_E2E_USER_DATA: userData },
+        stdio: "ignore",
+      },
+    );
+    assert.strictEqual(
+      await new Promise<number | null>((resolve) => second.once("exit", resolve)),
+      0,
+    );
+    await ended;
+    for (const pid of pids) assert.isFalse(isAlive(pid));
+  });
+});
+
 describe("Lazurio App started with --hidden", () => {
   let userData: string;
   let hidden: Launched;

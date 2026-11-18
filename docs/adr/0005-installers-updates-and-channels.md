@@ -117,7 +117,7 @@ An update replaces the app's files and nothing else. Everything the person has l
 - **In CI, on every pull request that changes the updater, the packaging or the release workflows,** and before every release:
   - Windows (NSIS) and Linux (AppImage) build the same commit twice, as `0.0.1` (N) and `0.0.2` (N+1), with the feed of N pointing at a local HTTP server on the loopback that serves N+1's metadata and packages. The versions are stable ones: point 3 offers no other shape (amended 2026-11-15, see below).
   - The test writes a marker into N's `userData` and starts N. N seals a check key with `safeStorage` at its first start (`KeystoreCheck.ts`).
-  - It waits for N's log line that the update is downloaded, verified and ready, lets N install it (closing its window on Windows, SIGTERM on Linux), and waits until the app runs again.
+  - It waits for N's log line that the update is downloaded, verified and ready, lets N install it (on Windows a second start with `--quit`, as the tray's Quit does, since a closed window only hides the app; SIGTERM on Linux), and waits until the app runs again.
   - It checks that the installed app is N+1, that the marker is there and that N+1 opened the key N sealed.
 - **The packaged app reads no environment setting** (AGENTS.md). The test feed is therefore baked in at packaging (`publish` of the test build), never read at runtime.
 - **macOS joins the test once builds are signed,** because Squirrel.Mac refuses unsigned updates.

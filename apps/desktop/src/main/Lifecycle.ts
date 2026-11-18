@@ -27,6 +27,14 @@ const HIDDEN_ARGUMENT = "--hidden";
 export const startsHidden = (argv: ReadonlyArray<string>): boolean =>
   argv.includes(HIDDEN_ARGUMENT);
 
+// `Lazurio App.exe --quit` while the app runs: the running app quits as with the tray's Quit
+// (through before-quit, so a ready update installs). A closed window only hides it, so this is
+// how a script, the Windows update trial among them, ends it without killing it.
+const QUIT_ARGUMENT = "--quit";
+
+export const secondStart = (argv: ReadonlyArray<string>): "quit" | "show" =>
+  argv.includes(QUIT_ARGUMENT) ? "quit" : "show";
+
 // The app's AppUserModelID on Windows: electron-builder gives the Start menu shortcut the
 // `appId` of electron-builder.yml, and a toast shows only when the app names the same one. The
 // sign-in's `Run` value carries it as its name, so the uninstaller removes exactly that value
