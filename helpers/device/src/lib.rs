@@ -1,11 +1,12 @@
 //! The Device helper of Lazurio App. The app's main process starts it and speaks the helper
 //! protocol of `proto/lazurio/app/helper/v1` with it over standard input and output, and the
 //! Device's work of `proto/lazurio/app/device/v1` (ADR 0006): the attach channel of each
-//! Environment (`channel`), the lock of one agent (`lock`) and the history without content
-//! (`history`). Each session passes MCP to the engine that operates the computer's applications
-//! (`Lazurio/agent-desktop`, `engine`), through the tap that holds the lock around every tool
-//! call (`tap`); without the engine, the channel serves no tools (`mcp_stub`). Packaging the
-//! engine next to the helper is a later step (ADR 0006 step 4).
+//! Environment (`channel`, contract v3 with Lazurio Auth's hand-over), the guard against the
+//! earlier utility Lazurio Agent Desktop (`guard`), the lock of one agent (`lock`) and the history
+//! without content (`history`). Each session passes MCP to the engine that operates the computer's
+//! applications (`Lazurio/agent-desktop`, `engine`), through the tap that holds the lock around
+//! every tool call (`tap`); without the engine, the channel serves no tools (`mcp_stub`). Packaging
+//! the engine next to the helper is a later step (ADR 0006 step 4).
 
 use std::io::{self, Read, Write};
 use std::sync::{Arc, mpsc};
@@ -40,6 +41,7 @@ pub mod lazurio {
 pub mod channel;
 pub mod device;
 pub mod engine;
+pub mod guard;
 pub mod history;
 pub mod lock;
 pub mod mcp_stub;
@@ -398,7 +400,7 @@ mod tests {
         assert_eq!(
             replies[1].kind,
             Some(helper_message::Kind::DeviceReady(DeviceReady {
-                contract_version: 1
+                contract_version: 3
             }))
         );
     }
@@ -460,9 +462,9 @@ mod tests {
                 environment_id: environment_id.to_owned(),
                 environment_label: "Environment".to_owned(),
                 attach_url: testkit::ATTACH_URL.to_owned(),
-                device_id: testkit::DEVICE_ID.to_owned(),
-                key_seed: testkit::SEED.to_vec(),
+                hand_over: testkit::HAND_OVER.to_vec(),
                 proxy,
+                ..StartChannel::default()
             })),
         }
     }
@@ -483,7 +485,7 @@ mod tests {
     fn a_started_channel_reports_its_states_and_no_secret_ever_leaves_the_helper() {
         use super::lazurio::app::device::v1::{Connected, Connecting, TailnetProxy, channel_state};
         let environment = testkit::FakeEnvironment::start(|session: &mut testkit::Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.until_closed();
             }
         });
@@ -532,8 +534,9 @@ mod tests {
         replies.drain();
         let all = &replies.all;
         assert!(
-            !all.windows(32).any(|window| window == testkit::SEED),
-            "no key"
+            !all.windows(testkit::HAND_OVER.len())
+                .any(|window| window == testkit::HAND_OVER),
+            "no hand-over"
         );
         for secret in [
             b"proxy-secret-7f3a".as_slice(),
@@ -552,12 +555,12 @@ mod tests {
     fn shutdown_closes_every_channel_within_two_seconds() {
         use super::lazurio::app::device::v1::{Connected, channel_state};
         let environment = testkit::FakeEnvironment::start(|session: &mut testkit::Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.until_closed();
             }
         });
         let mute = testkit::MuteServer::start();
-        // Contract v1's timing: a quiet session pings only every 15 s, and a handshake waits 20 s.
+        // Contract v3's timing: a quiet session pings only every 15 s, and a handshake waits 20 s.
         let (input, mut replies, thread) =
             serve_in_background(environment.connector(), channel::Timing::default());
         input
@@ -608,7 +611,7 @@ mod tests {
     fn shutdown_ends_the_engine_within_two_seconds() {
         let _forks = testkit::spawning();
         let environment = testkit::FakeEnvironment::start(|session: &mut testkit::Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.until_closed();
             }
         });
@@ -901,7 +904,7 @@ mod tests {
     #[test]
     fn the_end_of_input_closes_every_channel_within_two_seconds() {
         let environment = testkit::FakeEnvironment::start(|session: &mut testkit::Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.until_closed();
             }
         });
@@ -934,6 +937,35 @@ mod tests {
             Some(helper_message::Kind::DeviceStopped(DeviceStopped {
                 all_engines_ended: true
             }))
+        );
+    }
+
+    #[test]
+    fn a_malformed_start_channel_stops_the_helper_and_no_word_of_it_carries_the_hand_over() {
+        // A StartChannel cut off inside its hand-over, its last field.
+        let mut frame = start_channel(2, "env-a", None).encode_to_vec();
+        frame.truncate(frame.len() - 3);
+        let mut input = frames(&[configure(1)]);
+        prost::encoding::encode_varint(frame.len() as u64, &mut input);
+        input.extend_from_slice(&frame);
+        let mut output = Vec::new();
+
+        let error = serve(&mut input.as_slice(), &mut output, "1.2.3").expect_err("malformed");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        // What main.rs writes to standard error when the helper stops.
+        let logged = format!("lazurio-device: helper stopped: {error} {error:?}");
+        let part = &testkit::HAND_OVER[..8];
+        assert!(
+            !logged
+                .as_bytes()
+                .windows(part.len())
+                .any(|window| window == part),
+            "{logged}"
+        );
+        assert!(
+            !output.windows(part.len()).any(|window| window == part),
+            "nothing of the hand-over in the helper's output"
         );
     }
 

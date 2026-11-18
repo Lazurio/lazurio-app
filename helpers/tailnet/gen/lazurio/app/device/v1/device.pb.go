@@ -8,9 +8,10 @@
 // use this computer while its owner allows it (decision 0248, ADR 0006). The messages travel in
 // the envelope of lazurio.app.helper.v1 from field 20 on.
 //
-// The main process owns every switch and every key. The helper opens a channel only on
-// StartChannel, keeps the key only in memory, writes only to the data directory it is given, and
-// reports every change of state on its own.
+// The main process owns every switch and every secret. The helper opens a channel only on
+// StartChannel, keeps its hand-over only in memory and only until it was sent once, writes only to
+// the data directory it is given, and reports every change of state on its own. It opens no channel
+// while the earlier utility Lazurio Agent Desktop is paired on the computer.
 
 package devicev1
 
@@ -90,7 +91,8 @@ func (x *ConfigureDevice) GetComputerName() string {
 // The answer to ConfigureDevice.
 type DeviceReady struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The newest version of contract v1 of the attach session this helper speaks.
+	// The version of the attach contract this helper speaks: 3, the hand-over of Lazurio Auth in the
+	// upgrade and `ready` or `denied` of version 3. Helpers before it spoke 1.
 	ContractVersion uint32 `protobuf:"varint,1,opt,name=contract_version,json=contractVersion,proto3" json:"contract_version,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -133,9 +135,14 @@ func (x *DeviceReady) GetContractVersion() uint32 {
 	return 0
 }
 
-// Opens the channel of one Environment and keeps it open, reconnecting with back-off, until
-// StopChannel. The main process sends it only while the person has the Environment's switch on.
-// The helper answers with the channel's state at once and sends every later change on its own.
+// Opens the channel of one Environment with one hand-over (contract v3) and keeps it open until
+// StopChannel, the end of its session or a refusal. The main process sends it only while the person
+// has the Environment's switch on. The helper answers with the channel's state at once and sends
+// every later change on its own.
+//
+// A hand-over opens one session at most: the helper never connects again by itself. When the
+// session ends, or the attempt fails, the helper reports NeedsHandOver, and the channel opens again
+// only with a new StartChannel carrying a new hand-over.
 type StartChannel struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The app's id for the Environment. Unique among the channels.
@@ -145,15 +152,24 @@ type StartChannel struct {
 	// The attach address, `wss://<the Environment's Lazurio host>/.lazurio/computers/attach`,
 	// without credentials or query.
 	AttachUrl string `protobuf:"bytes,3,opt,name=attach_url,json=attachUrl,proto3" json:"attach_url,omitempty"`
-	// The device id the Environment gave at pairing.
+	// Contract v1's device id and the Ed25519 seed of the Device's key, no longer served. They stay
+	// here only because the protocol never deletes a field (buf breaking, FILE). The helper refuses a
+	// StartChannel that carries either.
+	//
+	// Deprecated: Marked as deprecated in lazurio/app/device/v1/device.proto.
 	DeviceId string `protobuf:"bytes,4,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	// The 32-byte Ed25519 seed of the Device's key for this Environment. The main process keeps it
-	// only sealed by the system's keystore (ADR 0003) and gives it here; the helper holds it in
-	// memory, zeroed on drop, and never writes it.
+	// Deprecated: Marked as deprecated in lazurio/app/device/v1/device.proto.
 	KeySeed []byte `protobuf:"bytes,5,opt,name=key_seed,json=keySeed,proto3" json:"key_seed,omitempty"`
 	// Present when the app is a node of the Environment's tailnet: the tailnet helper's loopback
 	// proxy and the credentials of its current start. Absent: the helper connects directly.
-	Proxy         *TailnetProxy `protobuf:"bytes,6,opt,name=proxy,proto3" json:"proxy,omitempty"`
+	Proxy *TailnetProxy `protobuf:"bytes,6,opt,name=proxy,proto3" json:"proxy,omitempty"`
+	// The one-time hand-over Lazurio Auth gave the app for this Environment
+	// (`POST /realms/workspace/lazurio-agent-entry/device-hand-over`, HumanAndMachine-ai/Auth#108),
+	// base64url, valid for 60 s and one use. The helper sends it once, as the header
+	// `X-Lazurio-Device-Hand-Over` of the WebSocket upgrade, and drops it right after that attempt,
+	// whatever its outcome. Secret: the helper reads it apart from the other requests into memory
+	// that is wiped, and never writes, logs or reports it.
+	HandOver      []byte `protobuf:"bytes,7,opt,name=hand_over,json=handOver,proto3" json:"hand_over,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -209,6 +225,7 @@ func (x *StartChannel) GetAttachUrl() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in lazurio/app/device/v1/device.proto.
 func (x *StartChannel) GetDeviceId() string {
 	if x != nil {
 		return x.DeviceId
@@ -216,6 +233,7 @@ func (x *StartChannel) GetDeviceId() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in lazurio/app/device/v1/device.proto.
 func (x *StartChannel) GetKeySeed() []byte {
 	if x != nil {
 		return x.KeySeed
@@ -226,6 +244,13 @@ func (x *StartChannel) GetKeySeed() []byte {
 func (x *StartChannel) GetProxy() *TailnetProxy {
 	if x != nil {
 		return x.Proxy
+	}
+	return nil
+}
+
+func (x *StartChannel) GetHandOver() []byte {
+	if x != nil {
+		return x.HandOver
 	}
 	return nil
 }
@@ -497,6 +522,7 @@ type ChannelState struct {
 	//	*ChannelState_Connected
 	//	*ChannelState_Refused
 	//	*ChannelState_Working
+	//	*ChannelState_NeedsHandOver
 	State         isChannelState_State `protobuf_oneof:"state"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -591,6 +617,15 @@ func (x *ChannelState) GetWorking() *Working {
 	return nil
 }
 
+func (x *ChannelState) GetNeedsHandOver() *NeedsHandOver {
+	if x != nil {
+		if x, ok := x.State.(*ChannelState_NeedsHandOver); ok {
+			return x.NeedsHandOver
+		}
+	}
+	return nil
+}
+
 type isChannelState_State interface {
 	isChannelState_State()
 }
@@ -615,6 +650,10 @@ type ChannelState_Working struct {
 	Working *Working `protobuf:"bytes,6,opt,name=working,proto3,oneof"`
 }
 
+type ChannelState_NeedsHandOver struct {
+	NeedsHandOver *NeedsHandOver `protobuf:"bytes,7,opt,name=needs_hand_over,json=needsHandOver,proto3,oneof"`
+}
+
 func (*ChannelState_Off) isChannelState_State() {}
 
 func (*ChannelState_Connecting) isChannelState_State() {}
@@ -624,6 +663,8 @@ func (*ChannelState_Connected) isChannelState_State() {}
 func (*ChannelState_Refused) isChannelState_State() {}
 
 func (*ChannelState_Working) isChannelState_State() {}
+
+func (*ChannelState_NeedsHandOver) isChannelState_State() {}
 
 // No channel: never started, stopped, or the switch is off.
 type Off struct {
@@ -662,10 +703,11 @@ func (*Off) Descriptor() ([]byte, []int) {
 	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{9}
 }
 
-// Connecting or reconnecting.
+// Connecting with the hand-over of the last StartChannel.
 type Connecting struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// How many attempts failed in a row before this one.
+	// How many hand-overs of this Environment in a row ended without `ready` before this one; 0 after
+	// a session that got `ready` and after StopChannel.
 	FailedAttempts uint32 `protobuf:"varint,1,opt,name=failed_attempts,json=failedAttempts,proto3" json:"failed_attempts,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -745,12 +787,36 @@ func (*Connected) Descriptor() ([]byte, []int) {
 	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{11}
 }
 
-// The Environment refused the computer, for example after it was removed there. The helper does
-// not retry until the next StartChannel.
+// The channel ended and does not open again until the next StartChannel, which the main process
+// sends only after the person did something about the reason. The reason is a stable code:
+//
+//   - "agent_desktop_paired": the earlier utility Lazurio Agent Desktop is paired on this computer
+//     (it keeps an entry of the service `io.lazurio.agent-desktop` in the system's keystore). The
+//     helper stopped the agent and closed every channel. The person removes every Environment in
+//     the utility, or its entries by hand, and switches on again.
+//   - "agent_desktop_check_failed": the helper could not tell whether that utility is paired (the
+//     keystore is locked, `cmdkey` failed or did not answer within 5 s), and fails closed the same
+//     way.
+//   - "already-attached": the Environment kept answering that it serves another session of this
+//     computer for longer than the helper waits for an earlier session of its own to end.
+//   - "hand_over_refused": the upgrade was answered with 401: the gateway helper did not accept the
+//     hand-over (spent, expired or not for this Environment), or the Launchpad did not accept the
+//     gateway's proof. Each new attempt would ask Lazurio Auth for a hand-over again, which is
+//     recorded, so the helper does not retry.
+//   - "not_permitted": the upgrade was answered with 403: the computer is not an approved device of
+//     the person the Environment is assigned to, or the upgrade carried `Origin` or `Cookie`.
+//   - "upgrade_refused": the upgrade was answered with another 4xx status but 408 and 429, which no
+//     new attempt changes either.
+//   - "bad-token": the Launchpad refused the gateway's proof (`denied` with `bad-token`).
+//   - "contract_mismatch": the Environment answered in a way contract v3 does not know: another
+//     version, another message or an unknown reason of `denied`.
+//   - "invalid_attach_url": the attach address is not one the helper connects to.
 type Refused struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// A stable code the main process can branch on, for example "unknown_device".
-	Reason        string `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Reason string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	// For "hand_over_refused", "not_permitted" and "upgrade_refused": the HTTP status of the answer
+	// to the upgrade; 0 otherwise.
+	HttpStatus    uint32 `protobuf:"varint,2,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -792,6 +858,103 @@ func (x *Refused) GetReason() string {
 	return ""
 }
 
+func (x *Refused) GetHttpStatus() uint32 {
+	if x != nil {
+		return x.HttpStatus
+	}
+	return 0
+}
+
+// The channel ended and spent its hand-over; the helper never sends a hand-over twice. The main
+// process asks Lazurio Auth for a new hand-over after retry_after_ms and sends it in a new
+// StartChannel, while the person's switch stays on. The reason is a stable code:
+//
+//   - "connection_failed": no `ready` came: no route or name, the tailnet proxy, TLS, a timeout, or
+//     the connection closed before `ready`.
+//   - "upgrade_refused": the gateway or the Launchpad answered the upgrade with a status that may
+//     pass, in http_status: 5xx (for example 503 when the Launchpad could not check the gateway's
+//     proof), 408 or 429. A 401, 403 or other 4xx is a Refused instead.
+//   - "already-attached": the Launchpad serves another session of this computer (`denied`), for
+//     example its previous session, which ends after 45 s without a word.
+//   - "expired": the Launchpad ended the session or refused it because the gateway no longer
+//     confirms it (`denied` with `expired`), for example after 8 h or a refused renewal.
+//   - "internal-error": the Launchpad failed to start the session (`denied`).
+//   - "session_ended": a session that got `ready` ended otherwise: the connection broke, the
+//     Environment went silent for 45 s, or it closed the session.
+type NeedsHandOver struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Reason string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	// How many hand-overs of this Environment in a row ended without `ready`, this one included; 0
+	// when the session got `ready`.
+	FailedAttempts uint32 `protobuf:"varint,2,opt,name=failed_attempts,json=failedAttempts,proto3" json:"failed_attempts,omitempty"`
+	// How long to wait before the next hand-over: 1 s after a session that got `ready`, doubling with
+	// each failed attempt up to 60 s. When a 429 or 503 carries `Retry-After` in seconds, at least
+	// that long, at most one hour.
+	RetryAfterMs uint64 `protobuf:"varint,3,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"`
+	// For "upgrade_refused": the HTTP status of the answer to the upgrade; 0 otherwise.
+	HttpStatus    uint32 `protobuf:"varint,4,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NeedsHandOver) Reset() {
+	*x = NeedsHandOver{}
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NeedsHandOver) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NeedsHandOver) ProtoMessage() {}
+
+func (x *NeedsHandOver) ProtoReflect() protoreflect.Message {
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NeedsHandOver.ProtoReflect.Descriptor instead.
+func (*NeedsHandOver) Descriptor() ([]byte, []int) {
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *NeedsHandOver) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *NeedsHandOver) GetFailedAttempts() uint32 {
+	if x != nil {
+		return x.FailedAttempts
+	}
+	return 0
+}
+
+func (x *NeedsHandOver) GetRetryAfterMs() uint64 {
+	if x != nil {
+		return x.RetryAfterMs
+	}
+	return 0
+}
+
+func (x *NeedsHandOver) GetHttpStatus() uint32 {
+	if x != nil {
+		return x.HttpStatus
+	}
+	return 0
+}
+
 // An agent of this Environment works on the computer.
 type Working struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -805,7 +968,7 @@ type Working struct {
 
 func (x *Working) Reset() {
 	*x = Working{}
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[13]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -817,7 +980,7 @@ func (x *Working) String() string {
 func (*Working) ProtoMessage() {}
 
 func (x *Working) ProtoReflect() protoreflect.Message {
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[13]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -830,7 +993,7 @@ func (x *Working) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Working.ProtoReflect.Descriptor instead.
 func (*Working) Descriptor() ([]byte, []int) {
-	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{13}
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Working) GetTool() string {
@@ -847,7 +1010,7 @@ func (x *Working) GetApplication() string {
 	return ""
 }
 
-// Who holds the computer: one agent at a time on the whole computer (contract v1).
+// Who holds the computer: one agent at a time on the whole computer.
 type LockState struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// True when no agent holds the computer.
@@ -869,7 +1032,7 @@ type LockState struct {
 
 func (x *LockState) Reset() {
 	*x = LockState{}
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[14]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -881,7 +1044,7 @@ func (x *LockState) String() string {
 func (*LockState) ProtoMessage() {}
 
 func (x *LockState) ProtoReflect() protoreflect.Message {
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[14]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -894,7 +1057,7 @@ func (x *LockState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockState.ProtoReflect.Descriptor instead.
 func (*LockState) Descriptor() ([]byte, []int) {
-	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{14}
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *LockState) GetIdle() bool {
@@ -953,7 +1116,7 @@ type DeviceStopped struct {
 
 func (x *DeviceStopped) Reset() {
 	*x = DeviceStopped{}
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[15]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -965,7 +1128,7 @@ func (x *DeviceStopped) String() string {
 func (*DeviceStopped) ProtoMessage() {}
 
 func (x *DeviceStopped) ProtoReflect() protoreflect.Message {
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[15]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -978,7 +1141,7 @@ func (x *DeviceStopped) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeviceStopped.ProtoReflect.Descriptor instead.
 func (*DeviceStopped) Descriptor() ([]byte, []int) {
-	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{15}
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *DeviceStopped) GetAllEnginesEnded() bool {
@@ -1007,7 +1170,7 @@ type HistoryEntry struct {
 
 func (x *HistoryEntry) Reset() {
 	*x = HistoryEntry{}
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[16]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1019,7 +1182,7 @@ func (x *HistoryEntry) String() string {
 func (*HistoryEntry) ProtoMessage() {}
 
 func (x *HistoryEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[16]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1032,7 +1195,7 @@ func (x *HistoryEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryEntry.ProtoReflect.Descriptor instead.
 func (*HistoryEntry) Descriptor() ([]byte, []int) {
-	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{16}
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *HistoryEntry) GetAtUnixMs() uint64 {
@@ -1082,7 +1245,7 @@ type HistoryPage struct {
 
 func (x *HistoryPage) Reset() {
 	*x = HistoryPage{}
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[17]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1094,7 +1257,7 @@ func (x *HistoryPage) String() string {
 func (*HistoryPage) ProtoMessage() {}
 
 func (x *HistoryPage) ProtoReflect() protoreflect.Message {
-	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[17]
+	mi := &file_lazurio_app_device_v1_device_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1107,7 +1270,7 @@ func (x *HistoryPage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryPage.ProtoReflect.Descriptor instead.
 func (*HistoryPage) Descriptor() ([]byte, []int) {
-	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{17}
+	return file_lazurio_app_device_v1_device_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *HistoryPage) GetEntries() []*HistoryEntry {
@@ -1133,15 +1296,16 @@ const file_lazurio_app_device_v1_device_proto_rawDesc = "" +
 	"\x0edata_directory\x18\x01 \x01(\tR\rdataDirectory\x12#\n" +
 	"\rcomputer_name\x18\x02 \x01(\tR\fcomputerName\"8\n" +
 	"\vDeviceReady\x12)\n" +
-	"\x10contract_version\x18\x01 \x01(\rR\x0fcontractVersion\"\xf4\x01\n" +
+	"\x10contract_version\x18\x01 \x01(\rR\x0fcontractVersion\"\x99\x02\n" +
 	"\fStartChannel\x12%\n" +
 	"\x0eenvironment_id\x18\x01 \x01(\tR\renvironmentId\x12+\n" +
 	"\x11environment_label\x18\x02 \x01(\tR\x10environmentLabel\x12\x1d\n" +
 	"\n" +
-	"attach_url\x18\x03 \x01(\tR\tattachUrl\x12\x1b\n" +
-	"\tdevice_id\x18\x04 \x01(\tR\bdeviceId\x12\x19\n" +
-	"\bkey_seed\x18\x05 \x01(\fR\akeySeed\x129\n" +
-	"\x05proxy\x18\x06 \x01(\v2#.lazurio.app.device.v1.TailnetProxyR\x05proxy\"n\n" +
+	"attach_url\x18\x03 \x01(\tR\tattachUrl\x12\x1f\n" +
+	"\tdevice_id\x18\x04 \x01(\tB\x02\x18\x01R\bdeviceId\x12\x1d\n" +
+	"\bkey_seed\x18\x05 \x01(\fB\x02\x18\x01R\akeySeed\x129\n" +
+	"\x05proxy\x18\x06 \x01(\v2#.lazurio.app.device.v1.TailnetProxyR\x05proxy\x12\x1b\n" +
+	"\thand_over\x18\a \x01(\fR\bhandOver\"n\n" +
 	"\fTailnetProxy\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12\x1a\n" +
@@ -1155,7 +1319,7 @@ const file_lazurio_app_device_v1_device_proto_rawDesc = "" +
 	"\vListHistory\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\x01 \x01(\tR\tpageToken\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\rR\x05limit\"\xed\x02\n" +
+	"\x05limit\x18\x02 \x01(\rR\x05limit\"\xbd\x03\n" +
 	"\fChannelState\x12%\n" +
 	"\x0eenvironment_id\x18\x01 \x01(\tR\renvironmentId\x12.\n" +
 	"\x03off\x18\x02 \x01(\v2\x1a.lazurio.app.device.v1.OffH\x00R\x03off\x12C\n" +
@@ -1164,15 +1328,24 @@ const file_lazurio_app_device_v1_device_proto_rawDesc = "" +
 	"connecting\x12@\n" +
 	"\tconnected\x18\x04 \x01(\v2 .lazurio.app.device.v1.ConnectedH\x00R\tconnected\x12:\n" +
 	"\arefused\x18\x05 \x01(\v2\x1e.lazurio.app.device.v1.RefusedH\x00R\arefused\x12:\n" +
-	"\aworking\x18\x06 \x01(\v2\x1e.lazurio.app.device.v1.WorkingH\x00R\aworkingB\a\n" +
+	"\aworking\x18\x06 \x01(\v2\x1e.lazurio.app.device.v1.WorkingH\x00R\aworking\x12N\n" +
+	"\x0fneeds_hand_over\x18\a \x01(\v2$.lazurio.app.device.v1.NeedsHandOverH\x00R\rneedsHandOverB\a\n" +
 	"\x05state\"\x05\n" +
 	"\x03Off\"5\n" +
 	"\n" +
 	"Connecting\x12'\n" +
 	"\x0ffailed_attempts\x18\x01 \x01(\rR\x0efailedAttempts\"\v\n" +
-	"\tConnected\"!\n" +
+	"\tConnected\"B\n" +
 	"\aRefused\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"?\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x1f\n" +
+	"\vhttp_status\x18\x02 \x01(\rR\n" +
+	"httpStatus\"\x97\x01\n" +
+	"\rNeedsHandOver\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\x12'\n" +
+	"\x0ffailed_attempts\x18\x02 \x01(\rR\x0efailedAttempts\x12$\n" +
+	"\x0eretry_after_ms\x18\x03 \x01(\x04R\fretryAfterMs\x12\x1f\n" +
+	"\vhttp_status\x18\x04 \x01(\rR\n" +
+	"httpStatus\"?\n" +
 	"\aWorking\x12\x12\n" +
 	"\x04tool\x18\x01 \x01(\tR\x04tool\x12 \n" +
 	"\vapplication\x18\x02 \x01(\tR\vapplication\"\xee\x01\n" +
@@ -1209,7 +1382,7 @@ func file_lazurio_app_device_v1_device_proto_rawDescGZIP() []byte {
 	return file_lazurio_app_device_v1_device_proto_rawDescData
 }
 
-var file_lazurio_app_device_v1_device_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_lazurio_app_device_v1_device_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_lazurio_app_device_v1_device_proto_goTypes = []any{
 	(*ConfigureDevice)(nil), // 0: lazurio.app.device.v1.ConfigureDevice
 	(*DeviceReady)(nil),     // 1: lazurio.app.device.v1.DeviceReady
@@ -1224,11 +1397,12 @@ var file_lazurio_app_device_v1_device_proto_goTypes = []any{
 	(*Connecting)(nil),      // 10: lazurio.app.device.v1.Connecting
 	(*Connected)(nil),       // 11: lazurio.app.device.v1.Connected
 	(*Refused)(nil),         // 12: lazurio.app.device.v1.Refused
-	(*Working)(nil),         // 13: lazurio.app.device.v1.Working
-	(*LockState)(nil),       // 14: lazurio.app.device.v1.LockState
-	(*DeviceStopped)(nil),   // 15: lazurio.app.device.v1.DeviceStopped
-	(*HistoryEntry)(nil),    // 16: lazurio.app.device.v1.HistoryEntry
-	(*HistoryPage)(nil),     // 17: lazurio.app.device.v1.HistoryPage
+	(*NeedsHandOver)(nil),   // 13: lazurio.app.device.v1.NeedsHandOver
+	(*Working)(nil),         // 14: lazurio.app.device.v1.Working
+	(*LockState)(nil),       // 15: lazurio.app.device.v1.LockState
+	(*DeviceStopped)(nil),   // 16: lazurio.app.device.v1.DeviceStopped
+	(*HistoryEntry)(nil),    // 17: lazurio.app.device.v1.HistoryEntry
+	(*HistoryPage)(nil),     // 18: lazurio.app.device.v1.HistoryPage
 }
 var file_lazurio_app_device_v1_device_proto_depIdxs = []int32{
 	3,  // 0: lazurio.app.device.v1.StartChannel.proxy:type_name -> lazurio.app.device.v1.TailnetProxy
@@ -1236,13 +1410,14 @@ var file_lazurio_app_device_v1_device_proto_depIdxs = []int32{
 	10, // 2: lazurio.app.device.v1.ChannelState.connecting:type_name -> lazurio.app.device.v1.Connecting
 	11, // 3: lazurio.app.device.v1.ChannelState.connected:type_name -> lazurio.app.device.v1.Connected
 	12, // 4: lazurio.app.device.v1.ChannelState.refused:type_name -> lazurio.app.device.v1.Refused
-	13, // 5: lazurio.app.device.v1.ChannelState.working:type_name -> lazurio.app.device.v1.Working
-	16, // 6: lazurio.app.device.v1.HistoryPage.entries:type_name -> lazurio.app.device.v1.HistoryEntry
-	7,  // [7:7] is the sub-list for method output_type
-	7,  // [7:7] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	14, // 5: lazurio.app.device.v1.ChannelState.working:type_name -> lazurio.app.device.v1.Working
+	13, // 6: lazurio.app.device.v1.ChannelState.needs_hand_over:type_name -> lazurio.app.device.v1.NeedsHandOver
+	17, // 7: lazurio.app.device.v1.HistoryPage.entries:type_name -> lazurio.app.device.v1.HistoryEntry
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_lazurio_app_device_v1_device_proto_init() }
@@ -1256,6 +1431,7 @@ func file_lazurio_app_device_v1_device_proto_init() {
 		(*ChannelState_Connected)(nil),
 		(*ChannelState_Refused)(nil),
 		(*ChannelState_Working)(nil),
+		(*ChannelState_NeedsHandOver)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1263,7 +1439,7 @@ func file_lazurio_app_device_v1_device_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lazurio_app_device_v1_device_proto_rawDesc), len(file_lazurio_app_device_v1_device_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

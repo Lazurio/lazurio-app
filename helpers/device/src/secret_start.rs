@@ -1,9 +1,9 @@
-//! `StartChannel` is the one request that carries secrets: the Device's key seed and the tailnet
-//! proxy's credentials. prost decodes a oneof variant into a temporary and drops replaced or
-//! half-decoded values without wiping them, so this request never goes through prost. This module
-//! reads it straight from the frame into types that wipe themselves when dropped, on every path:
-//! a malformed field, a repeated secret, a second variant of the envelope's oneof, or success
-//! (ADR 0006, point 2).
+//! `StartChannel` is the one request that carries secrets: the hand-over of Lazurio Auth (contract
+//! v3) and the tailnet proxy's credentials. prost decodes a oneof variant into a temporary and
+//! drops replaced or half-decoded values without wiping them, so this request never goes through
+//! prost. This module reads it straight from the frame into types that wipe themselves when
+//! dropped, on every path: a malformed field, a repeated secret, a second variant of the envelope's
+//! oneof, or success (ADR 0006, point 2).
 //!
 //! Only the envelope's top level is scanned here, to find `start_channel` (field 21). A frame
 //! without it is decoded by prost as before, and a frame with it is never handed to prost.
@@ -24,8 +24,8 @@ pub struct StartRequest {
     pub environment_id: String,
     pub environment_label: String,
     pub attach_url: String,
-    pub device_id: String,
-    pub key_seed: Zeroizing<Vec<u8>>,
+    /// The one-time hand-over, sent once in the upgrade and dropped after that attempt.
+    pub hand_over: Zeroizing<Vec<u8>>,
     pub proxy: Option<ProxyRequest>,
 }
 
@@ -45,8 +45,10 @@ impl std::fmt::Debug for StartRequest {
             .field("environment_id", &self.environment_id)
             .field("environment_label", &self.environment_label)
             .field("attach_url", &self.attach_url)
-            .field("device_id", &self.device_id)
-            .field("key_seed", &format_args!("<{} bytes>", self.key_seed.len()))
+            .field(
+                "hand_over",
+                &format_args!("<{} bytes>", self.hand_over.len()),
+            )
             .field("proxy", &self.proxy)
             .finish()
     }
@@ -143,18 +145,23 @@ fn read_start(bytes: &[u8]) -> Result<Result<StartRequest, &'static str>, Malfor
     let mut reader = Reader::new(bytes);
     let mut request = StartRequest::default();
     let mut refusal = None;
-    let mut seeds = 0_u32;
+    let mut hand_overs = 0_u32;
     let mut proxies = 0_u32;
     while let Some((field, wire)) = reader.tag()? {
         match (field, wire) {
             (1, Wire::Len) => request.environment_id = string(reader.bytes()?)?,
             (2, Wire::Len) => request.environment_label = string(reader.bytes()?)?,
             (3, Wire::Len) => request.attach_url = string(reader.bytes()?)?,
-            (4, Wire::Len) => request.device_id = string(reader.bytes()?)?,
-            (5, Wire::Len) => {
-                seeds += 1;
-                // Replacing the seed wipes the previous one: the old value is a Zeroizing.
-                request.key_seed = Zeroizing::new(reader.bytes()?.to_vec());
+            // Contract v1's device id and key seed: skipped, never copied out of the frame (which
+            // is wiped), and the request is refused.
+            (4 | 5, wire) => {
+                reader.skip(wire)?;
+                refusal = Some("start_channel carries contract v1's device_id or key_seed");
+            }
+            (7, Wire::Len) => {
+                hand_overs += 1;
+                // Replacing the hand-over wipes the previous one: the old value is a Zeroizing.
+                request.hand_over = Zeroizing::new(reader.bytes()?.to_vec());
             }
             (6, Wire::Len) => {
                 proxies += 1;
@@ -164,15 +171,15 @@ fn read_start(bytes: &[u8]) -> Result<Result<StartRequest, &'static str>, Malfor
                     Err(reason) => refusal = Some(reason),
                 }
             }
-            (1..=6, _) => {
+            (1..=3 | 6 | 7, _) => {
                 reader.skip(wire)?;
                 refusal = Some("a field of start_channel has the wrong wire type");
             }
             (_, wire) => reader.skip(wire)?,
         }
     }
-    if seeds > 1 {
-        refusal = Some("start_channel repeats key_seed");
+    if hand_overs > 1 {
+        refusal = Some("start_channel repeats hand_over");
     }
     if proxies > 1 {
         refusal = Some("start_channel repeats proxy");
@@ -303,6 +310,9 @@ mod tests {
     use crate::lazurio::app::helper::v1::{AppMessage, Ping, app_message};
     use prost::Message;
 
+    /// A hand-over as Lazurio Auth gives it: 43 characters of base64url.
+    const HAND_OVER: &[u8; 43] = b"hX7qR2mK9vT4wL1pZ8nB3cF6yJ0sD5gA2eU7iO4kQ9r";
+
     fn start_message() -> AppMessage {
         AppMessage {
             request_id: 9,
@@ -311,14 +321,14 @@ mod tests {
                 environment_label: "Environment A".to_owned(),
                 attach_url: "wss://launchpad.example.lazurio.io/.lazurio/computers/attach"
                     .to_owned(),
-                device_id: "work-laptop".to_owned(),
-                key_seed: vec![0xA5; 32],
+                hand_over: HAND_OVER.to_vec(),
                 proxy: Some(TailnetProxy {
                     host: "127.0.0.1".to_owned(),
                     port: 41_000,
                     username: "user".to_owned(),
                     password: "secret".to_owned(),
                 }),
+                ..StartChannel::default()
             })),
         }
     }
@@ -342,8 +352,7 @@ mod tests {
         };
         assert_eq!(request_id, 9);
         assert_eq!(request.environment_id, "env-a");
-        assert_eq!(request.device_id, "work-laptop");
-        assert_eq!(request.key_seed.as_slice(), [0xA5; 32].as_slice());
+        assert_eq!(request.hand_over.as_slice(), HAND_OVER.as_slice());
         let proxy = request.proxy.expect("a proxy");
         assert_eq!((proxy.host.as_str(), proxy.port), ("127.0.0.1", 41_000));
         assert_eq!(
@@ -362,28 +371,55 @@ mod tests {
     }
 
     #[test]
-    fn a_start_channel_cut_off_after_its_seed_is_malformed() {
+    fn a_start_channel_cut_off_inside_its_hand_over_is_malformed() {
         let frame = start_message().encode_to_vec();
-        // Drop the last bytes, inside the proxy, after the seed was read.
+        // The hand-over is the last field: drop its last bytes.
         let cut = &frame[..frame.len() - 3];
         assert!(scan(cut).is_err());
     }
 
     #[test]
-    fn a_repeated_seed_is_refused() {
+    fn a_repeated_hand_over_is_refused() {
         let mut start = StartChannel {
             environment_id: "env-a".to_owned(),
-            key_seed: vec![1; 32],
+            hand_over: HAND_OVER.to_vec(),
             ..StartChannel::default()
         }
         .encode_to_vec();
-        push_len(&mut start, 5, &[2; 32]);
+        push_len(&mut start, 7, b"another");
         let mut frame = Vec::new();
         push_len(&mut frame, START_CHANNEL_FIELD, &start);
         assert!(matches!(
             scan(&frame),
-            Ok(Scanned::Refused { reason, .. }) if reason == "start_channel repeats key_seed"
+            Ok(Scanned::Refused { reason, .. }) if reason == "start_channel repeats hand_over"
         ));
+    }
+
+    #[test]
+    #[allow(deprecated, reason = "the test sends contract v1's fields on purpose")]
+    fn contract_v1s_device_id_and_key_seed_are_refused() {
+        for start in [
+            StartChannel {
+                environment_id: "env-a".to_owned(),
+                hand_over: HAND_OVER.to_vec(),
+                key_seed: vec![1; 32],
+                ..StartChannel::default()
+            },
+            StartChannel {
+                environment_id: "env-a".to_owned(),
+                hand_over: HAND_OVER.to_vec(),
+                device_id: "work-laptop".to_owned(),
+                ..StartChannel::default()
+            },
+        ] {
+            let mut frame = Vec::new();
+            push_len(&mut frame, START_CHANNEL_FIELD, &start.encode_to_vec());
+            assert!(matches!(
+                scan(&frame),
+                Ok(Scanned::Refused { reason, .. })
+                    if reason == "start_channel carries contract v1's device_id or key_seed"
+            ));
+        }
     }
 
     #[test]
@@ -398,7 +434,7 @@ mod tests {
         push_len(&mut proxy, 4, b"two");
         let mut start = StartChannel {
             environment_id: "env-a".to_owned(),
-            key_seed: vec![1; 32],
+            hand_over: HAND_OVER.to_vec(),
             ..StartChannel::default()
         }
         .encode_to_vec();
@@ -436,7 +472,7 @@ mod tests {
     fn unknown_fields_are_skipped() {
         let mut start = StartChannel {
             environment_id: "env-a".to_owned(),
-            key_seed: vec![1; 32],
+            hand_over: HAND_OVER.to_vec(),
             ..StartChannel::default()
         }
         .encode_to_vec();
@@ -446,7 +482,7 @@ mod tests {
         let Ok(Scanned::Start { request, .. }) = scan(&frame) else {
             panic!("a StartChannel");
         };
-        assert_eq!(request.key_seed.len(), 32);
+        assert_eq!(request.hand_over.len(), 43);
     }
 
     #[test]
@@ -463,9 +499,12 @@ mod tests {
             panic!("a StartChannel");
         };
         let shown = format!("{request:?}");
-        assert!(shown.contains("<32 bytes>") && shown.contains("<hidden>"));
+        assert!(shown.contains("<43 bytes>") && shown.contains("<hidden>"));
         assert!(!shown.contains("secret") && !shown.contains("user\""));
-        assert!(!shown.contains("165"), "no byte of the seed (0xA5 = 165)");
+        assert!(
+            !shown.contains("hX7q") && !shown.contains("104, 88"),
+            "no part of the hand-over, as text or bytes: {shown}"
+        );
     }
 
     #[test]
@@ -473,7 +512,7 @@ mod tests {
         // The type is the guarantee: every path that drops a request runs Zeroizing's Drop.
         fn wipes<T: zeroize::ZeroizeOnDrop>(_: &T) {}
         let request = StartRequest::default();
-        wipes(&request.key_seed);
+        wipes(&request.hand_over);
         let proxy = ProxyRequest::default();
         wipes(&proxy.username);
         wipes(&proxy.password);

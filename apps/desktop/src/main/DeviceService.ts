@@ -65,6 +65,8 @@ const channelStateOf = (state: ChannelState): DeviceChannelState => {
       return { state: "connected" };
     case "refused":
       return { state: "refused", reason: state.state.value.reason };
+    case "needsHandOver":
+      return { state: "needs-hand-over", reason: state.state.value.reason };
     case "working":
       return {
         state: "working",
@@ -77,14 +79,15 @@ const channelStateOf = (state: ChannelState): DeviceChannelState => {
   }
 };
 
-// What a channel's start carries until contract v2 replaces it.
+// What a channel's start carries (contract v3).
 export interface ChannelStart {
   readonly environmentId: string;
   readonly environmentLabel: string;
   // `wss://<the Environment's Lazurio host>/.lazurio/computers/attach`.
   readonly attachUrl: string;
-  readonly deviceId: string;
-  readonly keySeed: Uint8Array;
+  // Lazurio Auth's one-time hand-over for this Environment, valid for 60 s. The helper sends it once
+  // and drops it; every start needs a new one.
+  readonly handOver: Uint8Array;
 }
 
 export interface DeviceServiceOptions {
@@ -103,9 +106,9 @@ export interface DeviceService {
   // Stop: ends the work of the agent that holds the computer now, whatever its Environment.
   readonly stop: Effect.Effect<void, DeviceRequestError>;
   readonly stopChannel: (environmentId: string) => Effect.Effect<void, DeviceRequestError>;
-  // Contract v2 replaces the device id and key of contract v1 with the person's short-lived token
-  // from Lazurio Auth and the tailnet's binding of the computer. Until then nothing calls it; later
-  // only a switch in a native window will (docs/adr/0006).
+  // Opens a channel with a hand-over of Lazurio Auth (contract v3). Nothing calls it yet; later
+  // only a switch in a native window will, with a new hand-over for each start and after each
+  // NeedsHandOver (docs/adr/0006).
   readonly startChannel: (start: ChannelStart) => Effect.Effect<void, DeviceRequestError>;
   // The computer's activity for the updater, once the helper took its configuration; none
   // otherwise, and the default (no channel, so always idle) stays.
@@ -262,8 +265,7 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
           environmentId: start.environmentId,
           environmentLabel: start.environmentLabel,
           attachUrl: start.attachUrl,
-          deviceId: start.deviceId,
-          keySeed: start.keySeed,
+          handOver: start.handOver,
           proxy: Option.match(proxy, {
             onNone: () => undefined,
             onSome: (endpoint) => ({

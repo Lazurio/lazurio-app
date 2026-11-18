@@ -6,9 +6,10 @@
 // use this computer while its owner allows it (decision 0248, ADR 0006). The messages travel in
 // the envelope of lazurio.app.helper.v1 from field 20 on.
 //
-// The main process owns every switch and every key. The helper opens a channel only on
-// StartChannel, keeps the key only in memory, writes only to the data directory it is given, and
-// reports every change of state on its own.
+// The main process owns every switch and every secret. The helper opens a channel only on
+// StartChannel, keeps its hand-over only in memory and only until it was sent once, writes only to
+// the data directory it is given, and reports every change of state on its own. It opens no channel
+// while the earlier utility Lazurio Agent Desktop is paired on the computer.
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
@@ -18,7 +19,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file lazurio/app/device/v1/device.proto.
  */
 export const file_lazurio_app_device_v1_device: GenFile = /*@__PURE__*/
-  fileDesc("CiJsYXp1cmlvL2FwcC9kZXZpY2UvdjEvZGV2aWNlLnByb3RvEhVsYXp1cmlvLmFwcC5kZXZpY2UudjEiQAoPQ29uZmlndXJlRGV2aWNlEhYKDmRhdGFfZGlyZWN0b3J5GAEgASgJEhUKDWNvbXB1dGVyX25hbWUYAiABKAkiJwoLRGV2aWNlUmVhZHkSGAoQY29udHJhY3RfdmVyc2lvbhgBIAEoDSKuAQoMU3RhcnRDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJEhkKEWVudmlyb25tZW50X2xhYmVsGAIgASgJEhIKCmF0dGFjaF91cmwYAyABKAkSEQoJZGV2aWNlX2lkGAQgASgJEhAKCGtleV9zZWVkGAUgASgMEjIKBXByb3h5GAYgASgLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLlRhaWxuZXRQcm94eSJOCgxUYWlsbmV0UHJveHkSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgNEhAKCHVzZXJuYW1lGAMgASgJEhAKCHBhc3N3b3JkGAQgASgJIiUKC1N0b3BDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJIgsKCVN0b3BBZ2VudCIdCg1Ib2xkRm9yVXBkYXRlEgwKBGhvbGQYASABKAgiMAoLTGlzdEhpc3RvcnkSEgoKcGFnZV90b2tlbhgBIAEoCRINCgVsaW1pdBgCIAEoDSKwAgoMQ2hhbm5lbFN0YXRlEhYKDmVudmlyb25tZW50X2lkGAEgASgJEikKA29mZhgCIAEoCzIaLmxhenVyaW8uYXBwLmRldmljZS52MS5PZmZIABI3Cgpjb25uZWN0aW5nGAMgASgLMiEubGF6dXJpby5hcHAuZGV2aWNlLnYxLkNvbm5lY3RpbmdIABI1Cgljb25uZWN0ZWQYBCABKAsyIC5sYXp1cmlvLmFwcC5kZXZpY2UudjEuQ29ubmVjdGVkSAASMQoHcmVmdXNlZBgFIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5SZWZ1c2VkSAASMQoHd29ya2luZxgGIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5Xb3JraW5nSABCBwoFc3RhdGUiBQoDT2ZmIiUKCkNvbm5lY3RpbmcSFwoPZmFpbGVkX2F0dGVtcHRzGAEgASgNIgsKCUNvbm5lY3RlZCIZCgdSZWZ1c2VkEg4KBnJlYXNvbhgBIAEoCSIsCgdXb3JraW5nEgwKBHRvb2wYASABKAkSEwoLYXBwbGljYXRpb24YAiABKAkimAEKCUxvY2tTdGF0ZRIMCgRpZGxlGAEgASgIEh0KFWhvbGRlcl9lbnZpcm9ubWVudF9pZBgCIAEoCRIgChhob2xkZXJfZW52aXJvbm1lbnRfbGFiZWwYAyABKAkSFQoNc2luY2VfdW5peF9tcxgEIAEoBBITCgt1cGRhdGVfaG9sZBgFIAEoCBIQCghzZXF1ZW5jZRgGIAEoBCIqCg1EZXZpY2VTdG9wcGVkEhkKEWFsbF9lbmdpbmVzX2VuZGVkGAEgASgIImgKDEhpc3RvcnlFbnRyeRISCgphdF91bml4X21zGAEgASgEEhYKDmVudmlyb25tZW50X2lkGAIgASgJEgwKBGtpbmQYAyABKAkSDAoEdG9vbBgEIAEoCRIQCghzZXF1ZW5jZRgFIAEoBCJcCgtIaXN0b3J5UGFnZRI0CgdlbnRyaWVzGAEgAygLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLkhpc3RvcnlFbnRyeRIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAlCU1pRZ2l0aHViLmNvbS9MYXp1cmlvL2xhenVyaW8tYXBwL2hlbHBlcnMvdGFpbG5ldC9nZW4vbGF6dXJpby9hcHAvZGV2aWNlL3YxO2RldmljZXYxYgZwcm90bzM");
+  fileDesc("CiJsYXp1cmlvL2FwcC9kZXZpY2UvdjEvZGV2aWNlLnByb3RvEhVsYXp1cmlvLmFwcC5kZXZpY2UudjEiQAoPQ29uZmlndXJlRGV2aWNlEhYKDmRhdGFfZGlyZWN0b3J5GAEgASgJEhUKDWNvbXB1dGVyX25hbWUYAiABKAkiJwoLRGV2aWNlUmVhZHkSGAoQY29udHJhY3RfdmVyc2lvbhgBIAEoDSLJAQoMU3RhcnRDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJEhkKEWVudmlyb25tZW50X2xhYmVsGAIgASgJEhIKCmF0dGFjaF91cmwYAyABKAkSFQoJZGV2aWNlX2lkGAQgASgJQgIYARIUCghrZXlfc2VlZBgFIAEoDEICGAESMgoFcHJveHkYBiABKAsyIy5sYXp1cmlvLmFwcC5kZXZpY2UudjEuVGFpbG5ldFByb3h5EhEKCWhhbmRfb3ZlchgHIAEoDCJOCgxUYWlsbmV0UHJveHkSDAoEaG9zdBgBIAEoCRIMCgRwb3J0GAIgASgNEhAKCHVzZXJuYW1lGAMgASgJEhAKCHBhc3N3b3JkGAQgASgJIiUKC1N0b3BDaGFubmVsEhYKDmVudmlyb25tZW50X2lkGAEgASgJIgsKCVN0b3BBZ2VudCIdCg1Ib2xkRm9yVXBkYXRlEgwKBGhvbGQYASABKAgiMAoLTGlzdEhpc3RvcnkSEgoKcGFnZV90b2tlbhgBIAEoCRINCgVsaW1pdBgCIAEoDSLxAgoMQ2hhbm5lbFN0YXRlEhYKDmVudmlyb25tZW50X2lkGAEgASgJEikKA29mZhgCIAEoCzIaLmxhenVyaW8uYXBwLmRldmljZS52MS5PZmZIABI3Cgpjb25uZWN0aW5nGAMgASgLMiEubGF6dXJpby5hcHAuZGV2aWNlLnYxLkNvbm5lY3RpbmdIABI1Cgljb25uZWN0ZWQYBCABKAsyIC5sYXp1cmlvLmFwcC5kZXZpY2UudjEuQ29ubmVjdGVkSAASMQoHcmVmdXNlZBgFIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5SZWZ1c2VkSAASMQoHd29ya2luZxgGIAEoCzIeLmxhenVyaW8uYXBwLmRldmljZS52MS5Xb3JraW5nSAASPwoPbmVlZHNfaGFuZF9vdmVyGAcgASgLMiQubGF6dXJpby5hcHAuZGV2aWNlLnYxLk5lZWRzSGFuZE92ZXJIAEIHCgVzdGF0ZSIFCgNPZmYiJQoKQ29ubmVjdGluZxIXCg9mYWlsZWRfYXR0ZW1wdHMYASABKA0iCwoJQ29ubmVjdGVkIi4KB1JlZnVzZWQSDgoGcmVhc29uGAEgASgJEhMKC2h0dHBfc3RhdHVzGAIgASgNImUKDU5lZWRzSGFuZE92ZXISDgoGcmVhc29uGAEgASgJEhcKD2ZhaWxlZF9hdHRlbXB0cxgCIAEoDRIWCg5yZXRyeV9hZnRlcl9tcxgDIAEoBBITCgtodHRwX3N0YXR1cxgEIAEoDSIsCgdXb3JraW5nEgwKBHRvb2wYASABKAkSEwoLYXBwbGljYXRpb24YAiABKAkimAEKCUxvY2tTdGF0ZRIMCgRpZGxlGAEgASgIEh0KFWhvbGRlcl9lbnZpcm9ubWVudF9pZBgCIAEoCRIgChhob2xkZXJfZW52aXJvbm1lbnRfbGFiZWwYAyABKAkSFQoNc2luY2VfdW5peF9tcxgEIAEoBBITCgt1cGRhdGVfaG9sZBgFIAEoCBIQCghzZXF1ZW5jZRgGIAEoBCIqCg1EZXZpY2VTdG9wcGVkEhkKEWFsbF9lbmdpbmVzX2VuZGVkGAEgASgIImgKDEhpc3RvcnlFbnRyeRISCgphdF91bml4X21zGAEgASgEEhYKDmVudmlyb25tZW50X2lkGAIgASgJEgwKBGtpbmQYAyABKAkSDAoEdG9vbBgEIAEoCRIQCghzZXF1ZW5jZRgFIAEoBCJcCgtIaXN0b3J5UGFnZRI0CgdlbnRyaWVzGAEgAygLMiMubGF6dXJpby5hcHAuZGV2aWNlLnYxLkhpc3RvcnlFbnRyeRIXCg9uZXh0X3BhZ2VfdG9rZW4YAiABKAlCU1pRZ2l0aHViLmNvbS9MYXp1cmlvL2xhenVyaW8tYXBwL2hlbHBlcnMvdGFpbG5ldC9nZW4vbGF6dXJpby9hcHAvZGV2aWNlL3YxO2RldmljZXYxYgZwcm90bzM");
 
 /**
  * Tells the helper where it keeps its files and how the computer is named. The first request of
@@ -58,7 +59,8 @@ export const ConfigureDeviceSchema: GenMessage<ConfigureDevice> = /*@__PURE__*/
  */
 export type DeviceReady = Message<"lazurio.app.device.v1.DeviceReady"> & {
   /**
-   * The newest version of contract v1 of the attach session this helper speaks.
+   * The version of the attach contract this helper speaks: 3, the hand-over of Lazurio Auth in the
+   * upgrade and `ready` or `denied` of version 3. Helpers before it spoke 1.
    *
    * @generated from field: uint32 contract_version = 1;
    */
@@ -73,9 +75,14 @@ export const DeviceReadySchema: GenMessage<DeviceReady> = /*@__PURE__*/
   messageDesc(file_lazurio_app_device_v1_device, 1);
 
 /**
- * Opens the channel of one Environment and keeps it open, reconnecting with back-off, until
- * StopChannel. The main process sends it only while the person has the Environment's switch on.
- * The helper answers with the channel's state at once and sends every later change on its own.
+ * Opens the channel of one Environment with one hand-over (contract v3) and keeps it open until
+ * StopChannel, the end of its session or a refusal. The main process sends it only while the person
+ * has the Environment's switch on. The helper answers with the channel's state at once and sends
+ * every later change on its own.
+ *
+ * A hand-over opens one session at most: the helper never connects again by itself. When the
+ * session ends, or the attempt fails, the helper reports NeedsHandOver, and the channel opens again
+ * only with a new StartChannel carrying a new hand-over.
  *
  * @generated from message lazurio.app.device.v1.StartChannel
  */
@@ -103,18 +110,18 @@ export type StartChannel = Message<"lazurio.app.device.v1.StartChannel"> & {
   attachUrl: string;
 
   /**
-   * The device id the Environment gave at pairing.
+   * Contract v1's device id and the Ed25519 seed of the Device's key, no longer served. They stay
+   * here only because the protocol never deletes a field (buf breaking, FILE). The helper refuses a
+   * StartChannel that carries either.
    *
-   * @generated from field: string device_id = 4;
+   * @generated from field: string device_id = 4 [deprecated = true];
+   * @deprecated
    */
   deviceId: string;
 
   /**
-   * The 32-byte Ed25519 seed of the Device's key for this Environment. The main process keeps it
-   * only sealed by the system's keystore (ADR 0003) and gives it here; the helper holds it in
-   * memory, zeroed on drop, and never writes it.
-   *
-   * @generated from field: bytes key_seed = 5;
+   * @generated from field: bytes key_seed = 5 [deprecated = true];
+   * @deprecated
    */
   keySeed: Uint8Array;
 
@@ -125,6 +132,18 @@ export type StartChannel = Message<"lazurio.app.device.v1.StartChannel"> & {
    * @generated from field: lazurio.app.device.v1.TailnetProxy proxy = 6;
    */
   proxy?: TailnetProxy | undefined;
+
+  /**
+   * The one-time hand-over Lazurio Auth gave the app for this Environment
+   * (`POST /realms/workspace/lazurio-agent-entry/device-hand-over`, HumanAndMachine-ai/Auth#108),
+   * base64url, valid for 60 s and one use. The helper sends it once, as the header
+   * `X-Lazurio-Device-Hand-Over` of the WebSocket upgrade, and drops it right after that attempt,
+   * whatever its outcome. Secret: the helper reads it apart from the other requests into memory
+   * that is wiped, and never writes, logs or reports it.
+   *
+   * @generated from field: bytes hand_over = 7;
+   */
+  handOver: Uint8Array;
 };
 
 /**
@@ -298,6 +317,12 @@ export type ChannelState = Message<"lazurio.app.device.v1.ChannelState"> & {
      */
     value: Working;
     case: "working";
+  } | {
+    /**
+     * @generated from field: lazurio.app.device.v1.NeedsHandOver needs_hand_over = 7;
+     */
+    value: NeedsHandOver;
+    case: "needsHandOver";
   } | { case: undefined; value?: undefined };
 };
 
@@ -324,13 +349,14 @@ export const OffSchema: GenMessage<Off> = /*@__PURE__*/
   messageDesc(file_lazurio_app_device_v1_device, 9);
 
 /**
- * Connecting or reconnecting.
+ * Connecting with the hand-over of the last StartChannel.
  *
  * @generated from message lazurio.app.device.v1.Connecting
  */
 export type Connecting = Message<"lazurio.app.device.v1.Connecting"> & {
   /**
-   * How many attempts failed in a row before this one.
+   * How many hand-overs of this Environment in a row ended without `ready` before this one; 0 after
+   * a session that got `ready` and after StopChannel.
    *
    * @generated from field: uint32 failed_attempts = 1;
    */
@@ -360,18 +386,46 @@ export const ConnectedSchema: GenMessage<Connected> = /*@__PURE__*/
   messageDesc(file_lazurio_app_device_v1_device, 11);
 
 /**
- * The Environment refused the computer, for example after it was removed there. The helper does
- * not retry until the next StartChannel.
+ * The channel ended and does not open again until the next StartChannel, which the main process
+ * sends only after the person did something about the reason. The reason is a stable code:
+ *
+ * - "agent_desktop_paired": the earlier utility Lazurio Agent Desktop is paired on this computer
+ *   (it keeps an entry of the service `io.lazurio.agent-desktop` in the system's keystore). The
+ *   helper stopped the agent and closed every channel. The person removes every Environment in
+ *   the utility, or its entries by hand, and switches on again.
+ * - "agent_desktop_check_failed": the helper could not tell whether that utility is paired (the
+ *   keystore is locked, `cmdkey` failed or did not answer within 5 s), and fails closed the same
+ *   way.
+ * - "already-attached": the Environment kept answering that it serves another session of this
+ *   computer for longer than the helper waits for an earlier session of its own to end.
+ * - "hand_over_refused": the upgrade was answered with 401: the gateway helper did not accept the
+ *   hand-over (spent, expired or not for this Environment), or the Launchpad did not accept the
+ *   gateway's proof. Each new attempt would ask Lazurio Auth for a hand-over again, which is
+ *   recorded, so the helper does not retry.
+ * - "not_permitted": the upgrade was answered with 403: the computer is not an approved device of
+ *   the person the Environment is assigned to, or the upgrade carried `Origin` or `Cookie`.
+ * - "upgrade_refused": the upgrade was answered with another 4xx status but 408 and 429, which no
+ *   new attempt changes either.
+ * - "bad-token": the Launchpad refused the gateway's proof (`denied` with `bad-token`).
+ * - "contract_mismatch": the Environment answered in a way contract v3 does not know: another
+ *   version, another message or an unknown reason of `denied`.
+ * - "invalid_attach_url": the attach address is not one the helper connects to.
  *
  * @generated from message lazurio.app.device.v1.Refused
  */
 export type Refused = Message<"lazurio.app.device.v1.Refused"> & {
   /**
-   * A stable code the main process can branch on, for example "unknown_device".
-   *
    * @generated from field: string reason = 1;
    */
   reason: string;
+
+  /**
+   * For "hand_over_refused", "not_permitted" and "upgrade_refused": the HTTP status of the answer
+   * to the upgrade; 0 otherwise.
+   *
+   * @generated from field: uint32 http_status = 2;
+   */
+  httpStatus: number;
 };
 
 /**
@@ -380,6 +434,64 @@ export type Refused = Message<"lazurio.app.device.v1.Refused"> & {
  */
 export const RefusedSchema: GenMessage<Refused> = /*@__PURE__*/
   messageDesc(file_lazurio_app_device_v1_device, 12);
+
+/**
+ * The channel ended and spent its hand-over; the helper never sends a hand-over twice. The main
+ * process asks Lazurio Auth for a new hand-over after retry_after_ms and sends it in a new
+ * StartChannel, while the person's switch stays on. The reason is a stable code:
+ *
+ * - "connection_failed": no `ready` came: no route or name, the tailnet proxy, TLS, a timeout, or
+ *   the connection closed before `ready`.
+ * - "upgrade_refused": the gateway or the Launchpad answered the upgrade with a status that may
+ *   pass, in http_status: 5xx (for example 503 when the Launchpad could not check the gateway's
+ *   proof), 408 or 429. A 401, 403 or other 4xx is a Refused instead.
+ * - "already-attached": the Launchpad serves another session of this computer (`denied`), for
+ *   example its previous session, which ends after 45 s without a word.
+ * - "expired": the Launchpad ended the session or refused it because the gateway no longer
+ *   confirms it (`denied` with `expired`), for example after 8 h or a refused renewal.
+ * - "internal-error": the Launchpad failed to start the session (`denied`).
+ * - "session_ended": a session that got `ready` ended otherwise: the connection broke, the
+ *   Environment went silent for 45 s, or it closed the session.
+ *
+ * @generated from message lazurio.app.device.v1.NeedsHandOver
+ */
+export type NeedsHandOver = Message<"lazurio.app.device.v1.NeedsHandOver"> & {
+  /**
+   * @generated from field: string reason = 1;
+   */
+  reason: string;
+
+  /**
+   * How many hand-overs of this Environment in a row ended without `ready`, this one included; 0
+   * when the session got `ready`.
+   *
+   * @generated from field: uint32 failed_attempts = 2;
+   */
+  failedAttempts: number;
+
+  /**
+   * How long to wait before the next hand-over: 1 s after a session that got `ready`, doubling with
+   * each failed attempt up to 60 s. When a 429 or 503 carries `Retry-After` in seconds, at least
+   * that long, at most one hour.
+   *
+   * @generated from field: uint64 retry_after_ms = 3;
+   */
+  retryAfterMs: bigint;
+
+  /**
+   * For "upgrade_refused": the HTTP status of the answer to the upgrade; 0 otherwise.
+   *
+   * @generated from field: uint32 http_status = 4;
+   */
+  httpStatus: number;
+};
+
+/**
+ * Describes the message lazurio.app.device.v1.NeedsHandOver.
+ * Use `create(NeedsHandOverSchema)` to create a new message.
+ */
+export const NeedsHandOverSchema: GenMessage<NeedsHandOver> = /*@__PURE__*/
+  messageDesc(file_lazurio_app_device_v1_device, 13);
 
 /**
  * An agent of this Environment works on the computer.
@@ -407,10 +519,10 @@ export type Working = Message<"lazurio.app.device.v1.Working"> & {
  * Use `create(WorkingSchema)` to create a new message.
  */
 export const WorkingSchema: GenMessage<Working> = /*@__PURE__*/
-  messageDesc(file_lazurio_app_device_v1_device, 13);
+  messageDesc(file_lazurio_app_device_v1_device, 14);
 
 /**
- * Who holds the computer: one agent at a time on the whole computer (contract v1).
+ * Who holds the computer: one agent at a time on the whole computer.
  *
  * @generated from message lazurio.app.device.v1.LockState
  */
@@ -463,7 +575,7 @@ export type LockState = Message<"lazurio.app.device.v1.LockState"> & {
  * Use `create(LockStateSchema)` to create a new message.
  */
 export const LockStateSchema: GenMessage<LockState> = /*@__PURE__*/
-  messageDesc(file_lazurio_app_device_v1_device, 14);
+  messageDesc(file_lazurio_app_device_v1_device, 15);
 
 /**
  * The device helper's last message after Shutdown or the end of its input, sent on its own once
@@ -487,7 +599,7 @@ export type DeviceStopped = Message<"lazurio.app.device.v1.DeviceStopped"> & {
  * Use `create(DeviceStoppedSchema)` to create a new message.
  */
 export const DeviceStoppedSchema: GenMessage<DeviceStopped> = /*@__PURE__*/
-  messageDesc(file_lazurio_app_device_v1_device, 15);
+  messageDesc(file_lazurio_app_device_v1_device, 16);
 
 /**
  * One entry of the history. It names what happened and never holds content: no screen, no text,
@@ -534,7 +646,7 @@ export type HistoryEntry = Message<"lazurio.app.device.v1.HistoryEntry"> & {
  * Use `create(HistoryEntrySchema)` to create a new message.
  */
 export const HistoryEntrySchema: GenMessage<HistoryEntry> = /*@__PURE__*/
-  messageDesc(file_lazurio_app_device_v1_device, 16);
+  messageDesc(file_lazurio_app_device_v1_device, 17);
 
 /**
  * A page of the history.
@@ -560,5 +672,5 @@ export type HistoryPage = Message<"lazurio.app.device.v1.HistoryPage"> & {
  * Use `create(HistoryPageSchema)` to create a new message.
  */
 export const HistoryPageSchema: GenMessage<HistoryPage> = /*@__PURE__*/
-  messageDesc(file_lazurio_app_device_v1_device, 17);
+  messageDesc(file_lazurio_app_device_v1_device, 18);
 

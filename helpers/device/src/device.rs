@@ -1,22 +1,24 @@
 //! The Device's work in the helper protocol (`lazurio.app.device.v1`, ADR 0006 point 2).
 //!
 //! The helper answers every request of the package and checks it. The lock of one agent with the
-//! device lock around it (`lock`), the history without content (`history`) and the attach channel
-//! of each Environment (`channel`) are in place. `StartChannel` arrives decoded apart with its
-//! secrets in self-wiping types (`secret_start`); after its checks its secrets move into the
-//! channel's thread. Each session passes the Environment's MCP messages to the engine next to the
-//! helper's binary (`engine`, `tap`), and a tool call reaches it only while this Environment holds
-//! the computer. Without the engine, the channel serves no tools (`mcp_stub`). Stop ends the
-//! holder's engine, so a running tool stops, and the computer is free only once that engine has
-//! been killed and waited for.
+//! device lock around it (`lock`), the history without content (`history`), the attach channel of
+//! each Environment (`channel`, contract v3) and the guard against the utility Lazurio Agent
+//! Desktop (`guard`) are in place. `StartChannel` arrives decoded apart with its secrets, the
+//! hand-over among them, in self-wiping types (`secret_start`); after its checks its secrets move
+//! into the channel's thread, which sends the hand-over once. Each session passes the Environment's
+//! MCP messages to the engine next to the helper's binary (`engine`, `tap`), and a tool call
+//! reaches it only while this Environment holds the computer. Without the engine, the channel
+//! serves no tools (`mcp_stub`). Stop ends the holder's engine, so a running tool stops, and the
+//! computer is free only once that engine has been killed and waited for.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, PoisonError};
+use std::time::{Duration, Instant};
 
-use crate::channel::{self, Channel, LockReport, Report, Supervisor, Timing};
+use crate::channel::{self, Channel, LockReport, Report, SharedAttempts, Supervisor, Timing};
 use crate::engine::EngineSpec;
+use crate::guard::{self, Guard, SystemCheck, UtilityCheck};
 use crate::history::{self, History};
 use crate::lazurio::app::device::v1::{
     ChannelState, ConfigureDevice, Connecting, DeviceReady, HoldForUpdate, ListHistory,
@@ -25,18 +27,19 @@ use crate::lazurio::app::device::v1::{
 use crate::lazurio::app::helper::v1::{Failure, app_message, helper_message};
 use crate::lock::{self, DeviceLock, SharedLock};
 use crate::secret_start::StartRequest;
-use crate::wire::Connector;
+use crate::wire::{self, Connector};
 
-/// The newest version of contract v1 of the attach session this helper speaks.
-pub const CONTRACT_VERSION: u32 = 1;
+/// The version of the attach contract this helper speaks.
+pub const CONTRACT_VERSION: u32 = 3;
 
-/// The size of an Ed25519 seed.
-const KEY_SEED_BYTES: usize = 32;
+/// The longest hand-over the helper accepts; Lazurio Auth's are 43 characters.
+const MAX_HAND_OVER_BYTES: usize = 256;
 
 /// What the helper holds after `ConfigureDevice`.
 struct Runtime {
     history: Arc<History>,
     lock: Arc<SharedLock>,
+    guard: Arc<Guard>,
 }
 
 /// How the answer to a request reaches the main process.
@@ -68,6 +71,13 @@ struct Channels {
     engine: Option<EngineSpec>,
     /// How sessions end their engines.
     ender: channel::Ender,
+    /// Whether the utility Lazurio Agent Desktop is paired, and how often to ask while a channel is
+    /// open.
+    utility: Arc<dyn UtilityCheck>,
+    utility_every: Duration,
+    utility_timeout: Duration,
+    /// The earlier hand-overs of each Environment, until its `StopChannel`.
+    attempts: HashMap<String, SharedAttempts>,
     /// Runs before each answer is sent, so a test can hold the request thread there.
     #[cfg(test)]
     before_reply: Option<Arc<dyn Fn(u64) + Send + Sync>>,
@@ -87,6 +97,10 @@ impl Channels {
             supervisor.stop();
             self.stopping.push(supervisor);
         }
+    }
+
+    fn attempts(&mut self, environment_id: &str) -> SharedAttempts {
+        Arc::clone(self.attempts.entry(environment_id.to_owned()).or_default())
     }
 }
 
@@ -111,6 +125,10 @@ impl Device {
                 helper_version: String::new(),
                 engine: EngineSpec::bundled(),
                 ender: crate::engine::Engine::end,
+                utility: Arc::new(SystemCheck),
+                utility_every: guard::CHECK_EVERY,
+                utility_timeout: guard::CHECK_TIMEOUT,
+                attempts: HashMap::new(),
                 #[cfg(test)]
                 before_reply: None,
                 running: HashMap::new(),
@@ -136,14 +154,30 @@ impl Device {
         self
     }
 
-    /// Channels that dial `connector` with `timing` and start no engine, for tests against a
-    /// fake Environment.
+    /// Channels that dial `connector` with `timing`, start no engine and find the utility Lazurio
+    /// Agent Desktop not paired, for tests against a fake Environment.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_channels(mut self, connector: Connector, timing: Timing) -> Self {
         self.channels.connector = Arc::new(connector);
         self.channels.timing = timing;
         self.channels.engine = None;
+        self.channels.utility = crate::testkit::FakeUtility::absent();
+        self
+    }
+
+    /// A guard that asks `check` every `every`, for tests of the utility Lazurio Agent Desktop.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_utility(
+        mut self,
+        check: Arc<dyn UtilityCheck>,
+        every: Duration,
+        timeout: Duration,
+    ) -> Self {
+        self.channels.utility = check;
+        self.channels.utility_every = every;
+        self.channels.utility_timeout = timeout;
         self
     }
 
@@ -246,11 +280,22 @@ impl Device {
             .lock_path
             .clone()
             .ok_or_else(|| invalid("the system gives no place for the device lock"))?;
+        let history = Arc::new(History::new(Path::new(&request.data_directory)));
+        // The hold ends on its own at its deadline; telling the main process about it
+        // comes with the channel, which owns the helper's output.
+        let lock = Arc::new(SharedLock::new(DeviceLock::new(lock_path), |_| {}));
+        let guard = Arc::new(Guard::new(
+            Arc::clone(&self.channels.utility),
+            self.channels.utility_every,
+            self.channels.utility_timeout,
+            Arc::clone(&lock),
+            Arc::clone(&history),
+            Arc::clone(&self.channels.lock_report),
+        ));
         self.runtime = Some(Runtime {
-            history: Arc::new(History::new(Path::new(&request.data_directory))),
-            // The hold ends on its own at its deadline; telling the main process about it
-            // comes with the channel, which owns the helper's output.
-            lock: Arc::new(SharedLock::new(DeviceLock::new(lock_path), |_| {})),
+            history,
+            lock,
+            guard,
         });
         Ok(helper_message::Kind::DeviceReady(DeviceReady {
             contract_version: CONTRACT_VERSION,
@@ -259,18 +304,25 @@ impl Device {
 
     /// Answers a `StartChannel`, read apart from the other requests (`secret_start`): after its
     /// checks it stops the Environment's channel if one runs and answers Connecting. The new
-    /// channel starts with [`Device::start_prepared`], once the answer is on its way.
+    /// channel starts with [`Device::start_prepared`], once the answer is on its way; the guard's
+    /// check runs on its thread, so no request waits for it.
     pub fn start_channel(&mut self, request: StartRequest) -> helper_message::Kind {
         if let Err(failure) = self.check_start(&request) {
             return helper_message::Kind::Failure(failure);
         }
         let environment_id = request.environment_id.clone();
         self.channels.stop(&environment_id);
+        let failed_attempts = self
+            .channels
+            .attempts(&environment_id)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .failed();
         self.channels.prepared = Some(request);
         helper_message::Kind::ChannelState(ChannelState {
             environment_id,
             state: Some(channel_state::State::Connecting(Connecting {
-                failed_attempts: 0,
+                failed_attempts,
             })),
         })
     }
@@ -283,6 +335,8 @@ impl Device {
         let environment_id = request.environment_id.clone();
         let spawned = Supervisor::spawn(Channel {
             request,
+            attempts: self.channels.attempts(&environment_id),
+            guard: Arc::clone(&runtime.guard),
             connector: Arc::clone(&self.channels.connector),
             timing: self.channels.timing,
             history: Arc::clone(&runtime.history),
@@ -320,11 +374,14 @@ impl Device {
         self.configured()?;
         check_environment_id(&request.environment_id)?;
         check_attach_url(&request.attach_url)?;
-        if request.device_id.trim().is_empty() {
-            return Err(invalid("device_id is empty"));
-        }
-        if request.key_seed.len() != KEY_SEED_BYTES {
-            return Err(invalid("key_seed must be 32 bytes"));
+        // The hand-over goes into a header: only base64url, so it can carry nothing else. The
+        // message names no part of it.
+        if request.hand_over.len() > MAX_HAND_OVER_BYTES
+            || !wire::is_header_token(&request.hand_over)
+        {
+            return Err(invalid(
+                "hand_over must be Lazurio Auth's hand-over, in base64url",
+            ));
         }
         if let Some(proxy) = &request.proxy
             && (proxy.host != "127.0.0.1"
@@ -343,6 +400,8 @@ impl Device {
         self.configured()?;
         check_environment_id(&request.environment_id)?;
         self.channels.stop(&request.environment_id);
+        // The switch is off: the next start begins without earlier failures.
+        self.channels.attempts.remove(&request.environment_id);
         Ok(helper_message::Kind::ChannelState(channel::off(
             &request.environment_id,
         )))
@@ -444,7 +503,7 @@ fn check_environment_id(id: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The attach address of contract v1: `wss://<host>/.lazurio/computers/attach`, with no
+/// The attach address: `wss://<host>/.lazurio/computers/attach`, with no
 /// credentials, port other than the default, query or fragment.
 fn check_attach_url(url: &str) -> Result<(), Failure> {
     let refused = || invalid("attach_url must be wss://<host>/.lazurio/computers/attach");
@@ -492,19 +551,18 @@ mod tests {
         assert_eq!(
             answer,
             Some(helper_message::Kind::DeviceReady(DeviceReady {
-                contract_version: 1
+                contract_version: 3
             }))
         );
         device
     }
 
-    fn start(attach_url: &str, key_seed: Vec<u8>, proxy: Option<ProxyRequest>) -> StartRequest {
+    fn start(attach_url: &str, hand_over: &[u8], proxy: Option<ProxyRequest>) -> StartRequest {
         StartRequest {
             environment_id: "env-a".to_owned(),
             environment_label: "Environment A".to_owned(),
             attach_url: attach_url.to_owned(),
-            device_id: "work-laptop".to_owned(),
-            key_seed: Zeroizing::new(key_seed),
+            hand_over: Zeroizing::new(hand_over.to_vec()),
             proxy,
         }
     }
@@ -526,12 +584,13 @@ mod tests {
     }
 
     const ATTACH: &str = "wss://launchpad.example.lazurio.io/.lazurio/computers/attach";
+    const HAND_OVER: &[u8] = crate::testkit::HAND_OVER;
 
     #[test]
     fn every_request_waits_for_configure_device() {
         let mut device = test_device();
         assert_eq!(
-            failure_code(Some(device.start_channel(start(ATTACH, vec![7; 32], None)))),
+            failure_code(Some(device.start_channel(start(ATTACH, HAND_OVER, None)))),
             "not_configured"
         );
         for kind in [
@@ -572,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn start_channel_refuses_anything_but_the_attach_address_of_contract_v1() {
+    fn start_channel_refuses_anything_but_the_attach_address() {
         let mut device = configured();
         for url in [
             "ws://launchpad.example.lazurio.io/.lazurio/computers/attach",
@@ -584,25 +643,41 @@ mod tests {
             "wss://launchpad.example.lazurio.io/other",
             "wss:///.lazurio/computers/attach",
         ] {
-            let answer = device.start_channel(start(url, vec![7; 32], None));
+            let answer = device.start_channel(start(url, HAND_OVER, None));
             assert_eq!(failure_code(Some(answer)), "invalid_request", "{url}");
         }
     }
 
     #[test]
-    fn start_channel_needs_a_32_byte_seed_and_only_the_loopback_proxy() {
+    fn start_channel_needs_a_base64url_hand_over_and_only_the_loopback_proxy() {
         let mut device = configured();
-        let short = device.start_channel(start(ATTACH, vec![7; 31], None));
-        assert_eq!(failure_code(Some(short)), "invalid_request");
-        let foreign =
-            device.start_channel(start(ATTACH, vec![7; 32], Some(proxy("192.0.2.1", "p"))));
+        for bad in [
+            b"".as_slice(),
+            b"ab cd",
+            b"ab\r\nCookie: x",
+            b"abc=",
+            &[b'a'; 257],
+        ] {
+            let Some(helper_message::Kind::Failure(failure)) =
+                Some(device.start_channel(start(ATTACH, bad, None)))
+            else {
+                panic!("refused: {bad:?}");
+            };
+            assert_eq!(failure.code, "invalid_request");
+            assert!(
+                !failure.message.contains("ab"),
+                "the message names no part of it: {}",
+                failure.message
+            );
+        }
+        let foreign = device.start_channel(start(ATTACH, HAND_OVER, Some(proxy("192.0.2.1", "p"))));
         assert_eq!(failure_code(Some(foreign)), "invalid_request");
         let unprotected =
-            device.start_channel(start(ATTACH, vec![7; 32], Some(proxy("127.0.0.1", ""))));
+            device.start_channel(start(ATTACH, HAND_OVER, Some(proxy("127.0.0.1", ""))));
         assert_eq!(failure_code(Some(unprotected)), "invalid_request");
         let mut beyond = proxy("127.0.0.1", "p");
         beyond.port = 65_536;
-        let beyond = device.start_channel(start(ATTACH, vec![7; 32], Some(beyond)));
+        let beyond = device.start_channel(start(ATTACH, HAND_OVER, Some(beyond)));
         assert_eq!(failure_code(Some(beyond)), "invalid_request");
     }
 
@@ -612,7 +687,7 @@ mod tests {
         use crate::testkit::{Event, FakeEnvironment, PATIENCE, Session, quick_timing};
 
         let environment = FakeEnvironment::start(|session: &mut Session| {
-            if session.authenticate() {
+            if session.ready() {
                 session.until_closed();
             }
         });
@@ -631,12 +706,7 @@ mod tests {
             data_directory: directory.to_string_lossy().into_owned(),
             computer_name: "Work laptop".to_owned(),
         }));
-        let mut request = start(
-            crate::testkit::ATTACH_URL,
-            crate::testkit::SEED.to_vec(),
-            None,
-        );
-        request.device_id = crate::testkit::DEVICE_ID.to_owned();
+        let request = start(crate::testkit::ATTACH_URL, HAND_OVER, None);
 
         assert_eq!(
             device.start_channel(request),
@@ -822,12 +892,7 @@ mod tests {
             data_directory: directory.to_string_lossy().into_owned(),
             computer_name: "Work laptop".to_owned(),
         }));
-        let mut request = start(
-            crate::testkit::ATTACH_URL,
-            crate::testkit::SEED.to_vec(),
-            None,
-        );
-        request.device_id = crate::testkit::DEVICE_ID.to_owned();
+        let request = start(crate::testkit::ATTACH_URL, HAND_OVER, None);
         device.start_channel(request);
         device.start_prepared();
         let next_state = || states.recv_timeout(PATIENCE).expect("a state");
@@ -974,12 +1039,11 @@ mod tests {
         let start_channel = |device: &mut Device, id: &str, label: &str| {
             let mut request = start(
                 crate::testkit::ATTACH_URL,
-                crate::testkit::SEED.to_vec(),
+                &crate::testkit::hand_over(usize::from(id.as_bytes()[id.len() - 1])),
                 None,
             );
             request.environment_id = id.to_owned();
             request.environment_label = label.to_owned();
-            request.device_id = crate::testkit::DEVICE_ID.to_owned();
             device.start_channel(request);
             device.start_prepared();
         };
@@ -1113,5 +1177,409 @@ mod tests {
                 ..LockState::default()
             }))
         );
+    }
+
+    /// A Device against `environment` whose guard asks `utility` every `every`, reporting every
+    /// channel state to the returned receiver and every lock state to the other one.
+    #[allow(clippy::type_complexity)]
+    fn guarded_device(
+        environment: &crate::testkit::FakeEnvironment,
+        utility: &Arc<crate::testkit::FakeUtility>,
+        every: Duration,
+        timeout: Duration,
+        engine: Option<EngineSpec>,
+    ) -> (
+        Device,
+        std::sync::mpsc::Receiver<ChannelState>,
+        std::sync::mpsc::Receiver<crate::lazurio::app::device::v1::LockState>,
+        std::path::PathBuf,
+    ) {
+        let (sender, states) = std::sync::mpsc::channel();
+        let sender = std::sync::Mutex::new(sender);
+        let (lock_sender, lock_states) = std::sync::mpsc::channel();
+        let lock_sender = std::sync::Mutex::new(lock_sender);
+        let directory = scratch("guarded");
+        let mut device = test_device()
+            .with_channels(environment.connector(), crate::testkit::quick_timing())
+            .with_utility(Arc::clone(utility) as Arc<dyn UtilityCheck>, every, timeout)
+            .with_channel_report(
+                Arc::new(move |state| {
+                    let _ = sender.lock().expect("the test's sender").send(state);
+                }),
+                "1.2.3",
+            )
+            .with_lock_report(Arc::new(move |_, state| {
+                let _ = lock_sender.lock().expect("the test's sender").send(state);
+            }));
+        if let Some(engine) = engine {
+            device = device.with_engine(engine);
+        }
+        device.answer(&app_message::Kind::ConfigureDevice(ConfigureDevice {
+            data_directory: directory.to_string_lossy().into_owned(),
+            computer_name: "Work laptop".to_owned(),
+        }));
+        (device, states, lock_states, directory)
+    }
+
+    fn start_env(device: &mut Device, id: &str, hand_over: &[u8]) {
+        let mut request = start(crate::testkit::ATTACH_URL, hand_over, None);
+        request.environment_id = id.to_owned();
+        request.environment_label = format!("Label of {id}");
+        assert!(matches!(
+            device.start_channel(request),
+            helper_message::Kind::ChannelState(_)
+        ));
+        device.start_prepared();
+    }
+
+    fn state_of(
+        states: &std::sync::mpsc::Receiver<ChannelState>,
+    ) -> (String, channel_state::State) {
+        let state = states
+            .recv_timeout(crate::testkit::PATIENCE)
+            .expect("a channel state");
+        (state.environment_id, state.state.expect("a state"))
+    }
+
+    fn refused(reason: &str) -> channel_state::State {
+        channel_state::State::Refused(crate::lazurio::app::device::v1::Refused {
+            reason: reason.to_owned(),
+            http_status: 0,
+        })
+    }
+
+    #[test]
+    fn with_the_utility_paired_no_channel_opens_and_the_reason_is_reported() {
+        use crate::testkit::{Event, FakeEnvironment, FakeUtility, PATIENCE, Session};
+
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            if session.ready() {
+                session.until_closed();
+            }
+        });
+        let utility = FakeUtility::absent();
+        utility.set(guard::Pairing::Paired);
+        let (mut device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            None,
+        );
+
+        start_env(&mut device, "env-a", HAND_OVER);
+        assert_eq!(
+            state_of(&states),
+            ("env-a".to_owned(), refused(guard::PAIRED))
+        );
+        assert!(device.shutdown(Instant::now() + PATIENCE));
+        assert!(
+            !environment
+                .events
+                .try_iter()
+                .any(|event| event == Event::Tcp),
+            "nothing reached the Environment"
+        );
+    }
+
+    #[test]
+    fn a_check_that_fails_opens_no_channel() {
+        use crate::testkit::{Event, FakeEnvironment, FakeUtility, PATIENCE, Session};
+
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            if session.ready() {
+                session.until_closed();
+            }
+        });
+        let utility = FakeUtility::absent();
+        utility.set(guard::Pairing::Failed);
+        let (mut device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            None,
+        );
+
+        start_env(&mut device, "env-a", HAND_OVER);
+        assert_eq!(
+            state_of(&states),
+            ("env-a".to_owned(), refused(guard::CHECK_FAILED))
+        );
+        assert!(device.shutdown(Instant::now() + PATIENCE));
+        assert!(
+            !environment
+                .events
+                .try_iter()
+                .any(|event| event == Event::Tcp)
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story: the utility appears while an agent works, then goes"
+    )]
+    fn the_utility_paired_while_an_agent_works_stops_it_and_closes_every_channel() {
+        use crate::lazurio::app::device::v1::{Connected, Working};
+        use crate::testkit::{
+            EngineEvent, Event, FakeEngines, FakeUtility, Order, PATIENCE, scripted_sessions,
+            spawning,
+        };
+        use serde_json::json;
+
+        let _forks = spawning();
+        let (environment, mut orders) = scripted_sessions(2);
+        let (a, _b) = (orders.remove(0), orders.remove(0));
+        let engines = FakeEngines::start();
+        let utility = FakeUtility::absent();
+        // The interval is short here; the guard's own is 10 s.
+        let every = Duration::from_millis(20);
+        let (mut device, states, lock_states, directory) = guarded_device(
+            &environment,
+            &utility,
+            every,
+            guard::CHECK_TIMEOUT,
+            Some(engines.spec()),
+        );
+
+        // A's agent runs a tool on engine 1 and holds the computer; B is connected.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-a".to_owned(),
+                channel_state::State::Connected(Connected {})
+            )
+        );
+        let initialize = json!({"jsonrpc": "2.0", "id": "a0", "method": "initialize",
+                                "params": {"protocolVersion": "2025-06-18", "capabilities": {}}});
+        a.send(Order::Send(initialize))
+            .expect("the session follows orders");
+        environment.answer(&json!("a0"));
+        a.send(Order::Send(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                   "params": {"name": "desktop_wait", "arguments": {}}}),
+        ))
+        .expect("the session follows orders");
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 1, tool, .. } if tool == "desktop_wait")
+        });
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-a".to_owned(),
+                channel_state::State::Working(Working {
+                    tool: "desktop_wait".to_owned(),
+                    application: String::new(),
+                })
+            )
+        );
+        start_env(&mut device, "env-b", &crate::testkit::hand_over(2));
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-b".to_owned(),
+                channel_state::State::Connected(Connected {})
+            )
+        );
+        let asked = utility.asked();
+        utility.wait_asked_more_than(asked);
+
+        // The utility is paired now: within one interval the agent stops and both channels close.
+        utility.set(guard::Pairing::Paired);
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(1))),
+            EngineEvent::Ended(1),
+            "the working agent's engine ended"
+        );
+        let mut closed: Vec<(String, channel_state::State)> = Vec::new();
+        while closed.len() < 2 {
+            let (id, state) = state_of(&states);
+            if matches!(state, channel_state::State::Refused(_)) {
+                closed.push((id, state));
+            }
+        }
+        closed.sort_by(|left, right| left.0.cmp(&right.0));
+        assert_eq!(
+            closed,
+            [
+                ("env-a".to_owned(), refused(guard::PAIRED)),
+                ("env-b".to_owned(), refused(guard::PAIRED))
+            ]
+        );
+        loop {
+            let state = lock_states
+                .recv_timeout(PATIENCE)
+                .expect("who holds the computer is reported");
+            if state.idle {
+                break;
+            }
+        }
+        let mut sessions_closed = 0;
+        while sessions_closed < 2 {
+            if environment.next() == Event::Closed {
+                sessions_closed += 1;
+            }
+        }
+        let kinds: Vec<String> = History::new(&directory)
+            .page("", 20)
+            .entries
+            .into_iter()
+            .rev()
+            .map(|entry| entry.kind)
+            .collect();
+        assert!(
+            kinds.iter().any(|kind| kind == history::kind::STOPPED),
+            "the stop is in the history: {kinds:?}"
+        );
+
+        // The utility's entries are gone: a new StartChannel, with a new hand-over, opens.
+        utility.set(guard::Pairing::Absent);
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(3));
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-a".to_owned(),
+                channel_state::State::Connected(Connected {})
+            )
+        );
+        assert!(device.shutdown(Instant::now() + PATIENCE));
+    }
+
+    #[test]
+    fn a_check_that_hangs_opens_no_channel_and_closes_an_open_one() {
+        use crate::lazurio::app::device::v1::Connected;
+        use crate::testkit::{Event, FakeEnvironment, FakeUtility, PATIENCE, Session};
+
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            if session.ready() {
+                session.until_closed();
+            }
+        });
+        let utility = FakeUtility::absent();
+        // The interval and the limit are short here; the guard's own are 10 s and 5 s.
+        let (mut device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            Duration::from_millis(20),
+            Duration::from_millis(50),
+            None,
+        );
+
+        // A channel is open; then the check hangs, as a search on a prompt does.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-a".to_owned(),
+                channel_state::State::Connected(Connected {})
+            )
+        );
+        utility.hang();
+        assert_eq!(
+            state_of(&states),
+            ("env-a".to_owned(), refused(guard::CHECK_FAILED)),
+            "the periodic check failed within its limit and closed the channel"
+        );
+        assert_eq!(
+            environment.until(|event| *event == Event::Closed),
+            Event::Closed
+        );
+
+        // While that search still hangs, a new StartChannel opens nothing and asks nothing.
+        let asked = utility.asked();
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
+        assert_eq!(
+            state_of(&states),
+            ("env-a".to_owned(), refused(guard::CHECK_FAILED))
+        );
+        assert_eq!(utility.asked(), asked, "no second search while one hangs");
+        assert!(
+            !environment
+                .events
+                .try_iter()
+                .any(|event| event == Event::Tcp),
+            "nothing reached the Environment"
+        );
+
+        utility.release();
+        assert!(device.shutdown(Instant::now() + PATIENCE));
+    }
+
+    /// The utility is paired right after a periodic check read the keychain, the worst moment:
+    /// the channel closes within the window, counted from the pairing, whether the next check
+    /// answers `Paired` or hangs until its limit. The times are the guard's shortened (window
+    /// 2 s, period 1 s, limit 1 s) and each check takes 700 ms: 300 ms below the limit, so a slow
+    /// runner still answers in time, and long enough that a period counted from the end of a
+    /// check (1 s + 2 × 700 ms) would overshoot the window and its tolerance.
+    #[test]
+    fn a_utility_paired_while_a_channel_is_open_closes_it_within_the_window() {
+        use crate::lazurio::app::device::v1::Connected;
+        use crate::testkit::{FakeEnvironment, FakeUtility, PATIENCE, Session};
+
+        const WINDOW: Duration = Duration::from_millis(2000);
+        const EVERY: Duration = Duration::from_millis(1000);
+        const LIMIT: Duration = Duration::from_millis(1000);
+        const TAKES: Duration = Duration::from_millis(700);
+        // Waking the guard's thread and closing the channel; below what a period counted from
+        // the end of a check adds (700 ms).
+        const TOLERANCE: Duration = Duration::from_millis(250);
+        const _: () = assert!(EVERY.as_millis() + LIMIT.as_millis() <= WINDOW.as_millis());
+        // A period from the end of a check overshoots: EVERY + 2 × TAKES > WINDOW + TOLERANCE.
+        const _: () = assert!(
+            EVERY.as_millis() + 2 * TAKES.as_millis() > WINDOW.as_millis() + TOLERANCE.as_millis()
+        );
+        const _: () = assert!(TAKES.as_millis() + 300 <= LIMIT.as_millis());
+
+        for hangs in [false, true] {
+            let environment = FakeEnvironment::start(|session: &mut Session| {
+                if session.ready() {
+                    session.until_closed();
+                }
+            });
+            let utility = FakeUtility::absent();
+            utility.take(TAKES);
+            let (mut device, states, _locks, _) =
+                guarded_device(&environment, &utility, EVERY, LIMIT, None);
+            start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+            assert_eq!(
+                state_of(&states),
+                (
+                    "env-a".to_owned(),
+                    channel_state::State::Connected(Connected {})
+                )
+            );
+
+            // The first periodic check has read "absent" and still works on: now the utility
+            // is paired.
+            let asked = utility.asked();
+            utility.wait_asked_more_than(asked);
+            utility.set(guard::Pairing::Paired);
+            if hangs {
+                utility.hang();
+            }
+            let paired = Instant::now();
+
+            let (id, state) = state_of(&states);
+            let took = paired.elapsed();
+            assert_eq!(id, "env-a");
+            assert_eq!(
+                state,
+                refused(if hangs {
+                    guard::CHECK_FAILED
+                } else {
+                    guard::PAIRED
+                }),
+                "hangs: {hangs}"
+            );
+            assert!(
+                took <= WINDOW + TOLERANCE,
+                "hangs: {hangs}: the channel closed {took:?} after the pairing, past the window \
+                 of {WINDOW:?}"
+            );
+            utility.release();
+            assert!(device.shutdown(Instant::now() + PATIENCE));
+        }
     }
 }

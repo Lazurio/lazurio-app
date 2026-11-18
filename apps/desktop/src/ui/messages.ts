@@ -51,6 +51,12 @@ export interface DeviceText {
   readonly connecting: string;
   readonly connected: string;
   readonly refused: string;
+  // The channel ended and waits for a new hand-over. "{reason}" stands for the helper's code.
+  readonly needsHandOver: string;
+  // The helper opens no channel while the earlier utility is paired on the computer, or when it
+  // cannot tell.
+  readonly agentDesktopPaired: string;
+  readonly agentDesktopCheckFailed: string;
   readonly working: string;
   readonly workingIn: string;
   readonly agentWorking: string;
@@ -152,6 +158,10 @@ const cs: Text = {
     connecting: "Připojuje se",
     connected: "Připojeno",
     refused: "Odmítnuto ({reason})",
+    needsHandOver: "Odpojeno ({reason})",
+    agentDesktopPaired: "Na tomto počítači je spárovaná utilita Lazurio Agent Desktop.",
+    agentDesktopCheckFailed:
+      "Nepodařilo se ověřit, jestli je na tomto počítači spárovaná utilita Lazurio Agent Desktop.",
     working: "Pracuje agent: {tool}",
     workingIn: "Pracuje agent: {tool} v {application}",
     agentWorking: "Na tomto počítači pracuje agent z Prostředí {label}.",
@@ -230,6 +240,10 @@ const en: Text = {
     connecting: "Connecting",
     connected: "Connected",
     refused: "Refused ({reason})",
+    needsHandOver: "Disconnected ({reason})",
+    agentDesktopPaired: "The utility Lazurio Agent Desktop is paired on this computer.",
+    agentDesktopCheckFailed:
+      "Could not check whether the utility Lazurio Agent Desktop is paired on this computer.",
     working: "An agent is working: {tool}",
     workingIn: "An agent is working: {tool} in {application}",
     agentWorking: "An agent from the Environment {label} is working on this computer.",

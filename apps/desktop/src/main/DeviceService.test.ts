@@ -53,7 +53,7 @@ const fakeHelper = Effect.gen(function* () {
       if (reply !== undefined) return reply;
     }
     if (kind.case === "configureDevice") {
-      return { case: "deviceReady", value: { contractVersion: 1 } };
+      return { case: "deviceReady", value: { contractVersion: 3 } };
     }
     return { case: "failure", value: { code: "unknown_request", message: "not in this test" } };
   };
@@ -199,6 +199,28 @@ describe("DeviceService", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("shows a channel that spent its hand-over and why", () =>
+    Effect.gen(function* () {
+      const helper = yield* fakeHelper;
+      const service = yield* start(helper);
+      yield* helper.send({
+        case: "channelState",
+        value: {
+          environmentId: "env-a",
+          state: {
+            case: "needsHandOver",
+            value: { reason: "expired", failedAttempts: 0, retryAfterMs: 1000n, httpStatus: 0 },
+          },
+        },
+      });
+      const status = yield* stateWhere(service, (status) => status.environments.length === 1);
+      assert.deepStrictEqual(status.environments[0]?.channel, {
+        state: "needs-hand-over",
+        reason: "expired",
+      });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("sends Stop and StopChannel and takes their answers", () =>
     Effect.gen(function* () {
       const helper = yield* fakeHelper;
@@ -249,8 +271,7 @@ describe("DeviceService", () => {
       const request = {
         environmentId: "env-a",
         environmentLabel: "Bob's Environment",
-        deviceId: "work-laptop",
-        keySeed: new Uint8Array(32),
+        handOver: new TextEncoder().encode("hX7qR2mK9vT4wL1pZ8nB3cF6yJ0sD5gA2eU7iO4kQ9r"),
       };
       yield* service.startChannel({
         ...request,

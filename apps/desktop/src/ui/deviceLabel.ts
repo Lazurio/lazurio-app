@@ -13,7 +13,16 @@ export const channelLabel = (channel: DeviceChannelState, text: DeviceText): str
     case "unknown":
       return text.unknown;
     case "refused":
-      return text.refused.replace("{reason}", channel.reason);
+      switch (channel.reason) {
+        case "agent_desktop_paired":
+          return text.agentDesktopPaired;
+        case "agent_desktop_check_failed":
+          return text.agentDesktopCheckFailed;
+        default:
+          return text.refused.replace("{reason}", channel.reason);
+      }
+    case "needs-hand-over":
+      return text.needsHandOver.replace("{reason}", channel.reason);
     case "working":
       return channel.application === ""
         ? text.working.replace("{tool}", channel.tool)
