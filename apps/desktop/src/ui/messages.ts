@@ -230,8 +230,10 @@ const cs: Text = {
     problems: {
       signInFailed: "Přihlášení se nedokončilo. Zapněte vypínač znovu a přihlaste se v prohlížeči.",
       signedOut: "Přihlášení k Lazurio účtu skončilo. Zapněte vypínač znovu a přihlaste se.",
+      // Auth answers 404 both for an Environment it does not know and for one that has not moved to
+      // the new sign-in to Environments yet; the app cannot tell them apart, so the text fits both.
       unknownEnvironment:
-        "Lazurio toto Prostředí nezná. Zkontrolujte, že jste ho přidali ze stránky jeho Lazuria, nebo ho odeberte.",
+        "Toto Prostředí zatím ovládání počítače neumí. Začne fungovat, až přejde na nové přihlášení do Prostředí. Vypínač zatím nechte vypnutý.",
       notPermitted:
         "Toto Prostředí není přiřazené vám, a proto s ním tento počítač propojit nejde. Agent Desktop jde zapnout jen pro vaše Prostředí.",
       environmentStateConflict:
@@ -360,7 +362,7 @@ const en: Text = {
       signedOut:
         "Your sign-in to your Lazurio account ended. Turn the switch on again and sign in.",
       unknownEnvironment:
-        "Lazurio does not know this Environment. Check that you added it from its Lazurio page, or remove it.",
+        "This Environment cannot let an agent use this computer yet. It will, once it moves to the new sign-in to Environments. Leave the switch off for now.",
       notPermitted:
         "This Environment is not assigned to you, so this computer cannot be connected to it. Agent Desktop can be turned on only for your own Environments.",
       environmentStateConflict:
