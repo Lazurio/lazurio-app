@@ -557,8 +557,9 @@ export const layer = (options: AuthClientOptions) =>
       });
 
       // A token for one call of device-hand-over: the scope lazurio-device-entry and its one
-      // audience. Whether the scope must be exactly that one (route check 2) is Auth's to judge:
-      // Keycloak 26.6.2 answers openid beside it, and Auth's 401 then says so.
+      // audience. Whether the scope is exactly that one (route check 2) is Auth's to judge; the
+      // pinned Keycloak 26.7.3 answers exactly it, and an older one that kept openid gets Auth's
+      // 401.
       const deviceEntryToken = lock.withPermits(1)(
         Effect.gen(function* () {
           if (Option.isNone(session)) return yield* new SignedOutError();

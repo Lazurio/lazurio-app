@@ -121,7 +121,7 @@ interface FakeAuth {
   settings: {
     accessTokenSeconds: number;
     // How a refresh treats its `scope`: narrowing to it, as the contract says; keeping openid
-    // beside it, as Keycloak 26.6.2 does; adding another audience; or dropping it.
+    // beside it, as Keycloak 26.6.2 did; adding another audience; or dropping it.
     scopedRefresh: "exact" | "keeps-openid" | "two-audiences" | "drops-scope";
     // Refuses this many hand-overs with 401 although their token is right.
     rejectHandOvers: number;

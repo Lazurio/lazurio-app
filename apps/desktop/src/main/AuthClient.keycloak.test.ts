@@ -21,7 +21,10 @@ import type { Keystore } from "./NodeKeys.ts";
 // with the image already on the machine.
 
 const ENABLED = process.env.LAZURIO_KEYCLOAK_TEST === "1";
-const IMAGE = "quay.io/keycloak/keycloak:26.6.2";
+// Keycloak 26.7.3, pinned by digest exactly as HumanAndMachine-ai/Auth's workspace/Dockerfile
+// pins it.
+const IMAGE =
+  "quay.io/keycloak/keycloak@sha256:88943b6ad06d6293a239f0dfca5acec64218c9b3ab327bf9c936acf408a6ae3b";
 const USERNAME = "test-person";
 const PASSWORD = "keycloak-test-only-password";
 const ENVIRONMENT_ORIGIN = "https://launchpad.alice.example-org.lazurio.io";
@@ -227,10 +230,10 @@ describe.runIf(ENABLED)("AuthClient against Keycloak", () => {
       yield* Effect.logInfo(
         `Keycloak answers to a refresh with scope=${DEVICE_ENTRY_SCOPE}: ${renewed.scope}`,
       );
-      // Auth's contract (check 2) expects exactly lazurio-device-entry from the pinned 26.7.3;
-      // 26.6.2, the only image here, answers openid beside it. Reported to Auth:
-      // https://github.com/HumanAndMachine-ai/Auth/issues/136.
-      assert.include(String(renewed.scope).split(" "), DEVICE_ENTRY_SCOPE);
+      // Auth's contract (check 2) takes exactly lazurio-device-entry, and the pinned 26.7.3 answers
+      // exactly that, without openid (26.6.2 kept openid beside it:
+      // https://github.com/HumanAndMachine-ai/Auth/issues/136).
+      assert.strictEqual(renewed.scope, DEVICE_ENTRY_SCOPE);
       assert.strictEqual(scoped.scope, renewed.scope);
       assert.strictEqual(scoped.aud, DEVICE_ENTRY_SCOPE);
       assert.strictEqual(scoped.azp, CLIENT_ID);
