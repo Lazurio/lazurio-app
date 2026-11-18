@@ -390,9 +390,13 @@ describe("Agent Desktop's switch", () => {
       const window = BaseWindow.getAllWindows()[0];
       if (window === undefined) return false;
       await new Promise<void>((resolve) => {
-        window.once(action === "hide" ? "show" : "restore", () => resolve());
-        if (action === "hide") window.hide();
-        else window.minimize();
+        if (action === "hide") {
+          window.once("show", () => resolve());
+          window.hide();
+        } else {
+          window.once("restore", () => resolve());
+          window.minimize();
+        }
       });
       return window.isVisible() && !window.isMinimized();
     }, how);
