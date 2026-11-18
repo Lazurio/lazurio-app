@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Proposed:** 2026-11-17, for the proof of concept of plan LZD-0017 (task 640)
-- **Amended:** 2026-11-17, with Matěj's decisions on the source of a person's tailnets, on the IT policy for Lazurio App (Alpha) at a client and on two sign-ins in the first version (points 6 and 7, open questions 1 and 2), and the issuer of the app's own client (consequences)
+- **Amended:** 2026-11-17, with Matěj's decisions on the source of a person's tailnets, on the IT policy for Lazurio App (Alpha) at a client and on two sign-ins in the first version (points 6 and 7, open questions 1 and 2), and the issuer of the app's own client (consequences); 2026-11-18, with Matěj's decision on the person's own setting without an administrator (point 6)
 - **Related:** decision 0248 of the [Lazurio decision register](https://github.com/Lazurio/LazurioPlatform/blob/main/docs/decision-register.md), [ADR 0002](0002-sign-in-pages.md) (pages of a remote view), [ADR 0003](0003-node-state-sealed.md) (sealed node state), [ADR 0005](0005-installers-updates-and-channels.md) (updates)
 
 ## Context
@@ -50,6 +50,12 @@ What exists:
      - Where a policy exists it replaces the built-in directory. A policy that does not decode joins no tailnet rather than the built-in one.
      - The same check of Lazurio's domains applies. The exception ends with task 644.
      - How IT deploys it: [Tailnets of Lazurio App set by IT](../it/tailnet-policy.md).
+   - **And until then, on Windows without an administrator, the person's own setting** (Matěj, 2026-11-18, accepted 18:44:09Z, answered to the coordinator of Lazurio App with the question tool). Asked whether the pilot may write the address of the network themselves with one file sent to them privately, without an administrator's rights, until the app learns it from the person's Lazurio account, he chose „Ano, dočasně“: the pilot does not wait for the sign-in's side, needs no administrator's password, and the exception is recorded here and withdrawn once the target is done. Its bounds:
+     - **Temporary.** It ends when the directory at Lazurio Auth serves the person (task 644). Then the app stops reading it, or Matěj decides on it again.
+     - **Only without IT's policy.** The app reads it only where its tailnet helper confirms that the computer has no policy (`read-policy` exits with "no policy"). A policy always wins, and a policy that cannot be read keeps the setting unread.
+     - **The same shape and checks as the policy.** It is the string value `Tailnets` under `HKCU\Software\Lazurio\App`, read by the helper through the registry's API (`lazurio-tailnet read-user-setting`). Only control servers and suffixes below Lazurio's domains count, and a setting that does not decode joins no tailnet.
+     - **What it does not protect against.** Any program with the person's rights can change it, though only towards Lazurio's control servers. Being listed grants nothing: registration needs the person's Lazurio account and membership, and reach needs the Organization's approval of the computer.
+     - **The address of a customer Organization's network never goes into this repository.** Lazurio sends the file to the pilot privately. How the person writes it: [Tailnets of Lazurio App set by IT](../it/tailnet-policy.md), "Without an administrator".
 
 7. **Two sign-ins in the first version** (Matěj, 2026-11-17, 17:44–17:47Z):
    - **The app's own public client signs in in the system's browser**, with a redirect to the loopback (RFC 8252). It does so for the directory and for the Device's permission. The node's sign-in stays there too (point 2).
@@ -64,6 +70,7 @@ What exists:
 - **Approving a new Device stays a step of an Owner** in the Organization's Deployment Repo (approved Devices, plan, apply). The proof of concept on a person's computer needs that step for its Device.
 - **A directory built into a public repository names only Lazurio's own tailnets.** A customer Organization's control server never goes into this repository or into a published build. It reaches the app through the IT policy on the Organization's own computers, and later through the directory at Lazurio Auth.
 - **The IT policy assigns tailnets by computer.** Everyone who signs in on a computer with the policy gets its tailnets offered, and only members get past Lazurio Auth's check. It is accepted for Lazurio App (Alpha) at a client and ends with task 644.
+- **The person's own setting assigns tailnets by the person's Windows account,** and anything running under that account can change it within Lazurio's domains. It is accepted for the same pilot without an administrator and ends with task 644, like the policy.
 - **The directory gives only a control server and DNS suffixes**, which are no secrets: the names are public in DNS, and the control server admits only members.
 - **A node's and an Environment's sign-ins never name the issuer:** a node signs in through the login address its control server gives, and an Environment through its gateway's redirects. Only the app's own client (point 7) names it, through `LAZURIO_AUTH_ISSUER`. An issuer that moves therefore changes neither the node's nor the Environment's sign-in.
 - **The issuer appears in exactly two lines of `apps/desktop/src/main/Navigation.ts`:** its host `LAZURIO_AUTH_HOST`, which ADR 0002 uses, and the issuer `LAZURIO_AUTH_ISSUER` derived from it, which only the app's own client uses (point 7). ADR 0002 uses it to let a remote view show the issuer and, only during a sign-in it answered, GitHub's sign-in pages.

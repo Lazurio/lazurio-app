@@ -194,24 +194,14 @@ const packagedDirectory = Effect.gen(function* () {
       directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
     };
   }
-  // The packaged tailnet helper reads the policy through the registry's API.
+  // The packaged tailnet helper reads the policy and the person's setting through the registry's
+  // API; the setting counts only where the helper confirms there is no policy (TailnetPolicy).
   const helper = path.join(process.resourcesPath, "helpers", "lazurio-tailnet.exe");
-  const policy = yield* TailnetPolicy.readWindows(helper).pipe(
-    Effect.tapError((error) => Effect.logWarning("cannot read the tailnet policy", error)),
-    Effect.orElseSucceed(() => Option.none<string>()),
+  return yield* TailnetPolicy.directoryOf(
+    (source) => TailnetPolicy.readWindows(helper, source),
+    TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
+    NodeOS.hostname(),
   );
-  if (Option.isNone(policy)) {
-    return {
-      source: "built-in",
-      directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
-    };
-  }
-  // A policy that IT set but that does not decode joins nothing, rather than the built-in directory.
-  const directory = yield* TailnetDirectory.fromText(policy.value, NodeOS.hostname()).pipe(
-    Effect.tapError((error) => Effect.logError("the tailnet policy does not decode", error)),
-    Effect.orElseSucceed((): TailnetDirectory.Directory => ({ tailnets: [], refused: [] })),
-  );
-  return { source: "policy", directory };
 });
 
 const tailnetsToJoin = Effect.gen(function* () {

@@ -6,3 +6,8 @@ package main
 func readPolicy() (string, error) {
 	return "", errNoPolicy
 }
+
+// readUserSetting finds no setting where Windows' registry does not exist.
+func readUserSetting() (string, error) {
+	return "", errNoPolicy
+}

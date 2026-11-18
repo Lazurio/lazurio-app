@@ -59,6 +59,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - run: pnpm --filter @lazurio/app-desktop build
       - run: pnpm --filter @lazurio/app-desktop test:e2e
+      # Windows only: the person's own tailnet setting under a standard account, without an
+      # administrator (ADR 0008, point 6; docs/it/tailnet-policy.md).
+      - name: The person's own setting under a standard account
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: >-
+          ./apps/desktop/trial/standard-account-setting.ps1
+          -Helper helpers/tailnet/bin/lazurio-tailnet.exe
+          -Template docs/it/lazurio-app-tailnets.cmd
       - run: pnpm build:helpers --release
         env:
           GH_TOKEN: ${{ github.token }}

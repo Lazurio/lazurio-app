@@ -26,6 +26,9 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "read-policy" {
 		os.Exit(readPolicyCommand(readPolicy, os.Stdout, os.Stderr))
 	}
+	if len(os.Args) == 2 && os.Args[1] == "read-user-setting" {
+		os.Exit(readPolicyCommand(readUserSetting, os.Stdout, os.Stderr))
+	}
 	out := NewOutbox(os.Stdout)
 	nodes := NewNodes(func(state *tailnetv1.NodeState) {
 		if err := out.Send(&helperv1.HelperMessage{
