@@ -554,9 +554,12 @@ mod tests {
     ///
     /// - (a) an entry in the login keychain is `Paired`;
     /// - (b) once it is deleted, `Absent`;
-    /// - (c) an entry in a keychain of its own, which locks itself after 1 s without use (the
-    ///   only way to lock a keychain `security-framework` offers without unsafe code), is never
-    ///   `Absent`, and no prompt appears.
+    /// - (c) an entry in a keychain of its own, locked by the test with `security lock-keychain`
+    ///   (`security-framework` 3.7.0 can neither lock a keychain nor read its status), is never
+    ///   `Absent`, the search takes less than 5 s, so no prompt held it, and the keychain's user
+    ///   interface is on again after it. Before the search the test proves the lock: reading the
+    ///   entry's data with the user interface off works while the keychain is unlocked and fails
+    ///   with `errSecInteractionNotAllowed` once it is locked.
     ///
     /// An entry that needs authentication (an access control with user presence) lives in the
     /// data protection keychain, which an unsigned test binary without the
@@ -564,13 +567,19 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "writes test entries to this Mac's login keychain and a keychain of its own"]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story, from an entry in the login keychain to a locked keychain of its own"
+    )]
     fn the_keychain_check_on_this_mac() {
         use security_framework::os::macos::keychain::{
-            CreateOptions, KeychainSettings, SecKeychain, SecPreferencesDomain,
+            CreateOptions, SecKeychain, SecPreferencesDomain,
         };
         use security_framework::passwords::delete_generic_password;
 
         const ACCOUNT: &str = "env:device-helper-guard-test";
+        /// `errSecInteractionNotAllowed`: the keychain would have to ask the person to unlock it.
+        const INTERACTION_NOT_ALLOWED: i32 = -25308;
 
         /// Deletes the test's entry of `0` from the search list when dropped.
         struct Entry(String);
@@ -592,7 +601,7 @@ mod tests {
             }
         }
 
-        // The cleanup starts `security`.
+        // The test locks its keychain and cleans up with `security`.
         let _forks = crate::testkit::spawning();
         let unique = format!(
             "{}-{}",
@@ -624,42 +633,66 @@ mod tests {
         drop(entry);
         assert_eq!(keychain_check(&service, None), Pairing::Absent, "(b)");
 
-        // (c) An entry in a keychain of the test's own, once that keychain locked itself.
+        // (c) An entry in a keychain of the test's own, locked by the test.
         let directory = std::env::temp_dir().join(format!("lazurio-guard-test-{unique}"));
         std::fs::create_dir_all(&directory).expect("the test's directory");
         let keychain = Keychain(directory);
-        let mut own = CreateOptions::new()
+        let path = keychain.0.join("guard-test.keychain");
+        let own = CreateOptions::new()
             .password("device-helper-guard-test")
             .prompt_user(false)
-            .create(keychain.0.join("guard-test.keychain"))
+            .create(&path)
             .expect("the test's keychain");
         own.set_generic_password(&service, ACCOUNT, b"not a secret")
             .expect("the test's entry in its keychain");
+        // Reads the entry's data with the keychain's user interface off, as the guard turns it
+        // off, so a locked keychain answers with an error instead of asking to be unlocked.
+        let read_data = |keychain: &SecKeychain| {
+            let _one_at_a_time = KEYCHAIN_UI_OFF
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let _ui_off =
+                SecKeychain::disable_user_interaction().expect("the user interface is off");
+            keychain
+                .find_generic_password(&service, ACCOUNT)
+                .map(|_| ())
+                .map_err(security_framework::base::Error::code)
+        };
+        assert_eq!(
+            read_data(&own),
+            Ok(()),
+            "(c) the probe reads the entry of the unlocked keychain, so it can tell a lock"
+        );
         assert_eq!(
             keychain_check(&service, Some(std::slice::from_ref(&own))),
             Pairing::Paired,
             "(c) unlocked"
         );
-        let mut settings = KeychainSettings::new();
-        settings.set_lock_interval(Some(1));
-        own.set_settings(&settings)
-            .expect("the lock interval is set");
-        // The keychain's own timer locks it; no event says when, so the test waits well past it.
-        thread::sleep(Duration::from_secs(5));
+
+        let locked = std::process::Command::new("/usr/bin/security")
+            .arg("lock-keychain")
+            .arg(&path)
+            .status()
+            .expect("security runs");
+        assert!(locked.success(), "(c) security lock-keychain: {locked}");
+        match read_data(&own) {
+            Err(INTERACTION_NOT_ALLOWED) => {}
+            Ok(()) => panic!("(c) the keychain did not lock: its entry's data is still readable"),
+            Err(code) => panic!("(c) the keychain did not lock as expected: error {code}"),
+        }
+        assert!(ui_on(), "the user interface is on again after the probe");
+
         let started = Instant::now();
-        let locked = keychain_check(&service, Some(std::slice::from_ref(&own)));
-        println!(
-            "(c) a locked keychain: {locked:?} in {:?}",
-            started.elapsed()
-        );
-        assert_ne!(
-            locked,
-            Pairing::Absent,
-            "(c) a locked keychain is never Absent"
+        let found = keychain_check(&service, Some(std::slice::from_ref(&own)));
+        let took = started.elapsed();
+        println!("(c) a locked keychain: {found:?} in {took:?}");
+        assert!(
+            matches!(found, Pairing::Paired | Pairing::Failed),
+            "(c) a locked keychain is never Absent: {found:?}"
         );
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "(c) no prompt held the search"
+            took < Duration::from_secs(5),
+            "(c) no prompt held the search: {took:?}"
         );
         assert!(ui_on(), "the user interface is on again after a search");
         drop(keychain);
