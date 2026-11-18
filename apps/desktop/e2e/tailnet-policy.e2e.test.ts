@@ -5,7 +5,6 @@
 // policy and removes it; a computer that already has one is left alone.
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test runs the documented file from disk.
 import * as NodeFS from "node:fs";
-// @effect-diagnostics-next-line nodeBuiltinImport:off - The documented file goes to a temporary folder.
 import * as NodeOS from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the built helper on disk.
 import * as NodePath from "node:path";
