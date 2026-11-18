@@ -1202,6 +1202,7 @@ mod tests {
         let guard = Arc::new(Guard::new(
             FakeUtility::absent(),
             crate::guard::CHECK_EVERY,
+            crate::guard::CHECK_TIMEOUT,
             Arc::clone(lock),
             Arc::clone(&history),
             Arc::clone(&lock_report),

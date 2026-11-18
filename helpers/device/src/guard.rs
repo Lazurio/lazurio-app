@@ -15,12 +15,17 @@
 //! - Linux: the utility keeps no entry in a system keystore there, and Linux is no platform of the
 //!   pilot, so the check answers that it is not paired.
 //!
-//! The check fails closed: when it cannot tell (an error, a locked keychain, `cmdkey` not done
-//! within 5 s), no channel opens and every open channel closes, as when an entry is found. It runs
-//! before each channel opens and every 15 s while a channel is open ([`Guard`]). When it finds the
-//! utility, the agent is stopped the way Stop stops it (its engine's process tree ends, and the
-//! computer is free only after that), and every channel closes with the reason the main process
-//! shows.
+//! The check fails closed: when it cannot tell (an error, a locked keychain, no answer within 5 s),
+//! no channel opens and every open channel closes, as when an entry is found. Every check runs on a
+//! thread of its own and counts as failed after 5 s ([`CHECK_TIMEOUT`]): on macOS 26 a search in a
+//! locked keychain can show the prompt to unlock it although the keychain's user interface is off,
+//! and the search then waits for the person. While such a search still waits, no new one starts, so
+//! prompts never pile up, and every check fails at once. It runs before each channel opens and,
+//! while a channel is open, every 10 s counted from the start of the one before ([`Guard`]), so a
+//! utility paired while a channel is open works alongside it for at most 15 s ([`WINDOW`]), the
+//! time of the check that finds it included. When it finds the utility, the agent is stopped the
+//! way Stop stops it (its engine's process tree ends, and the computer is free only after that),
+//! and every channel closes with the reason the main process shows.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -38,8 +43,22 @@ pub const SERVICE: &str = "io.lazurio.agent-desktop";
 /// `env:<id>.io.lazurio.agent-desktop` (`{user}.{service}`, crate `keyring`).
 pub const WINDOWS_TARGET_SUFFIX: &str = ".io.lazurio.agent-desktop";
 
-/// How often the check runs while a channel is open.
-pub const CHECK_EVERY: Duration = Duration::from_secs(15);
+/// The longest a utility paired while a channel is open works alongside it: from the start of the
+/// last check that could not see it yet to the answer of the next one, which closes the channels
+/// at once, whether that answer is `Paired` or `Failed` after [`CHECK_TIMEOUT`].
+pub const WINDOW: Duration = Duration::from_secs(15);
+
+/// How long any check may take before it counts as failed.
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often a check starts while a channel is open, counted from the start of the check before:
+/// what [`WINDOW`] leaves after [`CHECK_TIMEOUT`].
+pub const CHECK_EVERY: Duration = WINDOW.saturating_sub(CHECK_TIMEOUT);
+
+// A check that starts one period after the last one, and takes its whole time, still answers
+// within the window.
+const _: () = assert!(CHECK_EVERY.as_millis() + CHECK_TIMEOUT.as_millis() <= WINDOW.as_millis());
+const _: () = assert!(!CHECK_EVERY.is_zero());
 
 /// How long `cmdkey /list` may take.
 pub const CMDKEY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -115,10 +134,13 @@ static KEYCHAIN_UI_OFF: Mutex<()> = Mutex::new(());
 ///   skips such items and then answers "not found", is never set.
 /// - The only prompt such a search can show is the one to unlock a locked keychain. The search
 ///   turns the keychain's user interface off for its time
-///   (`SecKeychainSetUserInteractionAllowed`, `SecKeychain::disable_user_interaction`), so a
-///   locked keychain answers `errSecInteractionNotAllowed` at once instead, which is `Failed`.
-///   Without that, the person would be asked every 15 s while a channel is open. Should a macOS
-///   ignore the switch, the prompt appears, and a cancelled prompt is an error too: `Failed`.
+///   (`SecKeychainSetUserInteractionAllowed`, `SecKeychain::disable_user_interaction`), so that a
+///   locked keychain answers `errSecInteractionNotAllowed` instead of asking, which is `Failed`.
+///   macOS 26 can still show the prompt for a locked keychain: on a test Mac (macOS 26.6.2) a
+///   prompt appeared during the test's case of a locked keychain, and the call waited for the
+///   person. The guard therefore runs every check on a thread of its own with a limit of 5 s,
+///   after which the answer is `Failed`, and starts no new search while that one still waits
+///   ([`bounded_check`]). A prompt the person cancels is an error, `Failed` as well.
 /// - `kSecUseAuthenticationUIFail`, which would fail an item that needs authentication, is not
 ///   offered by `security-framework` 3.7.0 (only `kSecUseAuthenticationUISkip`), and the crate
 ///   allows no unsafe code to set it; the user interface switch covers the legacy keychains that
@@ -273,9 +295,9 @@ pub trait Watched: Send + Sync {
     fn revoke(&self, reason: &'static str, stop_engine: bool) -> bool;
 }
 
-/// Runs the check before each channel opens and every [`CHECK_EVERY`] while a channel is open, on
-/// one thread for all channels; closes every channel and stops the agent when it finds the utility
-/// or cannot tell.
+/// Runs the check before each channel opens and, while a channel is open, every [`CHECK_EVERY`]
+/// from the start of the check before, on one thread for all channels; closes every channel and
+/// stops the agent when it finds the utility or cannot tell.
 pub struct Guard {
     shared: Arc<Shared>,
 }
@@ -283,6 +305,14 @@ pub struct Guard {
 struct Shared {
     check: Arc<dyn UtilityCheck>,
     every: Duration,
+    /// How long a check may take ([`CHECK_TIMEOUT`]).
+    timeout: Duration,
+    /// Whether a check's thread still runs, also after its time was up. Set only while
+    /// `checking` is held, cleared by that thread once its check returned.
+    searching: Arc<std::sync::atomic::AtomicBool>,
+    /// One check at a time. It is held at most for `timeout`, since a check that takes longer is
+    /// left to its own thread.
+    checking: Mutex<()>,
     lock: Arc<SharedLock>,
     history: Arc<History>,
     lock_report: LockReport,
@@ -326,6 +356,7 @@ impl Guard {
     pub fn new(
         check: Arc<dyn UtilityCheck>,
         every: Duration,
+        timeout: Duration,
         lock: Arc<SharedLock>,
         history: Arc<History>,
         lock_report: LockReport,
@@ -334,6 +365,9 @@ impl Guard {
             shared: Arc::new(Shared {
                 check,
                 every,
+                timeout,
+                searching: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                checking: Mutex::new(()),
                 lock,
                 history,
                 lock_report,
@@ -374,17 +408,64 @@ impl Guard {
     /// stopped and every watched channel closed with that reason too.
     #[must_use]
     pub fn check_before_open(&self) -> Option<&'static str> {
-        let reason = self.shared.check.check().refusal()?;
+        let reason = bounded_check(&self.shared).0.refusal()?;
         trip(&self.shared, reason);
         Some(reason)
     }
 }
 
-/// The periodic check: every `every` while some channel is watched; the thread ends when none is.
+/// Runs the check on a thread of its own and waits for it at most `timeout`; later it is `Failed`.
+/// While the thread of an earlier check still runs, past its time, no new check starts and the
+/// answer is `Failed` at once. The waiting thread never joins a check's thread. Returns the answer
+/// and when the check started, once it was its turn.
+fn bounded_check(shared: &Shared) -> (Pairing, Instant) {
+    use std::sync::atomic::Ordering;
+
+    /// Clears the flag when the check returned, or panicked.
+    struct Done(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Done {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+
+    let _one_at_a_time = shared
+        .checking
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let started = Instant::now();
+    if shared.searching.swap(true, Ordering::SeqCst) {
+        // An earlier check still waits, for example on a prompt.
+        return (Pairing::Failed, started);
+    }
+    let (sender, answer) = std::sync::mpsc::channel();
+    let check = Arc::clone(&shared.check);
+    let done = Done(Arc::clone(&shared.searching));
+    let spawned = thread::Builder::new()
+        .name("lazurio-guard-check".to_owned())
+        .spawn(move || {
+            let found = check.check();
+            // Cleared before the answer, so the next check never finds it set for this one.
+            drop(done);
+            let _ = sender.send(found);
+        });
+    if spawned.is_err() {
+        // The closure, and with it `done`, was dropped: the flag is clear again.
+        return (Pairing::Failed, started);
+    }
+    let found = answer
+        .recv_timeout(shared.timeout)
+        .unwrap_or(Pairing::Failed);
+    (found, started)
+}
+
+/// The periodic check: while some channel is watched, a check starts `every` after the start of the
+/// one before, so the time a check takes never lengthens the period; the thread ends when no
+/// channel is watched. A refusal closes the channels as soon as the check answered.
 fn watch(shared: &Shared) {
     let mut state = shared.lock_state();
+    let mut deadline = Instant::now() + shared.every;
     loop {
-        let deadline = Instant::now() + shared.every;
         loop {
             if state.watched.is_empty() {
                 state.running = false;
@@ -402,9 +483,11 @@ fn watch(shared: &Shared) {
         }
         drop(state);
         // Outside the state's lock: `cmdkey` may take its 5 s.
-        if let Some(reason) = shared.check.check().refusal() {
+        let (found, started) = bounded_check(shared);
+        if let Some(reason) = found.refusal() {
             trip(shared, reason);
         }
+        deadline = started + shared.every;
         state = shared.lock_state();
     }
 }
@@ -494,6 +577,52 @@ mod tests {
     }
 
     #[test]
+    fn a_check_that_hangs_fails_within_its_limit_and_starts_no_second_search() {
+        use crate::testkit::{FakeUtility, PATIENCE, scratch};
+
+        let utility = FakeUtility::absent();
+        let guard = Guard::new(
+            Arc::clone(&utility) as Arc<dyn UtilityCheck>,
+            CHECK_EVERY,
+            Duration::from_millis(50),
+            Arc::new(SharedLock::new(
+                crate::lock::DeviceLock::new(scratch("guard-lock").join("agent.lock")),
+                |_| {},
+            )),
+            Arc::new(History::new(&scratch("guard-history"))),
+            Arc::new(|_, _| {}),
+        );
+        utility.hang();
+
+        let started = Instant::now();
+        assert_eq!(guard.check_before_open(), Some(CHECK_FAILED));
+        assert!(
+            started.elapsed() < PATIENCE,
+            "it did not wait for the check"
+        );
+        assert_eq!(utility.asked(), 1);
+        // The first search still waits: the next check fails at once and asks nothing.
+        assert_eq!(guard.check_before_open(), Some(CHECK_FAILED));
+        assert_eq!(
+            utility.asked(),
+            1,
+            "no second search while the first one hangs"
+        );
+
+        // Once the search answered, checks run again.
+        utility.release();
+        while guard
+            .shared
+            .searching
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            thread::yield_now();
+        }
+        assert_eq!(guard.check_before_open(), None);
+        assert_eq!(utility.asked(), 2);
+    }
+
+    #[test]
     fn each_finding_has_its_refusal() {
         assert_eq!(Pairing::Absent.refusal(), None);
         assert_eq!(Pairing::Paired.refusal(), Some(PAIRED));
@@ -550,13 +679,21 @@ mod tests {
     ///
     /// It writes entries of its own service, never the utility's, the way the utility does
     /// (`SecKeychainAddGenericPassword`), and removes them and its keychain again, also when it
-    /// fails:
+    /// fails. Each step is named on standard error with the time since the start before it runs,
+    /// and runs on a thread of its own: a step that does not answer within 10 s, for example
+    /// because a prompt waits for the person, fails the test with its name, and the test does not
+    /// wait for it.
     ///
     /// - (a) an entry in the login keychain is `Paired`;
     /// - (b) once it is deleted, `Absent`;
-    /// - (c) an entry in a keychain of its own, which locks itself after 1 s without use (the
-    ///   only way to lock a keychain `security-framework` offers without unsafe code), is never
-    ///   `Absent`, and no prompt appears.
+    /// - (c) an entry in a keychain of the test's own. Unlocked it is `Paired`. The test locks it
+    ///   with `security lock-keychain` (`security-framework` 3.7.0 can neither lock a keychain
+    ///   nor read its status). The check on the locked keychain is `Paired` or `Failed`, or does
+    ///   not answer within 10 s, which the guard's limit of 5 s turns into `Failed` and the test
+    ///   prints as "Failed (timed out)". Only `Absent` fails. Then it proves the lock: reading the
+    ///   entry's data answered at once while the keychain was unlocked, and once it is locked it
+    ///   fails with `errSecInteractionNotAllowed` or waits for an unlock (macOS 26 then shows a
+    ///   prompt despite the user interface being off); a check that waited proves it too.
     ///
     /// An entry that needs authentication (an access control with user presence) lives in the
     /// data protection keychain, which an unsigned test binary without the
@@ -564,36 +701,95 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "writes test entries to this Mac's login keychain and a keychain of its own"]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story, from an entry in the login keychain to a locked keychain of its own"
+    )]
     fn the_keychain_check_on_this_mac() {
         use security_framework::os::macos::keychain::{
-            CreateOptions, KeychainSettings, SecKeychain, SecPreferencesDomain,
+            CreateOptions, SecKeychain, SecPreferencesDomain,
         };
         use security_framework::passwords::delete_generic_password;
 
         const ACCOUNT: &str = "env:device-helper-guard-test";
+        /// `errSecInteractionNotAllowed`: the keychain would have to ask the person to unlock it.
+        const INTERACTION_NOT_ALLOWED: i32 = -25308;
+        /// How long the test waits for one step.
+        const STEP_LIMIT: Duration = Duration::from_secs(10);
 
-        /// Deletes the test's entry of `0` from the search list when dropped.
-        struct Entry(String);
-        impl Drop for Entry {
+        /// Names `name` on standard error, which is unbuffered, then runs `work` on a thread of
+        /// its own and waits for it at most [`STEP_LIMIT`]; `None` when it did not answer.
+        fn step<T: Send + 'static>(
+            began: Instant,
+            name: &str,
+            work: impl FnOnce() -> T + Send + 'static,
+        ) -> Option<T> {
+            eprintln!("[{:8.3} s] {name}", began.elapsed().as_secs_f64());
+            let (sender, answer) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let _ = sender.send(work());
+            });
+            answer.recv_timeout(STEP_LIMIT).ok()
+        }
+
+        /// A step that must answer.
+        fn must<T: Send + 'static>(
+            began: Instant,
+            name: &str,
+            work: impl FnOnce() -> T + Send + 'static,
+        ) -> T {
+            step(began, name, work).unwrap_or_else(|| {
+                panic!("step {name} did not answer within 10 s (a prompt?)");
+            })
+        }
+
+        /// Reads the entry's data with the keychain's user interface off, as the guard turns it
+        /// off, so that a locked keychain answers with an error instead of asking to be unlocked.
+        fn read_data(keychain: &SecKeychain, service: &str) -> Result<(), i32> {
+            let _one_at_a_time = KEYCHAIN_UI_OFF
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let _ui_off =
+                SecKeychain::disable_user_interaction().expect("the user interface is off");
+            keychain
+                .find_generic_password(service, ACCOUNT)
+                .map(|_| ())
+                .map_err(security_framework::base::Error::code)
+        }
+
+        /// Removes the test's entry and keychain when dropped, also after a panic; each part is
+        /// a step of its own, so a cleanup that hangs never holds the test.
+        struct Cleanup {
+            began: Instant,
+            service: String,
+            directory: Option<std::path::PathBuf>,
+        }
+        impl Drop for Cleanup {
             fn drop(&mut self) {
-                let _ = delete_generic_password(&self.0, ACCOUNT);
+                let service = self.service.clone();
+                let _ = step(
+                    self.began,
+                    "cleanup: the entry in the login keychain",
+                    move || {
+                        let _ = delete_generic_password(&service, ACCOUNT);
+                    },
+                );
+                if let Some(directory) = self.directory.take() {
+                    let path = directory.join("guard-test.keychain");
+                    let _ = step(self.began, "cleanup: the test's keychain", move || {
+                        let _ = std::process::Command::new("/usr/bin/security")
+                            .arg("delete-keychain")
+                            .arg(&path)
+                            .status();
+                        let _ = std::fs::remove_dir_all(&directory);
+                    });
+                }
             }
         }
 
-        /// Deletes the test's keychain, from the search list too, and its directory when dropped.
-        struct Keychain(std::path::PathBuf);
-        impl Drop for Keychain {
-            fn drop(&mut self) {
-                let _ = std::process::Command::new("/usr/bin/security")
-                    .arg("delete-keychain")
-                    .arg(self.0.join("guard-test.keychain"))
-                    .status();
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-
-        // The cleanup starts `security`.
+        // The test locks its keychain and cleans up with `security`.
         let _forks = crate::testkit::spawning();
+        let began = Instant::now();
         let unique = format!(
             "{}-{}",
             std::process::id(),
@@ -602,66 +798,141 @@ mod tests {
                 .map_or(0, |since| since.as_nanos())
         );
         let service = format!("io.lazurio.device-helper-guard-test.{unique}");
+        let mut cleanup = Cleanup {
+            began,
+            service: service.clone(),
+            directory: None,
+        };
         let ui_on = || SecKeychain::user_interaction_allowed().expect("the switch's state");
+        let check = |name: &str, keychain: Option<SecKeychain>| {
+            let service = service.clone();
+            step(began, name, move || {
+                let started = Instant::now();
+                let found = keychain_check(&service, keychain.as_ref().map(std::slice::from_ref));
+                (found, started.elapsed())
+            })
+        };
+        let answered = |name: &str, answer: Option<(Pairing, Duration)>| {
+            answer.map_or_else(
+                || panic!("step {name} did not answer within 10 s (a prompt?)"),
+                |(found, _)| found,
+            )
+        };
 
         // (a) An entry in the login keychain, where the utility's go.
         let login = SecKeychain::default_for_domain(SecPreferencesDomain::User)
             .expect("the login keychain");
-        let entry = Entry(service.clone());
-        login
-            .set_generic_password(&entry.0, ACCOUNT, b"not a secret")
-            .expect("the test's entry is written");
-        assert_eq!(keychain_check(&service, None), Pairing::Paired, "(a)");
+        let (into, owner) = (login.clone(), service.clone());
+        must(
+            began,
+            "(a) write an entry to the login keychain",
+            move || into.set_generic_password(&owner, ACCOUNT, b"not a secret"),
+        )
+        .expect("the test's entry is written");
+        let name = "(a) keychain_check with the entry";
+        assert_eq!(answered(name, check(name, None)), Pairing::Paired, "(a)");
+        let name = "(a) keychain_check in the login keychain alone";
         assert_eq!(
-            keychain_check(&service, Some(std::slice::from_ref(&login))),
+            answered(name, check(name, Some(login.clone()))),
             Pairing::Paired,
             "(a) in the login keychain alone"
         );
         assert!(ui_on(), "the user interface is on again after a search");
 
         // (b) The entry is gone.
-        delete_generic_password(&service, ACCOUNT).expect("the test's entry is deleted");
-        drop(entry);
-        assert_eq!(keychain_check(&service, None), Pairing::Absent, "(b)");
+        let owner = service.clone();
+        must(began, "(b) delete the entry", move || {
+            delete_generic_password(&owner, ACCOUNT)
+        })
+        .expect("the test's entry is deleted");
+        let name = "(b) keychain_check without the entry";
+        assert_eq!(answered(name, check(name, None)), Pairing::Absent, "(b)");
 
-        // (c) An entry in a keychain of the test's own, once that keychain locked itself.
+        // (c) An entry in a keychain of the test's own, locked by the test.
         let directory = std::env::temp_dir().join(format!("lazurio-guard-test-{unique}"));
         std::fs::create_dir_all(&directory).expect("the test's directory");
-        let keychain = Keychain(directory);
-        let mut own = CreateOptions::new()
-            .password("device-helper-guard-test")
-            .prompt_user(false)
-            .create(keychain.0.join("guard-test.keychain"))
-            .expect("the test's keychain");
-        own.set_generic_password(&service, ACCOUNT, b"not a secret")
-            .expect("the test's entry in its keychain");
+        let path = directory.join("guard-test.keychain");
+        cleanup.directory = Some(directory);
+        let at = path.clone();
+        let own = must(began, "(c) create the keychain", move || {
+            CreateOptions::new()
+                .password("device-helper-guard-test")
+                .prompt_user(false)
+                .create(&at)
+        })
+        .expect("the test's keychain");
+        let (into, owner) = (own.clone(), service.clone());
+        must(began, "(c) write the entry to it", move || {
+            into.set_generic_password(&owner, ACCOUNT, b"not a secret")
+        })
+        .expect("the test's entry in its keychain");
+        let (probed, owner) = (own.clone(), service.clone());
         assert_eq!(
-            keychain_check(&service, Some(std::slice::from_ref(&own))),
+            must(began, "(c) probe the unlocked keychain", move || read_data(
+                &probed, &owner
+            )),
+            Ok(()),
+            "(c) the probe reads the entry of the unlocked keychain, so it can tell a lock"
+        );
+        let name = "(c) keychain_check on the unlocked keychain";
+        assert_eq!(
+            answered(name, check(name, Some(own.clone()))),
             Pairing::Paired,
             "(c) unlocked"
         );
-        let mut settings = KeychainSettings::new();
-        settings.set_lock_interval(Some(1));
-        own.set_settings(&settings)
-            .expect("the lock interval is set");
-        // The keychain's own timer locks it; no event says when, so the test waits well past it.
-        thread::sleep(Duration::from_secs(5));
-        let started = Instant::now();
-        let locked = keychain_check(&service, Some(std::slice::from_ref(&own)));
-        println!(
-            "(c) a locked keychain: {locked:?} in {:?}",
-            started.elapsed()
+
+        let at = path.clone();
+        let locked = must(began, "(c) lock-keychain", move || {
+            std::process::Command::new("/usr/bin/security")
+                .arg("lock-keychain")
+                .arg(&at)
+                .status()
+        })
+        .expect("security runs");
+        assert!(locked.success(), "(c) security lock-keychain: {locked}");
+        // The search comes first and the proof of the lock after it: on macOS 26 the probe's
+        // read of a locked keychain raises a prompt even with the user interface off (the test
+        // Mac, 2026-11-18), and a prompt that waits would hold the lock the guard's search needs.
+        // Nothing unlocks the keychain between the two steps.
+        let searched = check(
+            "(c) keychain_check on the locked keychain",
+            Some(own.clone()),
         );
-        assert_ne!(
-            locked,
-            Pairing::Absent,
-            "(c) a locked keychain is never Absent"
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "(c) no prompt held the search"
-        );
-        assert!(ui_on(), "the user interface is on again after a search");
-        drop(keychain);
+        match &searched {
+            // The guard's own limit of 5 s makes this Failed, and the channel stays closed.
+            None => eprintln!("(c) a locked keychain: Failed (timed out)"),
+            Some((found, took)) => {
+                eprintln!("(c) a locked keychain: {found:?} in {took:?}");
+                assert_ne!(
+                    *found,
+                    Pairing::Absent,
+                    "(c) a locked keychain is never Absent"
+                );
+                assert!(ui_on(), "the user interface is on again after a search");
+            }
+        }
+        if searched.is_none() {
+            // A search that waited past 10 s on a keychain that answered in milliseconds while
+            // unlocked waited for it to be unlocked; the probe would only queue behind it.
+            eprintln!("(c) the lock: proven by the search that waited for an unlock");
+        } else {
+            let (probed, owner) = (own.clone(), service.clone());
+            match step(began, "(c) probe the locked keychain", move || {
+                read_data(&probed, &owner)
+            }) {
+                // The unlocked probe answered at once, so a probe that waits asks for an unlock.
+                None => eprintln!("(c) the lock: proven by a probe that waits for an unlock"),
+                Some(Err(INTERACTION_NOT_ALLOWED)) => {
+                    eprintln!("(c) the lock: proven by errSecInteractionNotAllowed");
+                }
+                Some(Ok(())) => {
+                    panic!("(c) the keychain did not lock: its entry's data is still readable");
+                }
+                Some(Err(code)) => {
+                    panic!("(c) the keychain did not lock as expected: error {code}")
+                }
+            }
+        }
+        drop(cleanup);
     }
 }
