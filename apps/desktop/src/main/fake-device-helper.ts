@@ -1,7 +1,7 @@
-// Tests only (Helpers.test.ts and the end-to-end tests run it through Node, by path): lazurio-device.
-// After Shutdown "stop" exits, "linger" never exits; "crash" exits at a request after Ping; "mute"
-// closes its output after Pong. "v3" serves contract v3: each StartChannel gets Connecting, then the
-// next of LAZURIO_FAKE_DEVICE_OUTCOMES (connected, needs-hand-over, refused:<reason>).
+// Tests only (Helpers.test.ts and the e2e tests run it by path): lazurio-device. After Shutdown
+// "stop" exits, "linger" never exits; "crash" exits at a request after Ping; "mute" closes its output.
+// "v3" serves contract v3: each StartChannel gets Connecting, then the next LAZURIO_FAKE_DEVICE_OUTCOMES
+// (connected, needs-hand-over, refused:<reason>); LAZURIO_FAKE_DEVICE_STOP=silent ignores StopChannel.
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import type { ChannelStateSchema } from "@lazurio/app-contracts/device/v1";
 import { decodeFrames, encodeFrame } from "@lazurio/app-contracts/framing";
@@ -16,6 +16,7 @@ const servesV3 = afterShutdown === "v3";
 const outcomes = (process.env["LAZURIO_FAKE_DEVICE_OUTCOMES"] ?? "")
   .split(",")
   .filter((outcome) => outcome !== "");
+const silentStop = process.env["LAZURIO_FAKE_DEVICE_STOP"] === "silent";
 
 type Kind = NonNullable<MessageInitShape<typeof HelperMessageSchema>["kind"]>;
 type AppKind = AppMessage["kind"];
@@ -69,6 +70,7 @@ const v3 = (requestId: bigint, request: AppKind): boolean => {
       return true;
     }
     case "stopChannel": {
+      if (silentStop) return true;
       const { environmentId } = request.value;
       answer(requestId, {
         case: "channelState",

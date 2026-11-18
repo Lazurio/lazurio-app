@@ -115,6 +115,23 @@ describe("switchLabel", () => {
     );
   });
 
+  it("says a switch is turning off, or that nobody knows, and never Off before it is", () => {
+    assert.strictEqual(
+      switchLabel(entry({ phase: "stopping" }), messages.cs.device).state,
+      "Vypíná se…",
+    );
+    assert.deepStrictEqual(switchLabel(entry({ phase: "unknown" }), messages.en.device), {
+      state: "Agent's state unknown",
+      problem: null,
+    });
+    const ended = switchLabel(
+      entry({ phase: "off", problem: { from: "app", reason: "stop-not-confirmed" } }),
+      messages.cs.device,
+    );
+    assert.strictEqual(ended.state, "Vypnuto");
+    assert.match(ended.problem ?? "", /nepotvrdil vypnutí/u);
+  });
+
   it("says what to do when the utility Lazurio Agent Desktop turned a switch off", () => {
     const off = entry({
       phase: "off",

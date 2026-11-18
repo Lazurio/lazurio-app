@@ -41,7 +41,9 @@ export const problemLabel = (problem: DeviceSwitchProblem, text: DeviceText): st
   const problems = text.problems;
   switch (problem.from) {
     case "app":
-      return problems.helperUnavailable;
+      return problem.reason === "stop-not-confirmed"
+        ? problems.stopNotConfirmed
+        : problems.helperUnavailable;
     case "auth":
       switch (problem.reason) {
         case "sign-in-failed":
@@ -107,5 +109,9 @@ export const switchLabel = (
       };
     case "channel":
       return { state: channelLabel(entry.channel, text), problem: null };
+    case "stopping":
+      return { state: text.stopping, problem: null };
+    case "unknown":
+      return { state: text.unknown, problem: null };
   }
 };

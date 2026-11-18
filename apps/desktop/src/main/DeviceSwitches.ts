@@ -1,6 +1,7 @@
 import type { ChannelState } from "@lazurio/app-contracts/device/v1";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -32,13 +33,22 @@ const AUTH_RETRY_FIRST = Duration.seconds(1);
 const AUTH_RETRY_MAX = Duration.seconds(60);
 // A channel the helper could not start (it reports Off on its own) is started again after this.
 const CHANNEL_RETRY = Duration.seconds(5);
+// The helper confirms a channel's stop within this, or the app ends the helper (fail-safe).
+const STOP_WITHIN = Duration.seconds(5);
 
 export class DeviceSwitchError extends Schema.TaggedError<DeviceSwitchError>()(
   "DeviceSwitchError",
   {
     // not-listed: no Environment of that origin in the list; not-addable: the main window does not
-    // show that Environment; not-saved: the list could not be written.
-    problem: Schema.Literals(["not-listed", "not-addable", "not-saved"]),
+    // show that Environment; not-saved: the list could not be written; stop-not-confirmed: the
+    // helper did not confirm a channel's stop; unavailable: the helper cannot be reached.
+    problem: Schema.Literals([
+      "not-listed",
+      "not-addable",
+      "not-saved",
+      "stop-not-confirmed",
+      "unavailable",
+    ]),
   },
 ) {
   override get message(): string {
@@ -97,12 +107,20 @@ interface Entry {
 }
 
 const OFF: DeviceSwitchPhase = { phase: "off", problem: null };
+const STOPPED_BY_ENDING_HELPER: DeviceSwitchPhase = {
+  phase: "off",
+  problem: { from: "app", reason: "stop-not-confirmed" },
+};
+
+// How a channel's stop ended: the helper confirmed it; it did not, and the app ended the helper and
+// confirmed that every engine ended; or not even that is confirmed.
+type StopOutcome = "stopped" | "helper-ended" | "unknown";
 const NO_CHANNEL: DeviceChannelState = { state: "off" };
 
 export interface DeviceSwitchesOptions {
   readonly device: Pick<
     DeviceService,
-    "current" | "subscribe" | "onChannel" | "startChannel" | "stopChannel" | "stop"
+    "current" | "subscribe" | "onChannel" | "startChannel" | "stopChannel" | "stop" | "endHelper"
   >;
   readonly auth: AuthClientShape;
   readonly environments: DeviceEnvironments;
@@ -226,6 +244,39 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
         );
     });
 
+  // The fail-safe after a stop the helper did not confirm: the helper ends whole, which closes every
+  // channel. Every switch then says Off only when that end is confirmed, and unknown otherwise. The
+  // other switches' work ends without waiting for it, since one of them may be ending too.
+  const failSafe = Effect.fn("DeviceSwitches.failSafe")(function* (caller: Entry) {
+    const confirmed = yield* device.endHelper;
+    for (const entry of entries.values()) {
+      const fiber = entry.fiber;
+      entry.fiber = Option.none();
+      entry.accepting = false;
+      if (entry !== caller && Option.isSome(fiber)) {
+        yield* Fiber.interrupt(fiber.value).pipe(Effect.forkIn(scope));
+      }
+      entry.phase = confirmed ? STOPPED_BY_ENDING_HELPER : { phase: "unknown" };
+    }
+    changed();
+    return confirmed ? "helper-ended" : "unknown";
+  });
+
+  // Closes the Environment's channel and waits for the helper's confirmation; without it, within
+  // STOP_WITHIN or at all, the fail-safe runs. It cannot be cut short half-way.
+  const stopConfirmed = Effect.fn("DeviceSwitches.stopConfirmed")(function* (
+    origin: string,
+    entry: Entry,
+  ) {
+    yield* setPhase(entry, { phase: "stopping" });
+    const stopped = yield* Effect.exit(
+      device.stopChannel(origin).pipe(Effect.timeout(STOP_WITHIN)),
+    );
+    if (Exit.isSuccess(stopped)) return "stopped" satisfies StopOutcome;
+    yield* Effect.logWarning("the Device helper did not confirm a channel's stop", { origin });
+    return yield* failSafe(entry);
+  }, Effect.uninterruptible);
+
   // The switch went off by itself: the helper's channel is stopped as when the person turns it off,
   // and the reason stays with the switch until it is turned on again.
   const turnedOff = Effect.fn("DeviceSwitches.turnedOff")(function* (
@@ -235,9 +286,9 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
   ) {
     entry.accepting = false;
     yield* Effect.logWarning("Agent Desktop's switch went off", { origin, problem });
-    yield* device.stopChannel(origin).pipe(Effect.ignore);
+    const outcome = yield* stopConfirmed(origin, entry);
     entry.fiber = Option.none();
-    yield* setPhase(entry, { phase: "off", problem });
+    if (outcome === "stopped") yield* setPhase(entry, { phase: "off", problem });
   });
 
   // The work of a switch that is on, until it goes off by itself or the person turns it off.
@@ -348,28 +399,31 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       return yield* new DeviceSwitchError({ problem: "not-listed" });
     }
     if (Option.isSome(entry.fiber)) return;
+    if (device.current().state !== "ready") {
+      return yield* new DeviceSwitchError({ problem: "unavailable" });
+    }
     yield* Effect.logInfo("Agent Desktop's switch on", { origin });
     yield* setPhase(entry, { phase: "connecting" });
     entry.fiber = Option.some(yield* work(origin, entry).pipe(Effect.forkIn(scope)));
   });
 
+  // Turns the switch off and says how: it was off, its stop was confirmed, or the fail-safe ran.
   const turnOff = Effect.fn("DeviceSwitches.turnOff")(function* (origin: string) {
     const entry = entries.get(origin);
-    if (entry === undefined) return;
+    if (entry === undefined) return "was-off" as const;
     const fiber = entry.fiber;
     entry.fiber = Option.none();
     entry.accepting = false;
     if (Option.isSome(fiber)) yield* Fiber.interrupt(fiber.value);
-    const wasOn = entry.phase.phase !== "off";
-    yield* setPhase(entry, OFF);
-    yield* endUnwantedSignIn;
-    if (!wasOn) return;
+    // An Off switch keeps the reason it went off with.
+    if (entry.phase.phase === "off") return "was-off" as const;
     yield* Effect.logInfo("Agent Desktop's switch off", { origin });
-    yield* device.stopChannel(origin).pipe(
-      Effect.tapError((error) => Effect.logWarning(error.message)),
-      Effect.ignore,
-    );
+    const outcome = yield* stopConfirmed(origin, entry);
+    if (outcome === "stopped") yield* setPhase(entry, OFF);
+    yield* endUnwantedSignIn;
+    return outcome;
   });
+  const notConfirmed = new DeviceSwitchError({ problem: "stop-not-confirmed" });
 
   const addable = (): string | null =>
     shownOrigin === undefined || environments.origins().includes(shownOrigin) ? null : shownOrigin;
@@ -401,7 +455,18 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       };
     },
     stop: device.stop,
-    setSwitch: (origin, on) => byPerson(on ? turnOn(origin) : turnOff(origin)),
+    // Off fails only when nothing confirmed the channel's end; after the helper's confirmed end the
+    // switch is truly off and says why.
+    setSwitch: (origin, on) =>
+      byPerson(
+        on
+          ? turnOn(origin)
+          : turnOff(origin).pipe(
+              Effect.flatMap((outcome) =>
+                outcome === "unknown" ? Effect.fail(notConfirmed) : Effect.void,
+              ),
+            ),
+      ),
     addEnvironment: (origin) =>
       byPerson(
         Effect.gen(function* () {
@@ -420,7 +485,9 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
           if (!environments.origins().includes(origin)) {
             return yield* new DeviceSwitchError({ problem: "not-listed" });
           }
-          yield* turnOff(origin);
+          // The Environment stays listed until its channel's stop is confirmed.
+          const outcome = yield* turnOff(origin);
+          if (outcome !== "stopped" && outcome !== "was-off") return yield* notConfirmed;
           yield* environments
             .remove(origin)
             .pipe(Effect.mapError(() => new DeviceSwitchError({ problem: "not-saved" })));
@@ -431,11 +498,18 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       ),
     signOut: byPerson(
       Effect.gen(function* () {
-        for (const origin of entries.keys()) yield* turnOff(origin);
+        let allStopped = true;
+        for (const origin of entries.keys()) {
+          const outcome = yield* turnOff(origin);
+          if (outcome !== "stopped" && outcome !== "was-off") allStopped = false;
+        }
         if (Option.isSome(signInFiber)) yield* Fiber.interrupt(signInFiber.value);
-        yield* auth.signOut.pipe(
-          Effect.mapError(() => new DeviceSwitchError({ problem: "not-saved" })),
-        );
+        // Ending the session opens no channel, so it ends even when a stop was not confirmed.
+        const signedOut = yield* Effect.result(auth.signOut);
+        if (!allStopped) return yield* notConfirmed;
+        if (Result.isFailure(signedOut)) {
+          return yield* new DeviceSwitchError({ problem: "not-saved" });
+        }
       }),
     ).pipe(Effect.withSpan("DeviceSwitches.signOut")),
     pageShown: (address) => {

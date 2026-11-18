@@ -112,7 +112,9 @@ export type DeviceSwitchProblem =
         | "rejected";
     }
   | { readonly from: "helper"; readonly reason: string; readonly httpStatus: number }
-  | { readonly from: "app"; readonly reason: "helper-unavailable" };
+  // From the app: the Device helper could not take the channel, or did not confirm a channel's stop,
+  // so the app ended the helper and confirmed that every engine ended.
+  | { readonly from: "app"; readonly reason: "helper-unavailable" | "stop-not-confirmed" };
 
 // Where an Environment's switch is. It is on in every phase but "off".
 export type DeviceSwitchPhase =
@@ -125,7 +127,12 @@ export type DeviceSwitchPhase =
   | { readonly phase: "channel" }
   // The app tries again: Lazurio Auth did not answer, or the channel ended and needs a new
   // hand-over.
-  | { readonly phase: "retrying"; readonly cause: "auth-unavailable" | "needs-hand-over" };
+  | { readonly phase: "retrying"; readonly cause: "auth-unavailable" | "needs-hand-over" }
+  // The app asked the helper to close the channel and waits for its confirmation.
+  | { readonly phase: "stopping" }
+  // The helper did not confirm the stop, and its end could not be confirmed either: nobody knows
+  // whether the channel is closed.
+  | { readonly phase: "unknown" };
 
 export interface DeviceSwitchStatus {
   // `https://<host>` of the Environment's Lazurio.

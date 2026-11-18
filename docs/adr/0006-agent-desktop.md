@@ -149,6 +149,13 @@ How Lazurio App carries the three locks above (task-2026-11-17-936). There is no
   A 503 or an unreachable Auth is temporary: the app asks again with a back-off from 1 s to 60 s and the switch stays on.
 
 - **Off and sign-out.** Turning a switch off sends `StopChannel`, and Stop still ends the agent's work. Signing out in the local window turns every switch off and ends the session.
+- **Off only when confirmed.** A switch shows Off only after the helper answers `StopChannel` with Off for that Environment, and it shows Turning off until then. When that answer does not come within 5 seconds, comes as a failure, or the wait is interrupted, the app fails closed:
+  - it ends the whole Device helper with `Shutdown`, then by its PID after two seconds, and with it every channel;
+  - only when the process exited and said `DeviceStopped` with every engine ended does every switch say Off, with the reason;
+  - otherwise the switches and the agent stay unknown, as after a lost helper, and nothing turns on until the app starts again.
+
+  Removing an Environment and signing out wait for the same confirmation. Without it, Remove keeps the Environment in the list and fails. Sign-out still ends the session, because that opens no channel, but it fails as well.
+
 - **The guard against the utility replaces the takeover of point 4.** The helper opens no channel while the utility Lazurio Agent Desktop keeps an entry of `io.lazurio.agent-desktop` in the system's keystore, and stops an agent when one appears (`agent_desktop_paired`). The window tells the person what to do: remove every Environment in the utility and uninstall it, or, once it is uninstalled, delete those entries in Credential Manager or Keychain Access, then turn the switch on again. The app reads, takes and deletes nothing of the utility.
 
 ## Alternatives considered

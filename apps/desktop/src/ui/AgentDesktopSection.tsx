@@ -15,7 +15,9 @@ function EnvironmentSwitch({
   readonly onFailure: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  // On in every phase but Off; while it stops, or when nobody knows, it takes no click.
   const on = entry.switch.phase !== "off";
+  const settled = entry.switch.phase !== "stopping" && entry.switch.phase !== "unknown";
   const label = switchLabel(entry, text);
   const act = (call: () => Promise<void>) => {
     setBusy(true);
@@ -34,7 +36,7 @@ function EnvironmentSwitch({
           type="checkbox"
           role="switch"
           checked={on}
-          disabled={busy}
+          disabled={busy || !settled}
           aria-label={text.switchLabel.replace("{host}", entry.host)}
           data-action="device-switch"
           onChange={(event) => {
@@ -53,7 +55,7 @@ function EnvironmentSwitch({
       <button
         type="button"
         className="shell__link"
-        disabled={busy}
+        disabled={busy || !settled}
         data-action="device-remove"
         onClick={() => act(() => window.lazurio.device.removeEnvironment(entry.origin))}
       >

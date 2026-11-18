@@ -112,7 +112,12 @@ export interface DeviceService {
   readonly onChannel: (listener: (state: ChannelState) => void) => () => void;
   // Stop: ends the work of the agent that holds the computer now, whatever its Environment.
   readonly stop: Effect.Effect<void, DeviceRequestError>;
+  // Succeeds only when the helper answers that the Environment's channel is Off.
   readonly stopChannel: (environmentId: string) => Effect.Effect<void, DeviceRequestError>;
+  // The fail-safe when a channel's stop was not confirmed: ends the helper's process, which ends
+  // every channel. True only when it exited and said DeviceStopped with every engine ended; until
+  // the app starts again the helper counts as lost. Runs once; later calls get the first answer.
+  readonly endHelper: Effect.Effect<boolean>;
   // Opens a channel with a hand-over of Lazurio Auth (contract v3). Only DeviceSwitches calls it,
   // while the person's switch in a native window is on, with a new hand-over for each start and
   // after each NeedsHandOver (docs/adr/0006).
@@ -258,6 +263,13 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
   );
   const stopChannel = (environmentId: string) =>
     ask("StopChannel", { case: "stopChannel", value: { environmentId } }).pipe(
+      Effect.filterOrFail(
+        (reply) =>
+          reply.kind.case === "channelState" &&
+          reply.kind.value.environmentId === environmentId &&
+          reply.kind.value.state.case === "off",
+        () => new DeviceRequestError({ request: "StopChannel", problem: "no Off in the answer" }),
+      ),
       Effect.flatMap((reply) =>
         reply.kind.case === "channelState" ? applyChannel(reply.kind.value) : Effect.void,
       ),
@@ -369,6 +381,37 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
     };
   };
 
+  const helperEnded = yield* Deferred.make<boolean>();
+  let ending = false;
+  const endOnce = Effect.gen(function* () {
+    const wasIdle = idleNow();
+    lost = true;
+    state = "lost";
+    changed();
+    if (wasIdle) yield* PubSub.publish(idleChanges, false);
+    yield* Effect.logWarning("a channel's stop was not confirmed; ending the Device helper", {
+      pid: connection.pid,
+    });
+    const exited = yield* connection.shutdown;
+    // Its last message, DeviceStopped, is read once its output ended.
+    const drainedInTime = exited
+      ? yield* Deferred.await(drained).pipe(
+          Effect.as(true),
+          Effect.timeoutOrElse({ duration: CONFIRM_WITHIN, orElse: () => Effect.succeed(false) }),
+        )
+      : false;
+    const confirmed = drainedInTime && Option.getOrElse(allEnginesEnded, () => false);
+    yield* Effect.logWarning("the Device helper ended", { exited, allEnginesEnded: confirmed });
+    yield* Deferred.succeed(helperEnded, confirmed);
+    changed();
+    return confirmed;
+  }).pipe(Effect.uninterruptible, Effect.withSpan("DeviceService.endHelper"));
+  const endHelper = Effect.suspend(() => {
+    if (ending) return Deferred.await(helperEnded);
+    ending = true;
+    return endOnce;
+  });
+
   const service: DeviceService = {
     current: () => (lost ? lostStatus() : { state, environments: environments(), agent: agent() }),
     subscribe: (listener) => {
@@ -381,6 +424,7 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
     },
     stop,
     stopChannel,
+    endHelper,
     startChannel,
     activity: configured ? Option.some(activity) : Option.none(),
   };

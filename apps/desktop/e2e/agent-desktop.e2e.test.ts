@@ -167,7 +167,7 @@ const serveAuth = async (request: NodeHttp.IncomingMessage, response: NodeHttp.S
   }
 };
 
-const launch = async () => {
+const launch = async (fakeHelperSettings: Record<string, string> = {}) => {
   output.length = 0;
   const rules = [`MAP ${ENVIRONMENT_HOST} 127.0.0.1:${launchpadPort}`, "MAP * ~NOTFOUND"];
   app = await _electron.launch({
@@ -194,6 +194,7 @@ const launch = async () => {
       // The first start connects; the second ends at once and needs a new hand-over, whose start
       // is refused because the utility is paired.
       LAZURIO_FAKE_DEVICE_OUTCOMES: "connected,needs-hand-over,refused:agent_desktop_paired",
+      ...fakeHelperSettings,
     },
   });
   app.process().stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
@@ -278,7 +279,9 @@ const inRemotePage = (script: string): Promise<unknown> =>
 const screenshot = async (name: string) => {
   const directory = process.env["LAZURIO_APP_E2E_SCREENSHOTS"];
   if (directory === undefined || directory === "") return;
-  await section().screenshot({ path: NodePath.join(directory, name) });
+  await shell
+    .locator("section[data-device-state]")
+    .screenshot({ path: NodePath.join(directory, name) });
 };
 
 describe("Agent Desktop's switch", () => {
@@ -376,4 +379,46 @@ describe("Agent Desktop's switch", () => {
     await shell.locator('[data-device-environments="none"]').waitFor();
     await shell.locator(`[data-device-add="${ENVIRONMENT}"]`).waitFor();
   });
+
+  // Last: it restarts the app with a Device helper that never answers StopChannel.
+  it("ends the Device helper when it does not confirm a switch's stop, and says Off only then", async () => {
+    await app.close();
+    await launch({ LAZURIO_FAKE_DEVICE_STOP: "silent" });
+    await shell.locator('[data-action="device-add"]').click();
+    const from = mark();
+    await environmentRow().locator('[data-action="device-switch"]').click();
+    // @effect-diagnostics-next-line globalFetch:off - The person's browser, outside the app and Effect.
+    await fetch(await handedToBrowser(from));
+    await inPhase("channel", "connected");
+    const pid: unknown = await app.evaluate(() =>
+      Reflect.get(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}, "lazurio-device"),
+    );
+    if (typeof pid !== "number") return assert.fail("the app named no PID of its Device helper");
+
+    await environmentRow().locator('[data-action="device-switch"]').click();
+    await inPhase("stopping");
+    // Until the helper's end is confirmed, the switch never says Off and takes no click.
+    assert.isTrue(await environmentRow().locator('[data-action="device-switch"]').isDisabled());
+    await environmentRow().locator("[data-switch-problem]").waitFor();
+    await inPhase("off");
+    assert.isFalse(isAlive(pid));
+    const problem = await environmentRow().locator("[data-switch-problem]").innerText();
+    assert.match(problem, /did not confirm|nepotvrdil/u);
+    // The helper cannot be reached any more; it confirmed that every agent's work ended.
+    await shell
+      .locator('[data-device-state="lost"] [data-device-problem="lost-confirmed"]')
+      .waitFor();
+    assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
+    await screenshot("stop-not-confirmed.png");
+  });
 });
+
+// Signal 0 checks that the process exists and ends nothing.
+const isAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};

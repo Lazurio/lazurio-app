@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
@@ -538,5 +539,191 @@ describe("DeviceSwitches", () => {
       );
       assert.lengthOf(startsOf(helper), 0);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});
+
+// Every phase a switch showed, with how often the app had shut the helper down by then.
+const recordPhases = (switches: DeviceSwitches, helper: FakeHelper, origin = ORIGIN) => {
+  const seen: Array<{ readonly phase: string; readonly shutdowns: number }> = [];
+  const record = () => {
+    const phase = switchOf(switches.current(), origin)?.switch.phase ?? "gone";
+    if (seen.at(-1)?.phase !== phase) seen.push({ phase, shutdowns: helper.shutdown.count });
+  };
+  record();
+  switches.subscribe(record);
+  return seen;
+};
+
+type StopFailure = "no-answer" | "refused" | "interrupted";
+type PersonAction = "switch-off" | "remove" | "sign-out";
+
+// The helper does not confirm StopChannel: it does not answer, refuses, or the wait is interrupted.
+const failStop = (helper: FakeHelper, failure: StopFailure) =>
+  helper.answers.unshift((kind) =>
+    kind.case !== "stopChannel"
+      ? undefined
+      : failure === "refused"
+        ? { case: "failure", value: { code: "internal", message: "could not stop" } }
+        : failure,
+  );
+
+const act = (switches: DeviceSwitches, action: PersonAction) =>
+  action === "switch-off"
+    ? switches.setSwitch(ORIGIN, false)
+    : action === "remove"
+      ? switches.removeEnvironment(ORIGIN)
+      : switches.signOut;
+
+// Runs the person's action while StopChannel fails, past the app's wait for its confirmation.
+const actWhileStopFails = (
+  setUpDone: Effect.Success<ReturnType<typeof setUp>>,
+  action: PersonAction,
+  failure: StopFailure,
+) =>
+  Effect.gen(function* () {
+    const { helper, switches } = setUpDone;
+    failStop(helper, failure);
+    const acting = yield* act(switches, action).pipe(Effect.result, Effect.forkChild);
+    yield* stateWhere(switches, phaseIs("stopping"));
+    // The switch is not off while the helper has not confirmed.
+    assert.deepStrictEqual(switchOf(switches.current())?.switch, { phase: "stopping" });
+    if (failure === "no-answer") yield* TestClock.adjust(Duration.seconds(5));
+    return yield* Fiber.join(acting);
+  });
+
+const STOP_NOT_CONFIRMED = { from: "app", reason: "stop-not-confirmed" } as const;
+
+describe("DeviceSwitches when the helper does not confirm a channel's stop", () => {
+  it.effect("shows Stopping until the helper confirms, then Off", () =>
+    Effect.gen(function* () {
+      const { helper, switches } = yield* setUp({ account: "signedIn" });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      const seen = recordPhases(switches, helper);
+      yield* switches.setSwitch(ORIGIN, false);
+      assert.deepStrictEqual(
+        seen.map((entry) => entry.phase),
+        ["channel", "stopping", "off"],
+      );
+      assert.strictEqual(helper.shutdown.count, 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(
+    (["switch-off", "remove", "sign-out"] as const).flatMap((action) =>
+      (["no-answer", "refused", "interrupted"] as const).map(
+        (failure) => [action, failure] as const,
+      ),
+    ),
+  )(
+    "%s: ends the helper when StopChannel gets %s, and says Off only after its confirmed end",
+    ([action, failure]) =>
+      Effect.gen(function* () {
+        const setUpDone = yield* setUp({ account: "signedIn", origins: [ORIGIN, OTHER] });
+        const { helper, auth, switches } = setUpDone;
+        yield* switches.setSwitch(ORIGIN, true);
+        yield* switches.setSwitch(OTHER, true);
+        yield* stateWhere(
+          switches,
+          (status) => phaseIs("channel")(status) && phaseIs("channel", OTHER)(status),
+        );
+        const seen = recordPhases(switches, helper);
+        const outcome = yield* actWhileStopFails(setUpDone, action, failure);
+
+        // The helper was shut down once, and nothing said Off before that.
+        assert.strictEqual(helper.shutdown.count, 1);
+        for (const entry of seen) {
+          if (entry.phase === "off") assert.isAtLeast(entry.shutdowns, 1);
+        }
+        const status = switches.current();
+        // Its end is confirmed: no channel and no agent, and the helper cannot be reached any more.
+        assert.strictEqual(status.state, "lost");
+        assert.isNull(status.agent);
+        for (const origin of [ORIGIN, OTHER]) {
+          assert.deepStrictEqual(switchOf(status, origin)?.switch, {
+            phase: "off",
+            problem: STOP_NOT_CONFIRMED,
+          });
+        }
+        const starts = startsOf(helper).length;
+        yield* TestClock.adjust(Duration.minutes(5));
+        assert.lengthOf(startsOf(helper), starts);
+
+        switch (action) {
+          case "switch-off":
+            // The switch is truly off now, and the window says why.
+            assert.isTrue(outcome._tag === "Success");
+            break;
+          case "remove":
+            // The Environment stays listed: its channel's stop was not confirmed.
+            assert.isTrue(outcome._tag === "Failure");
+            if (outcome._tag === "Failure") {
+              assert.strictEqual(outcome.failure.problem, "stop-not-confirmed");
+            }
+            assert.isDefined(switchOf(status, ORIGIN));
+            break;
+          case "sign-out":
+            // The session is gone either way; the sign-out still says the stop failed.
+            assert.strictEqual(auth.calls.signOut, 1);
+            assert.strictEqual(status.account, "signed-out");
+            assert.isTrue(outcome._tag === "Failure");
+            if (outcome._tag === "Failure") {
+              assert.strictEqual(outcome.failure.problem, "stop-not-confirmed");
+            }
+            break;
+        }
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(
+    (["switch-off", "remove", "sign-out"] as const).flatMap((action) =>
+      (["does-not-exit", "no-device-stopped"] as const).map((mode) => [action, mode] as const),
+    ),
+  )("%s: never says Off when the helper's end is not confirmed (%s)", ([action, mode]) =>
+    Effect.gen(function* () {
+      const setUpDone = yield* setUp({ account: "signedIn" });
+      const { helper, switches } = setUpDone;
+      helper.shutdown.mode = mode;
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      const seen = recordPhases(switches, helper);
+      const outcome = yield* actWhileStopFails(setUpDone, action, "no-answer");
+      assert.notInclude(
+        seen.map((entry) => entry.phase),
+        "off",
+      );
+      const status = switches.current();
+      assert.strictEqual(status.state, "lost");
+      assert.strictEqual(status.agent, "unknown");
+      assert.deepStrictEqual(switchOf(status)?.switch, { phase: "unknown" });
+      assert.isTrue(outcome._tag === "Failure");
+      if (outcome._tag === "Failure") {
+        assert.strictEqual(outcome.failure.problem, "stop-not-confirmed");
+      }
+      // Nothing turns on any more.
+      const refusedOn = yield* switches.setSwitch(ORIGIN, true).pipe(Effect.flip);
+      assert.strictEqual(refusedOn.problem, "unavailable");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("ends the helper when a refusal's StopChannel is not confirmed", () =>
+    Effect.gen(function* () {
+      const { helper, switches } = yield* setUp({ account: "signedIn" });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      failStop(helper, "refused");
+      const seen = recordPhases(switches, helper);
+      yield* helper.send(refused("not_permitted", 403));
+      const status = yield* stateWhere(switches, phaseIs("off"));
+      assert.strictEqual(helper.shutdown.count, 1);
+      assert.deepStrictEqual(
+        seen.map((entry) => entry.phase),
+        ["channel", "stopping", "off"],
+      );
+      assert.deepStrictEqual(switchOf(status)?.switch, {
+        phase: "off",
+        problem: STOP_NOT_CONFIRMED,
+      });
+    }).pipe(Effect.scoped),
   );
 });

@@ -75,6 +75,8 @@ export interface DeviceText {
   readonly signingIn: string;
   readonly retryingAuth: string;
   readonly retryingChannel: string;
+  // The app waits for the helper to confirm that the channel is closed.
+  readonly stopping: string;
   readonly problems: SwitchProblemText;
 }
 
@@ -88,6 +90,8 @@ interface SwitchProblemText {
   readonly environmentStateConflict: string;
   readonly rejected: string;
   readonly helperUnavailable: string;
+  // The helper did not confirm a channel's stop, so the app ended it and every channel with it.
+  readonly stopNotConfirmed: string;
   readonly agentDesktopPaired: string;
   readonly agentDesktopCheckFailed: string;
   readonly handOverRefused: string;
@@ -214,6 +218,7 @@ const cs: Text = {
     signingIn: "Přihlaste se v prohlížeči.",
     retryingAuth: "Lazurio Auth teď neodpovídá. Zkusí se to znovu.",
     retryingChannel: "Spojení skončilo. Připojuje se znovu…",
+    stopping: "Vypíná se…",
     problems: {
       signInFailed: "Přihlášení se nedokončilo. Zapněte vypínač znovu a přihlaste se v prohlížeči.",
       signedOut: "Přihlášení k Lazurio účtu skončilo. Zapněte vypínač znovu a přihlaste se.",
@@ -226,6 +231,7 @@ const cs: Text = {
       rejected:
         "Lazurio Auth připojení odmítlo. Zapněte vypínač znovu. Když se to opakuje, odhlaste se a přihlaste znovu.",
       helperUnavailable: `Agent Desktop připojení nepřevzal. Ukončete ${APP_NAME} a spusťte ji znovu.`,
+      stopNotConfirmed: `Agent Desktop nepotvrdil vypnutí, a proto ho ${APP_NAME} ukončila i se všemi připojeními. Žádný agent teď na tomto počítači nepracuje. Agent Desktop znovu zapnete, až ${APP_NAME} ukončíte a spustíte znovu.`,
       agentDesktopPaired:
         "Na tomto počítači je spárovaná utilita Lazurio Agent Desktop. V utilitě odeberte všechna Prostředí a utilitu odinstalujte. Pokud už je odinstalovaná, smažte záznamy io.lazurio.agent-desktop ve Správci pověření (Windows) nebo v Klíčence (Mac). Pak vypínač zapněte znovu.",
       agentDesktopCheckFailed:
@@ -334,6 +340,7 @@ const en: Text = {
     signingIn: "Sign in in your browser.",
     retryingAuth: "Lazurio Auth is not answering. Trying again.",
     retryingChannel: "The connection ended. Reconnecting…",
+    stopping: "Turning off…",
     problems: {
       signInFailed:
         "The sign-in did not finish. Turn the switch on again and sign in in your browser.",
@@ -348,6 +355,7 @@ const en: Text = {
       rejected:
         "Lazurio Auth refused the connection. Turn the switch on again. If it keeps happening, sign out and sign in again.",
       helperUnavailable: `Agent Desktop did not take the connection. Quit ${APP_NAME} and start it again.`,
+      stopNotConfirmed: `Agent Desktop did not confirm that it turned off, so ${APP_NAME} ended it with every connection. No agent is working on this computer now. To turn Agent Desktop on again, quit ${APP_NAME} and start it again.`,
       agentDesktopPaired:
         "The utility Lazurio Agent Desktop is paired on this computer. Remove every Environment in the utility and uninstall it. If it is already uninstalled, delete the io.lazurio.agent-desktop entries in Credential Manager (Windows) or Keychain Access (Mac). Then turn the switch on again.",
       agentDesktopCheckFailed:
