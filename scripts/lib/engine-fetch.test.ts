@@ -341,6 +341,29 @@ describe("fetchEngine", () => {
   );
 });
 
+// A lock before its release exists (ADR 0006, point 1): it names the tag and the archives only.
+const PENDING_LOCK = {
+  status: "pending",
+  pending: "The release does not exist yet.",
+  repository: "Lazurio/agent-desktop",
+  tag: "v1.3.1-lazurio.1",
+  signerWorkflow: "Lazurio/agent-desktop/.github/workflows/lazurio-release.yml",
+  targets: {
+    "aarch64-apple-darwin": {
+      archive: "agent-desktop-v1.3.1-lazurio.1-aarch64-apple-darwin.tar.gz",
+      files: ["agent-desktop", "agent-desktop-macos-helper"],
+    },
+    "x86_64-apple-darwin": {
+      archive: "agent-desktop-v1.3.1-lazurio.1-x86_64-apple-darwin.tar.gz",
+      files: ["agent-desktop", "agent-desktop-macos-helper"],
+    },
+    "x86_64-pc-windows-msvc": {
+      archive: "agent-desktop-v1.3.1-lazurio.1-x86_64-pc-windows-msvc.tar.gz",
+      files: ["agent-desktop.exe"],
+    },
+  },
+};
+
 describe("bundleEngine", () => {
   it.effect("removes an earlier engine and builds without one while the lock is pending", () =>
     provided(
@@ -351,12 +374,8 @@ describe("bundleEngine", () => {
           const lockPath = path.join(root, "engine.lock");
           const output = path.join(root, "release");
           yield* fileSystem.makeDirectory(output);
-          yield* fileSystem.writeFileString(
-            lockPath,
-            yield* fileSystem.readFileString(
-              path.resolve(import.meta.dirname, "..", "..", "helpers", "device", "engine.lock"),
-            ),
-          );
+          // A pending lock of its own, whatever helpers/device/engine.lock pins now.
+          yield* fileSystem.writeFileString(lockPath, JSON.stringify(PENDING_LOCK));
           for (const name of ["agent-desktop", "agent-desktop-macos-helper", "agent-desktop.exe"]) {
             yield* fileSystem.writeFileString(path.join(output, name), "old engine");
           }
