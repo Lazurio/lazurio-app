@@ -138,37 +138,14 @@ const packagedDirectory = Effect.gen(function* () {
       directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
     };
   }
-  // The packaged tailnet helper reads the policy through the registry's API.
+  // The packaged tailnet helper reads the policy and the person's setting through the registry's
+  // API; the setting counts only where the helper confirms there is no policy (TailnetPolicy).
   const helper = path.join(process.resourcesPath, "helpers", "lazurio-tailnet.exe");
-  const policy = yield* TailnetPolicy.readWindows(helper).pipe(
-    Effect.tapError((error) => Effect.logWarning("cannot read the tailnet policy", error)),
-    Effect.orElseSucceed(() => Option.none<string>()),
+  return yield* TailnetPolicy.directoryOf(
+    (source) => TailnetPolicy.readWindows(helper, source),
+    TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
+    NodeOS.hostname(),
   );
-  // Without IT's policy, the person's own setting of the same shape (HKCU), for Lazurio App (Alpha)
-  // at a client without an administrator until the directory at Lazurio Auth serves them.
-  const userSetting = Option.isSome(policy)
-    ? Option.none<string>()
-    : yield* TailnetPolicy.readWindows(helper, "user").pipe(
-        Effect.tapError((error) => Effect.logWarning("cannot read the tailnet setting", error)),
-        Effect.orElseSucceed(() => Option.none<string>()),
-      );
-  const chosen = Option.isSome(policy)
-    ? Option.some({ source: "policy", text: policy.value })
-    : Option.map(userSetting, (text) => ({ source: "user-setting", text }));
-  if (Option.isNone(chosen)) {
-    return {
-      source: "built-in",
-      directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
-    };
-  }
-  // A policy or setting that does not decode joins nothing, rather than the built-in directory.
-  const directory = yield* TailnetDirectory.fromText(chosen.value.text, NodeOS.hostname()).pipe(
-    Effect.tapError((error) =>
-      Effect.logError("the tailnet policy does not decode", { source: chosen.value.source, error }),
-    ),
-    Effect.orElseSucceed((): TailnetDirectory.Directory => ({ tailnets: [], refused: [] })),
-  );
-  return { source: chosen.value.source, directory };
 });
 
 const tailnetsToJoin = Effect.gen(function* () {

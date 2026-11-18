@@ -53,7 +53,9 @@ The tailnet then shows in the app's column. Lazurio App's log names the source w
 
 ## Without an administrator: the person's own setting
 
-For Lazurio App (Alpha) at a client where nobody can write the policy, the signed-in person can set the same value for themselves. This is a temporary exception, like the policy, and it ends when Lazurio App gets a person's tailnets from their Lazurio account.
+**Proposed, not decided.** This section describes a temporary exception that waits for Matěj's decision. Until he decides it, [ADR 0008](../adr/0008-tailnets-from-a-directory.md), point 6, names only IT's policy, and this setting is not to be used.
+
+For Lazurio App (Alpha) at a client where nobody can write the policy, the signed-in person could set the same value for themselves. Like the policy, it would end when Lazurio App gets a person's tailnets from their Lazurio account.
 
 |         |                                          |
 | ------- | ---------------------------------------- |
@@ -62,7 +64,7 @@ For Lazurio App (Alpha) at a client where nobody can write the policy, the signe
 | Type    | `REG_SZ` (string)                        |
 | Content | the same JSON array as the policy        |
 
-- Lazurio App reads it only when the computer has no policy. A policy, when IT sets one, always wins.
+- Lazurio App reads it only when its helper confirms that the computer has no policy. A policy, when IT sets one, always wins, and a policy that cannot be read (for example a value of another type) keeps the setting unread.
 - Lazurio App checks it exactly like the policy: only control servers and suffixes below `lazurio.io` or `lazurio.ai`. A setting that does not decode joins no tailnet at all.
 - It grants nobody access, like the policy: signing in to the tailnet still needs the person's Lazurio account and the Organization's membership, and reach still needs the Organization's approval of the computer.
 - Any program running with the person's rights can change it. It can point the app only at Lazurio's own control servers, though.
