@@ -33,6 +33,16 @@ export interface MainWindowOptions {
   // Whether a tailnet serves the address (Tailnet.Tailnets.proxyFor): only such a page waits for
   // its Environment to become reachable, for example for the Organization to approve the Device.
   readonly servedByTailnet: (address: string) => boolean;
+  // The window, as soon as it exists, so the tray, a second start or the Dock can show it.
+  readonly created: (window: Electron.BaseWindow) => void;
+  // Whether the window shows once its page loaded: not at a start with --hidden, unless a second
+  // start or the tray asked for it meanwhile.
+  readonly showOnLoad: () => boolean;
+  // What closing the window does (Lifecycle.closeStep), and what follows when it hides.
+  readonly closeStep: () => "hide" | "close";
+  readonly hidden: () => void;
+  // Windows ends the person's session (log off, restart): the app quits.
+  readonly sessionEnds: () => void;
 }
 
 // The first remote page loads again after these failures, which a network that changed or a
@@ -195,6 +205,15 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
         if (!window.isDestroyed()) window.destroy();
       }),
   );
+  options.created(window);
+  // Closing the window hides it, so the app and Agent Desktop run on (Tray.ts); only a quit closes it.
+  window.on("close", (event) => {
+    if (options.closeStep() === "close") return;
+    event.preventDefault();
+    window.hide();
+    options.hidden();
+  });
+  window.on("session-end", options.sessionEnds);
   const local = yield* acquireView(viewOptions({ preload: options.preloadPath }));
   local.setBackgroundColor(WINDOW_BACKGROUND);
   registerView(local.webContents, "Local");
@@ -243,7 +262,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     const view = waiting;
     yield* Effect.promise(() => view.webContents.loadURL(`${LOCAL_ENTRY}#waiting`));
   }
-  window.show();
+  if (options.showOnLoad()) window.show();
   if (remote !== undefined && Option.isSome(options.remoteUrl)) {
     yield* loadRemote(window, remote, options.remoteUrl.value, options.whenReachable);
   }

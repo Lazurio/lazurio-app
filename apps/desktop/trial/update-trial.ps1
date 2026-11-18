@@ -1,9 +1,9 @@
 # The update test from build N to N+1 on Windows (docs/adr/0005, point 9). It installs N for the
 # current user, leaves a marker in the app's data folder, starts N, waits for N's log line that the
-# update is ready, closes N's window the way a person does, and waits until N+1 is the installed
-# app and has opened the key N sealed with DPAPI (KeystoreCheck.ts). The marker must survive. It
-# then uninstalls the app, which removes the updater's cache and keeps the data folder. It stops
-# only the processes it started, by their PIDs.
+# update is ready, quits N as the tray's Quit does (a second start with --quit), waits until N+1
+# is the installed app and has opened the key N sealed with DPAPI (KeystoreCheck.ts). The marker
+# must survive. It then uninstalls the app, which removes the updater's cache and keeps the data
+# folder. It stops only the processes it started, by their PIDs.
 param(
   [Parameter(Mandatory)] [string]$InstallerN,
   [Parameter(Mandatory)] [string]$Feed,
@@ -70,9 +70,10 @@ try {
   Wait-Until { (Test-Path -LiteralPath $appLog) -and (Select-String -LiteralPath $appLog -Pattern 'update ready' -Quiet) } 'N has the update ready'
   Write-Host 'N has N+1 ready.'
 
-  # Without /F, taskkill asks the window to close, as a person closing it does. The app then
-  # installs the downloaded update and starts N+1.
-  & taskkill.exe /PID $app.Id | Write-Host
+  # A closed window only hides the app in the notification area (Lifecycle.closeStep), so N quits
+  # as with the tray's Quit: a second start with --quit asks the running app to quit, through
+  # before-quit, which installs the downloaded update and starts N+1.
+  Start-Process -FilePath $exe -ArgumentList '--quit' -Wait
   Wait-Until { $app.HasExited } 'N has exited'
   Wait-Until { ((Get-Item -LiteralPath $exe -ErrorAction SilentlyContinue).VersionInfo.ProductVersion) -like "$ExpectedVersion*" } 'N+1 is installed'
   Write-Host "Installed N+1: $((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion)"

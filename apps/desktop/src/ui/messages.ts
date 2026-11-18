@@ -31,6 +31,14 @@ export interface Text {
   readonly device: DeviceText;
   // The remote page's place while a tailnet's page cannot be reached yet (Waiting.tsx).
   readonly waiting: { readonly title: string; readonly lead: string };
+  readonly tray: TrayText;
+}
+
+// The icon in the notification area and the notice when the window hides for the first time.
+export interface TrayText {
+  readonly open: string;
+  readonly quit: string;
+  readonly hiddenNotice: string;
 }
 
 // Agent Desktop in the window's column (docs/adr/0006, point 5). "{tool}", "{application}",
@@ -248,6 +256,11 @@ const cs: Text = {
       other: "Prostředí připojení odmítlo ({reason}).",
     },
   },
+  tray: {
+    open: `Otevřít ${APP_NAME}`,
+    quit: `Ukončit ${APP_NAME}`,
+    hiddenNotice: `${APP_NAME} běží dál v oznamovací oblasti. Zapnutý Agent Desktop zůstává připojený. Ukončíte ji přes ikonu v oznamovací oblasti.`,
+  },
 };
 
 const en: Text = {
@@ -372,6 +385,11 @@ const en: Text = {
       invalidAttachUrl: "The address of this Environment is not valid. Remove it and add it again.",
       other: "The Environment refused the connection ({reason}).",
     },
+  },
+  tray: {
+    open: `Open ${APP_NAME}`,
+    quit: `Quit ${APP_NAME}`,
+    hiddenNotice: `${APP_NAME} keeps running in the notification area. An Agent Desktop that is on stays connected. Quit it from its icon in the notification area.`,
   },
 };
 

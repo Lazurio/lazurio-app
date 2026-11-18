@@ -5,5 +5,7 @@
 !macro customUnInstall
   ${ifNot} ${isUpdated}
     RMDir /r "$LOCALAPPDATA\lazurio-app-updater"
+    ; The start at sign-in (Lifecycle.loginItem): its Run value is named by the AppUserModelID.
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "io.lazurio.app"
   ${endIf}
 !macroend
