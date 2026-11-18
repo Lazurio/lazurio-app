@@ -14,6 +14,7 @@ import {
   keepsRunningInTray,
   loginItem,
   noticeOnce,
+  startQuitStep,
   startsHidden,
   trayMenu,
 } from "./Lifecycle.ts";
@@ -36,6 +37,13 @@ describe("Lifecycle", () => {
     assert.strictEqual(beforeQuitStep("quit"), "end-program");
     assert.strictEqual(beforeQuitStep("install"), "install");
     assert.strictEqual(beforeQuitStep("wait"), "wait");
+  });
+
+  it("holds a quit that comes while the app starts, until its own quit is ready", () => {
+    // Before the proper before-quit is registered, and again once it is released while the app
+    // ends: a quit then would end Electron without stopping the helpers.
+    assert.strictEqual(startQuitStep(false), "hold");
+    assert.strictEqual(startQuitStep(true), "pass");
   });
 
   it("starts hidden only when started with --hidden", () => {

@@ -22,6 +22,11 @@ export const beforeQuitStep = (
   decision: "install" | "wait" | "quit",
 ): "install" | "wait" | "end-program" => (decision === "quit" ? "end-program" : decision);
 
+// A quit (a second start with --quit, Cmd+Q) before the program's own before-quit is registered,
+// or after it was released while the app ends, would end Electron without stopping the helpers. It
+// is held, and asked again once the program's own quit is ready.
+export const startQuitStep = (ready: boolean): "hold" | "pass" => (ready ? "pass" : "hold");
+
 const HIDDEN_ARGUMENT = "--hidden";
 
 export const startsHidden = (argv: ReadonlyArray<string>): boolean =>

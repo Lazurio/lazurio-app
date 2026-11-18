@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - End-to-end tests only: the start's gate is a file that appears.
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -83,6 +85,8 @@ const testHooks = Effect.gen(function* () {
       notice: systemNotice,
       secondInstance: () => {},
       trayMenu: (_menu: Electron.Menu) => {},
+      startGate: Effect.void,
+      quitHeld: () => {},
     };
   }
   // A launch may keep its data apart from the development profile, before the app is ready.
@@ -126,6 +130,7 @@ const testHooks = Effect.gen(function* () {
   const helperPids: Record<string, number> = {};
   Reflect.set(globalThis, "lazurioAppE2eHelperPids", helperPids);
   const helperStarted = (name: string, pid: number) => {
+    process.stdout.write(`lazurio-app-e2e helper ${name} ${pid}\n`);
     helperPids[name] = pid;
   };
   const openBrowser = (address: string) => Effect.sync(() => observer.openExternally(address));
@@ -140,10 +145,32 @@ const testHooks = Effect.gen(function* () {
   const trayMenu = (menu: Electron.Menu) => {
     Reflect.set(globalThis, "lazurioAppE2eTrayMenu", menu);
   };
+  // The start waits here, right before its own quit is ready, until the gate's file exists, so a
+  // test can quit the app while it starts.
+  const gate = yield* Config.option(Config.String("LAZURIO_APP_E2E_START_GATE"));
+  const gateDirectory = (yield* Path.Path).dirname(Option.getOrElse(gate, () => ""));
+  const startGate = Option.match(gate, {
+    onNone: () => Effect.void,
+    onSome: (file) =>
+      Effect.callback<void>((resume) => {
+        process.stdout.write("lazurio-app-e2e start-gated\n");
+        // The watch starts before the check, so a file made in between is not missed.
+        const watcher = NodeFS.watch(gateDirectory, () => {
+          if (NodeFS.existsSync(file)) resume(Effect.void);
+        });
+        if (NodeFS.existsSync(file)) resume(Effect.void);
+        return Effect.sync(() => watcher.close());
+      }),
+  });
+  const quitHeld = () => {
+    process.stdout.write("lazurio-app-e2e quit-held\n");
+  };
   return {
     notice,
     secondInstance,
     trayMenu,
+    startGate,
+    quitHeld,
     observer,
     remoteUrl,
     tailnetHelper,
@@ -310,6 +337,24 @@ const program = Effect.gen(function* () {
     yield* Effect.logInfo("--quit, and the app does not run");
     return;
   }
+  // From here a quit waits for the program's own (Lifecycle.startQuitStep): it is held until the
+  // program's before-quit is registered and asked again then. Both listeners end with the scope, so
+  // the last app.quit() of the program (main's ensuring) passes, and a start that fails quits too.
+  let ownQuitReady = false;
+  let quitWasHeld = false;
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const holdQuit = (event: Electron.Event) => {
+        if (Lifecycle.startQuitStep(ownQuitReady) === "pass") return;
+        event.preventDefault();
+        if (!quitWasHeld) hooks.quitHeld();
+        quitWasHeld = true;
+      };
+      Electron.app.on("before-quit", holdQuit);
+      return holdQuit;
+    }),
+    (holdQuit) => Effect.sync(() => Electron.app.off("before-quit", holdQuit)),
+  );
   const platform = yield* HostProcess.Platform;
   // Windows: the same AppUserModelID as the Start menu shortcut, so the hidden-window toast shows.
   if (platform === "win32") Electron.app.setAppUserModelId(Lifecycle.APP_USER_MODEL_ID);
@@ -560,6 +605,7 @@ const program = Effect.gen(function* () {
     }),
     () => Effect.sync(() => Electron.app.off("window-all-closed", endProgram)),
   );
+  yield* hooks.startGate;
   // Every quit while the program runs goes through its end (Lifecycle.beforeQuitStep): a
   // downloaded update installs first, a quit while that install waits for the computer joins it
   // (Updates.quitDecision), and the helpers stop before the app quits. The install quits the app
@@ -592,13 +638,18 @@ const program = Effect.gen(function* () {
         }
       };
       Electron.app.on("before-quit", beforeQuit);
+      ownQuitReady = true;
       return beforeQuit;
     }),
+    // A quit while the app ends is held again: the helpers are stopping.
     (beforeQuit) =>
       Effect.sync(() => {
+        ownQuitReady = false;
         Electron.app.off("before-quit", beforeQuit);
       }),
   );
+  // A quit held while the app started goes its own way now.
+  if (quitWasHeld) Electron.app.quit();
   // The icon in the notification area keeps the app reachable while its window is hidden; a Mac
   // keeps it in the Dock instead.
   const text = messages[localeOf(Electron.app.getLocale())];
