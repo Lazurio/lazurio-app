@@ -19,6 +19,7 @@ import * as Electron from "electron";
 import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
 import { localeOf } from "../ui/messages.ts";
 
+import * as Account from "./Account.ts";
 import * as AuthClient from "./AuthClient.ts";
 import { DeviceActivity } from "./DeviceActivity.ts";
 import * as DeviceEnvironments from "./DeviceEnvironments.ts";
@@ -31,8 +32,10 @@ import * as KeystoreCheck from "./KeystoreCheck.ts";
 import * as Helpers from "./Helpers.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
+import * as NetworkDirectory from "./NetworkDirectory.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
+import * as SignInIpc from "./SignInIpc.ts";
 import * as Tailnet from "./Tailnet.ts";
 import * as ReleaseFeed from "./ReleaseFeed.ts";
 import * as TailnetDirectory from "./TailnetDirectory.ts";
@@ -125,42 +128,65 @@ const testHooks = Effect.gen(function* () {
   };
 });
 
-// The tailnets a packaged app joins (TailnetDirectory, ADR 0008): on Windows an IT policy, when the
-// computer's IT set one (TailnetPolicy, Lazurio App (Alpha) at a client), and the directory built into the
-// app otherwise. Development may set them as a JSON array of Tailnet.TailnetConfig in
-// LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
+// The person's last complete network directory from Lazurio Auth (NetworkDirectory).
+const savedDirectoryPath = () =>
+  Effect.map(Path.Path, (path) =>
+    path.join(Electron.app.getPath("userData"), "network-directory.json"),
+  );
+
+type TailnetSource = AppStatus["tailnetSource"];
+
+// The person's saved directory from Lazurio Auth, then the directory built into the app.
+const personalDirectory = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const saved = yield* NetworkDirectory.readSaved(yield* savedDirectoryPath());
+  if (Option.isSome(saved)) {
+    const directory = yield* TailnetDirectory.fromText(saved.value, NodeOS.hostname()).pipe(
+      Effect.tapError((error) =>
+        Effect.logWarning("the saved network directory does not decode", error),
+      ),
+      Effect.option,
+    );
+    if (Option.isSome(directory) && directory.value.tailnets.length > 0) {
+      return {
+        source: "lazurio-auth" as TailnetSource,
+        directory: directory.value,
+        text: Option.some(saved.value),
+      };
+    }
+  }
+  const builtIn = path.join(process.resourcesPath, "tailnets", "directory.json");
+  return {
+    source: "built-in" as TailnetSource,
+    directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
+    text: Option.none<string>(),
+  };
+});
+
+// The tailnets a packaged app joins (ADR 0008): an IT policy on Windows when IT set one, else the
+// person's directory from Lazurio Auth after a sign-in (task 644), else the built-in directory.
+// Development may set them as JSON in LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
 const packagedDirectory = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const builtIn = path.join(process.resourcesPath, "tailnets", "directory.json");
-  if ((yield* HostProcess.Platform) !== "win32") {
-    return {
-      source: "built-in",
-      directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
-    };
-  }
+  if ((yield* HostProcess.Platform) !== "win32") return yield* personalDirectory;
   // The packaged tailnet helper reads the policy through the registry's API.
   const helper = path.join(process.resourcesPath, "helpers", "lazurio-tailnet.exe");
   const policy = yield* TailnetPolicy.readWindows(helper).pipe(
     Effect.tapError((error) => Effect.logWarning("cannot read the tailnet policy", error)),
     Effect.orElseSucceed(() => Option.none<string>()),
   );
-  if (Option.isNone(policy)) {
-    return {
-      source: "built-in",
-      directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
-    };
-  }
+  if (Option.isNone(policy)) return yield* personalDirectory;
   // A policy that IT set but that does not decode joins nothing, rather than the built-in directory.
   const directory = yield* TailnetDirectory.fromText(policy.value, NodeOS.hostname()).pipe(
     Effect.tapError((error) => Effect.logError("the tailnet policy does not decode", error)),
     Effect.orElseSucceed((): TailnetDirectory.Directory => ({ tailnets: [], refused: [] })),
   );
-  return { source: "policy", directory };
+  return { source: "policy" as TailnetSource, directory, text: Option.none<string>() };
 });
 
 const tailnetsToJoin = Effect.gen(function* () {
   if (Electron.app.isPackaged) {
-    const { source, directory } = yield* packagedDirectory;
+    const { source, directory, text } = yield* packagedDirectory;
     for (const refused of directory.refused) {
       yield* Effect.logWarning("tailnet refused", { source, ...refused });
     }
@@ -168,10 +194,14 @@ const tailnetsToJoin = Effect.gen(function* () {
       source,
       tailnets: directory.tailnets.map((tailnet) => tailnet.tailnet),
     });
-    return directory.tailnets;
+    return { source, tailnets: directory.tailnets, text };
   }
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
-  return Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [];
+  return {
+    source: "development" as TailnetSource,
+    tailnets: Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [],
+    text: Option.none<string>(),
+  };
 });
 
 // The page of the web Lazurio the main window shows (RemoteUrl). Development may set one, for trying
@@ -297,12 +327,29 @@ const program = Effect.gen(function* () {
     allowWithoutKeystore: !Electron.app.isPackaged,
   });
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
+  // The app's own sign-in with Lazurio Auth, one for the person's networks and Agent Desktop.
+  const auth = yield* Effect.service(AuthClient.AuthClient).pipe(
+    Effect.provide(
+      AuthClient.layer({
+        ...Option.match(hooks.authIssuer, {
+          onNone: () => ({}),
+          onSome: (issuer) => ({ issuer }),
+        }),
+        keystore,
+        sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
+        allowWithoutKeystore: !Electron.app.isPackaged,
+        openBrowser: hooks.openBrowser,
+        locale: localeOf(Electron.app.getLocale()),
+      }).pipe(Layer.provide(FetchHttpClient.layer)),
+    ),
+  );
+  const joining = yield* tailnetsToJoin;
   const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
   const tailnets: Tailnet.Tailnets =
     tailnetHelper !== undefined && Option.isSome(tailnetHelper.connection)
       ? yield* Tailnet.run({
           connection: tailnetHelper.connection.value,
-          tailnets: yield* tailnetsToJoin,
+          tailnets: joining.tailnets,
           session: Electron.session.fromPartition(MainWindow.REMOTE_PARTITION),
           observer: hooks.observer,
           stateRoot,
@@ -335,40 +382,17 @@ const program = Effect.gen(function* () {
     ? Option.some(
         yield* DeviceSwitches.run({
           device: device.value,
-          auth: yield* Effect.service(AuthClient.AuthClient).pipe(
-            Effect.provide(
-              AuthClient.layer({
-                ...Option.match(hooks.authIssuer, {
-                  onNone: () => ({}),
-                  onSome: (issuer) => ({ issuer }),
-                }),
-                keystore,
-                sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
-                allowWithoutKeystore: !Electron.app.isPackaged,
-                openBrowser: hooks.openBrowser,
-                locale: localeOf(Electron.app.getLocale()),
-              }).pipe(Layer.provide(FetchHttpClient.layer)),
-            ),
-          ),
+          auth,
           environments: yield* DeviceEnvironments.open(
             path.join(Electron.app.getPath("userData"), "agent-desktop-environments.json"),
           ),
         }),
       )
     : Option.none<DeviceSwitches.DeviceSwitches>();
-  const noSwitch = Effect.fail(new DeviceSwitches.DeviceSwitchError({ problem: "not-listed" }));
-  const deviceControls: DeviceIpc.DeviceControls = Option.match(switches, {
-    onSome: (service) => service,
-    onNone: () => ({
-      current: () => DeviceService.withoutHelper(deviceHelper === undefined ? "absent" : "failed"),
-      subscribe: () => () => {},
-      stop: Effect.void,
-      setSwitch: () => noSwitch,
-      addEnvironment: () => noSwitch,
-      removeEnvironment: () => noSwitch,
-      signOut: Effect.void,
-    }),
-  });
+  // Without the helper's switches, Agent Desktop's section still shows and ends the app's account.
+  const deviceControls: DeviceIpc.DeviceControls = Option.isSome(switches)
+    ? switches.value
+    : yield* Account.withoutSwitches(deviceHelper === undefined ? "absent" : "failed", auth);
   // The updater's view of the computer: the configured helper's, or the default (always idle).
   const idleByDefault = yield* DeviceActivity;
   const deviceActivity = Option.getOrElse(
@@ -438,11 +462,16 @@ const program = Effect.gen(function* () {
     Effect.provide(ElectronUpdater.layer),
     Effect.provideService(DeviceActivity, deviceActivity),
   );
+  let account = yield* auth.state;
+  // Set when the session lacks the directory's scope, until a read succeeds or the app signs out.
+  let needsSignIn = false;
   const status = (): AppStatus => ({
     appVersion: Electron.app.getVersion(),
     generation: "GEN4",
     helpers: helpers.map((helper) => helper.status),
     tailnets: tailnets.current(),
+    tailnetSource: joining.source,
+    account: account === "signedOut" ? "signed-out" : needsSignIn ? "needs-sign-in" : "signed-in",
     updates: updates.current(),
   });
   // Every change of status goes to every local window, from before the first window exists. A
@@ -460,6 +489,38 @@ const program = Effect.gen(function* () {
     Stream.runForEach(() => Effect.sync(broadcastStatus)),
     Effect.forkScoped,
   );
+  yield* auth.changes.pipe(
+    Stream.runForEach((state) =>
+      Effect.sync(() => {
+        account = state;
+        if (state === "signedOut") needsSignIn = false;
+        broadcastStatus();
+      }),
+    ),
+    Effect.forkScoped,
+  );
+  // The person's networks after each sign-in and at the start of a signed-in app, unless IT sets
+  // the computer's. A new list starts the app again, whose tailnets are fixed for its run.
+  if (Electron.app.isPackaged && joining.source !== "policy") {
+    yield* NetworkDirectory.follow({
+      auth,
+      savedPath: yield* savedDirectoryPath(),
+      inUse: joining.text,
+      computer: NodeOS.hostname(),
+      onRead: (outcome) =>
+        Effect.sync(() => {
+          if (outcome !== "not-read") needsSignIn = outcome === "needs-sign-in";
+          broadcastStatus();
+        }),
+      changed: Effect.sync(() => {
+        if (quitting) return;
+        Electron.app.relaunch();
+        Electron.app.quit();
+      }).pipe(Effect.andThen(Effect.logInfo("network directory changed, so the app starts again"))),
+    });
+  }
+  // Only the app's local windows may start the sign-in for the person's networks.
+  yield* SignInIpc.serve(auth, Account.signOutOf(switches, auth));
   // Only the app's local windows may pick the channel or install (UpdatesIpc.ts).
   yield* UpdatesIpc.serve(updates);
   // Only the app's local windows see Agent Desktop's state and may press Stop (DeviceIpc.ts).

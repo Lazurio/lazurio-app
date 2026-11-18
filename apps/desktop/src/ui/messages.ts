@@ -18,6 +18,16 @@ export interface Text {
   readonly failed: string;
   readonly tailnets: string;
   readonly noTailnets: string;
+  // Signing in for the person's networks, while the app has none from their account yet.
+  readonly networksSignIn: string;
+  readonly networksSignInHint: string;
+  readonly networksSignInFailed: string;
+  // A sign-in from before the app asked for the person's networks.
+  readonly networksSignInAgain: string;
+  readonly networksSignInAgainHint: string;
+  // The app's account while Agent Desktop does not show it.
+  readonly accountSignedIn: string;
+  readonly accountSignOut: string;
   readonly starting: string;
   readonly "needs-login": string;
   readonly running: string;
@@ -138,6 +148,13 @@ const cs: Text = {
   failed: "Nespustil se",
   tailnets: "Tailnety",
   noTailnets: "Žádný tailnet",
+  networksSignIn: "Přihlásit se k Lazuriu",
+  networksSignInHint: `Přihlaste se účtem Lazurio a ${APP_NAME} připojí sítě vašich Organizací.`,
+  networksSignInFailed: "Přihlášení se nepovedlo. Zkuste to prosím znovu.",
+  networksSignInAgain: "Přihlásit se znovu",
+  networksSignInAgainHint: `Přihlaste se prosím znovu, aby ${APP_NAME} mohla načíst sítě vašich Organizací.`,
+  accountSignedIn: "Přihlášeno k Lazuriu",
+  accountSignOut: "Odhlásit",
   starting: "Připojuje se",
   "needs-login": "Čeká na přihlášení",
   running: "Připojeno",
@@ -258,6 +275,13 @@ const en: Text = {
   failed: "Did not start",
   tailnets: "Tailnets",
   noTailnets: "No tailnet",
+  networksSignIn: "Sign in to Lazurio",
+  networksSignInHint: `Sign in with your Lazurio account and ${APP_NAME} joins your Organizations' networks.`,
+  networksSignInFailed: "The sign-in did not work. Please try again.",
+  networksSignInAgain: "Sign in again",
+  networksSignInAgainHint: `Please sign in again so that ${APP_NAME} can read your Organizations' networks.`,
+  accountSignedIn: "Signed in to Lazurio",
+  accountSignOut: "Sign out",
   starting: "Connecting",
   "needs-login": "Waiting for sign-in",
   running: "Connected",

@@ -17,6 +17,8 @@ export const DEVICE_SET_SWITCH_CHANNEL = "lazurio:device-set-switch";
 export const DEVICE_ADD_ENVIRONMENT_CHANNEL = "lazurio:device-add-environment";
 export const DEVICE_REMOVE_ENVIRONMENT_CHANNEL = "lazurio:device-remove-environment";
 export const DEVICE_SIGN_OUT_CHANNEL = "lazurio:device-sign-out";
+export const SIGN_IN_CHANNEL = "lazurio:sign-in";
+export const SIGN_OUT_CHANNEL = "lazurio:sign-out";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -164,6 +166,12 @@ export interface AppStatus {
   readonly generation: "GEN4";
   readonly helpers: ReadonlyArray<HelperStatus>;
   readonly tailnets: ReadonlyArray<TailnetStatus>;
+  // Where the tailnets come from: the computer's IT policy, the person's directory at Lazurio Auth
+  // (after a sign-in), the list built into the app, or development's setting.
+  readonly tailnetSource: "policy" | "lazurio-auth" | "built-in" | "development";
+  // Whether the app is signed in to Lazurio with its own client; needs-sign-in: signed in from
+  // before the app asked for the person's networks, so a new sign-in grants them.
+  readonly account: "signed-in" | "signed-out" | "needs-sign-in";
   readonly updates: UpdatesStatus;
 }
 
@@ -174,6 +182,10 @@ export interface LazurioBridge {
   readonly setUpdateChannel: (channel: UpdateChannelName) => Promise<void>;
   // Installs a downloaded update: the app restarts once no agent works on the computer.
   readonly installUpdate: () => Promise<void>;
+  // Signs in to Lazurio in the system's browser; the app then joins the person's networks.
+  readonly signIn: () => Promise<void>;
+  // Signs out of the app's Lazurio account, with or without Agent Desktop.
+  readonly signOut: () => Promise<void>;
   // Agent Desktop. Only the app's local windows have it, never a remote page.
   readonly device: DeviceBridge;
 }

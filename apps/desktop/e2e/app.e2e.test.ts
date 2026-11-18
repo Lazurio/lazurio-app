@@ -264,6 +264,8 @@ describe("Lazurio App GEN4", () => {
       generation: "GEN4",
       helpers: [],
       tailnets: [{ tailnet: "e2e", state: "running", addresses: ["100.64.0.1"] }],
+      tailnetSource: "development",
+      account: "signed-out",
       updates: { channel: "latest", state: { phase: "off", reason: "unpackaged" } },
     };
     await app.evaluate(

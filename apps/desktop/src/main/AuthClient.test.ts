@@ -28,6 +28,8 @@ import {
   DEVICE_ENTRY_SCOPE,
   HandOverError,
   layer,
+  NETWORK_DIRECTORY_SCOPE,
+  NetworkDirectoryError,
   type InvalidIssuerError,
   SignedOutError,
   SignInError,
@@ -43,6 +45,7 @@ const isSignedOut = Schema.is(SignedOutError);
 const isUnreachable = Schema.is(AuthUnreachableError);
 const isSignOutError = Schema.is(SignOutError);
 const isHandOverError = Schema.is(HandOverError);
+const isNetworkDirectoryError = Schema.is(NetworkDirectoryError);
 // A sign-in's failure as its reason, or the tag of another error.
 const signInReason = (error: { readonly _tag: string }): string =>
   isSignInError(error) ? error.reason : error._tag;
@@ -88,6 +91,14 @@ interface HandOverRequest {
   readonly body: string;
 }
 
+interface NetworksRequest {
+  readonly method: string;
+  readonly authorization: string | undefined;
+  readonly cookie: string | undefined;
+  readonly origin: string | undefined;
+  readonly search: string;
+}
+
 interface IssuedToken {
   readonly scope: string;
   readonly audiences: ReadonlyArray<string>;
@@ -109,6 +120,7 @@ interface FakeAuth {
   readonly verifiers: Array<string>;
   readonly grants: Array<string>;
   readonly handOvers: Array<HandOverRequest>;
+  readonly networksRequests: Array<NetworksRequest>;
   readonly revoked: Array<string>;
   // Every token, code and verifier the fake gave out or received, for the logs' check.
   readonly secrets: Array<string>;
@@ -129,6 +141,9 @@ interface FakeAuth {
     handOverCode: string | undefined;
     refresh: "ok" | "reject" | "unavailable";
     handOverStatus: number;
+    // The network directory's status and body.
+    networksStatus: number;
+    networksBody: unknown;
     // The state the redirect carries back, when it should differ from the request's.
     returnState: string | undefined;
     idTokenNonce: string | undefined;
@@ -170,6 +185,7 @@ const fakeAuth = Effect.acquireRelease(
       verifiers: [],
       grants: [],
       handOvers: [],
+      networksRequests: [],
       revoked: [],
       secrets: [],
       accessTokens: new Map(),
@@ -182,6 +198,8 @@ const fakeAuth = Effect.acquireRelease(
         handOverCode: undefined,
         refresh: "ok",
         handOverStatus: 200,
+        networksStatus: 200,
+        networksBody: { schema: "lazurio.network-directory.v1", networks: [] },
         returnState: undefined,
         idTokenNonce: undefined,
         idToken: "valid",
@@ -212,10 +230,14 @@ const fakeAuth = Effect.acquireRelease(
       nonce: string | undefined,
       extraAudience = false,
     ) => {
-      const audiences = [
-        ...(scope.split(" ").includes(DEVICE_ENTRY_SCOPE) ? [DEVICE_ENTRY_SCOPE] : []),
-        ...(extraAudience ? ["lazurio-network-directory"] : []),
-      ];
+      // Each read's scope brings its own audience; the extra one is the other read's.
+      const parts = scope.split(" ");
+      const extra = parts.includes(NETWORK_DIRECTORY_SCOPE)
+        ? DEVICE_ENTRY_SCOPE
+        : NETWORK_DIRECTORY_SCOPE;
+      const audiences = [DEVICE_ENTRY_SCOPE, NETWORK_DIRECTORY_SCOPE].filter(
+        (audience) => parts.includes(audience) || (extraAudience && audience === extra),
+      );
       const accessToken = unsignedJwt({
         jti: next("access"),
         iss: fake.issuer,
@@ -351,6 +373,25 @@ const fakeAuth = Effect.acquireRelease(
         refreshTokens.delete(form.get("token") ?? "");
         response.writeHead(200);
         return response.end();
+      }
+      if (path === "/lazurio-network-directory/networks") {
+        const authorization = request.headers.authorization;
+        fake.networksRequests.push({
+          method: request.method ?? "",
+          authorization,
+          cookie: request.headers.cookie,
+          origin: request.headers.origin,
+          search: url.search,
+        });
+        // Check 2: exactly one audience and exactly the scope lazurio-network-directory.
+        const issued = fake.accessTokens.get((authorization ?? "").replace(/^Bearer /u, ""));
+        const exact =
+          issued !== undefined &&
+          issued.scope === NETWORK_DIRECTORY_SCOPE &&
+          issued.audiences.length === 1 &&
+          issued.audiences[0] === NETWORK_DIRECTORY_SCOPE;
+        if (!exact) return json(response, 401, { error: "unauthorized" });
+        return json(response, fake.settings.networksStatus, fake.settings.networksBody);
       }
       if (path === "/lazurio-agent-entry/device-hand-over") {
         const authorization = request.headers.authorization;
@@ -534,7 +575,10 @@ describe("AuthClient.signIn", () => {
         assert.strictEqual(url.origin + url.pathname, `${fake.issuer}/protocol/auth`);
         assert.strictEqual(url.searchParams.get("client_id"), CLIENT_ID);
         assert.strictEqual(url.searchParams.get("response_type"), "code");
-        assert.strictEqual(url.searchParams.get("scope"), `openid ${DEVICE_ENTRY_SCOPE}`);
+        assert.strictEqual(
+          url.searchParams.get("scope"),
+          `openid ${DEVICE_ENTRY_SCOPE} ${NETWORK_DIRECTORY_SCOPE}`,
+        );
         assert.isFalse(url.searchParams.has("client_secret"));
         const [authorization] = fake.authorizations;
         const [verifier] = fake.verifiers;
@@ -1081,7 +1125,9 @@ describe("AuthClient.handOver", () => {
   it.effect("leaves openid beside the scope to Auth, which refuses it with 401", () =>
     withHarness(({ fake, opened, client }) =>
       Effect.gen(function* () {
-        const auth = yield* client();
+        // A sign-in with the device scope alone: with both, a token that keeps them has two
+        // audiences and the app sends it nowhere.
+        const auth = yield* client({ scopes: [DEVICE_ENTRY_SCOPE] });
         yield* signInThroughBrowser(auth, opened);
         fake.settings.scopedRefresh = "keeps-openid";
         const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
@@ -1164,6 +1210,171 @@ describe("AuthClient.handOver", () => {
         const auth = yield* client();
         const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
         assert.isTrue(isSignedOut(error));
+      }),
+    ),
+  );
+});
+
+describe("AuthClient.networks", () => {
+  const NETWORK = {
+    tailnet: "example-org",
+    controlUrl: "https://headscale.example-org.lazurio.io",
+    organizations: [{ id: "4b6a8c1e-0000-4000-8000-000000000001" }],
+  };
+
+  it.effect("reads the person's networks with a token of exactly lazurio-network-directory", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        fake.settings.networksBody = {
+          schema: "lazurio.network-directory.v1",
+          networks: [NETWORK],
+        };
+        const networks = yield* auth.networks;
+        assert.deepStrictEqual(networks, [
+          { tailnet: NETWORK.tailnet, controlUrl: NETWORK.controlUrl },
+        ]);
+        assert.deepStrictEqual(fake.refreshScopes, [NETWORK_DIRECTORY_SCOPE]);
+        assert.strictEqual(fake.networksRequests.length, 1);
+        const sent = fake.networksRequests[0];
+        // The read's check 1: a GET with no cookie, no browser origin and no query.
+        assert.deepStrictEqual(
+          [sent?.method, sent?.cookie, sent?.origin, sent?.search],
+          ["GET", undefined, undefined, ""],
+        );
+        const token = (sent?.authorization ?? "").replace(/^Bearer /u, "");
+        assert.deepStrictEqual(fake.accessTokens.get(token), {
+          scope: NETWORK_DIRECTORY_SCOPE,
+          audiences: [NETWORK_DIRECTORY_SCOPE],
+        });
+        // The device hand-over still refreshes for exactly its own scope after this sign-in.
+        yield* auth.handOver(ENVIRONMENT_ORIGIN);
+        assert.deepStrictEqual(fake.refreshScopes, [NETWORK_DIRECTORY_SCOPE, DEVICE_ENTRY_SCOPE]);
+        const handOverToken = (fake.handOvers[0]?.authorization ?? "").replace(/^Bearer /u, "");
+        assert.deepStrictEqual(fake.accessTokens.get(handOverToken), {
+          scope: DEVICE_ENTRY_SCOPE,
+          audiences: [DEVICE_ENTRY_SCOPE],
+        });
+      }),
+    ),
+  );
+
+  it.effect("maps Lazurio Auth's refusals and an answer of another shape to typed errors", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        const reasons: Array<string> = [];
+        for (const [status, body] of [
+          [503, { error: "network_directory_unavailable" }],
+          [503, { error: "network_directory_inconsistent" }],
+          [404, { error: "not_found" }],
+          [200, { schema: "lazurio.network-directory.v2", networks: [] }],
+          [200, { schema: "lazurio.network-directory.v1" }],
+        ] as const) {
+          fake.settings.networksStatus = status;
+          fake.settings.networksBody = body;
+          const error = yield* Effect.flip(auth.networks);
+          reasons.push(isNetworkDirectoryError(error) ? error.reason : error._tag);
+        }
+        assert.deepStrictEqual(reasons, [
+          "unavailable",
+          "inconsistent",
+          "unexpected",
+          "unexpected",
+          "unexpected",
+        ]);
+        assert.strictEqual(yield* auth.state, "signedIn");
+      }),
+    ),
+  );
+
+  it.effect("leaves openid beside the scope to Auth, which refuses it with 401", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client({ scopes: [NETWORK_DIRECTORY_SCOPE] });
+        yield* signInThroughBrowser(auth, opened);
+        fake.settings.scopedRefresh = "keeps-openid";
+        const error = yield* Effect.flip(auth.networks);
+        assert.deepStrictEqual(
+          isNetworkDirectoryError(error) ? [error.reason, error.status] : [error._tag],
+          ["unauthorized", 401],
+        );
+        assert.strictEqual(fake.networksRequests.length, 1);
+        assert.strictEqual(yield* auth.state, "signedIn");
+      }),
+    ),
+  );
+
+  it.effect("sends no token with another audience or without the scope", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        const reasons: Array<string> = [];
+        for (const mode of ["two-audiences", "drops-scope", "keeps-openid"] as const) {
+          fake.settings.scopedRefresh = mode;
+          const error = yield* Effect.flip(auth.networks);
+          reasons.push(isNetworkDirectoryError(error) ? error.reason : error._tag);
+        }
+        assert.deepStrictEqual(reasons, Array(3).fill("scope-not-granted"));
+        assert.deepStrictEqual(fake.networksRequests, []);
+      }),
+    ),
+  );
+
+  it.effect("reads after a new sign-in once a session from before the directory lacks it", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        // The previous version signed in for the device scope only and sealed that session.
+        const before = yield* client({ scopes: [DEVICE_ENTRY_SCOPE] });
+        yield* signInThroughBrowser(before, opened);
+        // This version opens the same session at its start.
+        const after = yield* client();
+        assert.strictEqual(yield* after.state, "signedIn");
+        const error = yield* Effect.flip(after.networks);
+        assert.strictEqual(
+          isNetworkDirectoryError(error) ? error.reason : error._tag,
+          "scope-not-granted",
+        );
+        assert.deepStrictEqual(fake.networksRequests, []);
+        // A new sign-in while signed in asks for both scopes and the read then works.
+        yield* signInThroughBrowser(after, opened);
+        assert.strictEqual(
+          fake.authorizations.at(-1)?.scope,
+          `openid ${DEVICE_ENTRY_SCOPE} ${NETWORK_DIRECTORY_SCOPE}`,
+        );
+        fake.settings.networksBody = {
+          schema: "lazurio.network-directory.v1",
+          networks: [NETWORK],
+        };
+        assert.strictEqual((yield* after.networks).length, 1);
+      }),
+    ),
+  );
+
+  it.effect("needs a sign-in that granted the scope lazurio-network-directory", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client({ scopes: [DEVICE_ENTRY_SCOPE] });
+        yield* signInThroughBrowser(auth, opened);
+        const error = yield* Effect.flip(auth.networks);
+        assert.strictEqual(
+          isNetworkDirectoryError(error) ? error.reason : error._tag,
+          "scope-not-granted",
+        );
+        assert.deepStrictEqual(fake.refreshScopes, []);
+        assert.deepStrictEqual(fake.networksRequests, []);
+      }),
+    ),
+  );
+
+  it.effect("needs a sign-in", () =>
+    withHarness(({ client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        assert.isTrue(isSignedOut(yield* Effect.flip(auth.networks)));
       }),
     ),
   );

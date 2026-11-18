@@ -34,6 +34,10 @@ import { SIGN_IN_PAGE_HEADERS, signInPage, type SignInOutcome } from "./SignInPa
 export const CLIENT_ID = "lazurio-app";
 // The optional scope whose access token Lazurio Auth takes for an Environment's hand-over.
 export const DEVICE_ENTRY_SCOPE = "lazurio-device-entry";
+// The optional scope whose access token Lazurio Auth takes for the person's network directory
+// (Auth, docs/network-directory-read.md).
+export const NETWORK_DIRECTORY_SCOPE = "lazurio-network-directory";
+const NETWORK_DIRECTORY_SCHEMA = "lazurio.network-directory.v1";
 
 const DEFAULT_SIGN_IN_TIMEOUT = Duration.minutes(5);
 // How far the computer's clock may differ from Lazurio Auth's for an ID token's times.
@@ -80,7 +84,7 @@ export class SignInError extends Schema.TaggedError<SignInError>()("SignInError"
 export class AuthUnreachableError extends Schema.TaggedError<AuthUnreachableError>()(
   "AuthUnreachableError",
   {
-    operation: Schema.Literals(["discovery", "sign-in", "refresh", "hand-over"]),
+    operation: Schema.Literals(["discovery", "sign-in", "refresh", "hand-over", "networks"]),
     status: Schema.optional(Schema.Number),
   },
 ) {
@@ -142,6 +146,35 @@ export class HandOverError extends Schema.TaggedError<HandOverError>()("HandOver
   }
 }
 
+export class NetworkDirectoryError extends Schema.TaggedError<NetworkDirectoryError>()(
+  "NetworkDirectoryError",
+  {
+    // scope-not-granted: no token with the scope lazurio-network-directory and its one audience;
+    // then Auth's 401, its two 503s and any other answer.
+    reason: Schema.Literals([
+      "scope-not-granted",
+      "unauthorized",
+      "unavailable",
+      "inconsistent",
+      "unexpected",
+    ]),
+    status: Schema.optional(Schema.Number),
+  },
+) {
+  override get message(): string {
+    const status = this.status === undefined ? "" : ` (HTTP ${this.status})`;
+    return `network directory: ${this.reason}${status}`;
+  }
+}
+
+// One network of the person's directory as Auth answers it: its name, its control server and,
+// once Auth answers them, the DNS suffixes of the Organizations it serves.
+export interface DirectoryNetwork {
+  readonly tailnet: string;
+  readonly controlUrl: string;
+  readonly domains?: ReadonlyArray<string>;
+}
+
 // A one-time hand-over for one Environment. Only the Device helper's channel may read it.
 export interface HandOver {
   readonly handOver: Redacted.Redacted<string>;
@@ -162,7 +195,8 @@ export interface AuthClientOptions {
   readonly openBrowser: (address: string) => Effect.Effect<void, SignInError>;
   // The language of the page the browser shows after the return.
   readonly locale: Locale;
-  // Optional scopes a sign-in asks for besides `openid`; lazurio-device-entry by default.
+  // Optional scopes a sign-in asks for besides `openid`; by default lazurio-device-entry and
+  // lazurio-network-directory, each read then refreshing for exactly its own.
   readonly scopes?: ReadonlyArray<string>;
   readonly signInTimeout?: Duration.Input;
 }
@@ -180,6 +214,12 @@ export interface AuthClientShape {
   readonly handOver: (
     origin: string,
   ) => Effect.Effect<HandOver, HandOverError | SignedOutError | AuthUnreachableError>;
+  // The networks the person may try to join, from Lazurio Auth's network directory. A hint, never
+  // a grant: Headscale and the Organization's approvals decide.
+  readonly networks: Effect.Effect<
+    ReadonlyArray<DirectoryNetwork>,
+    NetworkDirectoryError | SignedOutError | AuthUnreachableError
+  >;
 }
 
 export class AuthClient extends Context.Service<AuthClient, AuthClientShape>()(
@@ -214,6 +254,22 @@ const IdTokenClaims = Schema.Struct({
   iat: Schema.Number,
 });
 const decodeIdTokenClaims = Schema.decodeUnknownOption(Schema.fromJsonString(IdTokenClaims));
+
+const NetworkDirectoryResponse = Schema.Struct({
+  schema: Schema.Literal(NETWORK_DIRECTORY_SCHEMA),
+  networks: Schema.Array(
+    Schema.Struct({
+      tailnet: Schema.String,
+      controlUrl: Schema.String,
+      organizations: Schema.Array(Schema.Struct({ id: Schema.String })),
+      domains: Schema.optional(Schema.Array(Schema.String)),
+    }),
+  ),
+});
+const decodeNetworkDirectoryResponse = Schema.decodeUnknownOption(NetworkDirectoryResponse);
+const decodeNetworkDirectoryRefusal = Schema.decodeUnknownOption(
+  Schema.Struct({ error: Schema.String }),
+);
 
 const HandOverResponse = Schema.Struct({ handOver: Schema.String, expiresIn: Schema.Number });
 const decodeHandOverResponse = Schema.decodeUnknownOption(HandOverResponse);
@@ -368,7 +424,7 @@ export const layer = (options: AuthClientOptions) =>
       const http = yield* HttpClient.HttpClient;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const requestedScopes = options.scopes ?? [DEVICE_ENTRY_SCOPE];
+      const requestedScopes = options.scopes ?? [DEVICE_ENTRY_SCOPE, NETWORK_DIRECTORY_SCOPE];
       const signInTimeout = Duration.fromInputUnsafe(
         options.signInTimeout ?? DEFAULT_SIGN_IN_TIMEOUT,
       );
@@ -556,22 +612,33 @@ export const layer = (options: AuthClientOptions) =>
         };
       });
 
-      // A token for one call of device-hand-over: the scope lazurio-device-entry and its one
-      // audience. Whether the scope is exactly that one (route check 2) is Auth's to judge; the
-      // pinned Keycloak 26.7.3 answers exactly it, and an older one that kept openid gets Auth's
-      // 401.
-      const deviceEntryToken = lock.withPermits(1)(
-        Effect.gen(function* () {
-          if (Option.isNone(session)) return yield* new SignedOutError();
-          const scoped = yield* refresh(session.value, DEVICE_ENTRY_SCOPE);
-          if (
-            !scopesOf(scoped.scope ?? "").has(DEVICE_ENTRY_SCOPE) ||
-            scoped.audiences.length !== 1 ||
-            scoped.audiences[0] !== DEVICE_ENTRY_SCOPE
-          ) {
-            return yield* new HandOverError({ reason: "scope-not-granted" });
-          }
-          return scoped.token;
+      // A token for one call of one read: exactly the read's scope and its one audience, which
+      // the read's audience shares its name with. Whether the scope is exactly that one (each
+      // read's check 2) is Auth's to judge; the pinned Keycloak 26.7.3 answers exactly it, and an
+      // older one that kept openid gets Auth's 401. None when Auth granted something else.
+      const scopedToken = (scope: string) =>
+        lock.withPermits(1)(
+          Effect.gen(function* () {
+            if (Option.isNone(session)) return yield* new SignedOutError();
+            const scoped = yield* refresh(session.value, scope);
+            return scopesOf(scoped.scope ?? "").has(scope) &&
+              scoped.audiences.length === 1 &&
+              scoped.audiences[0] === scope
+              ? Option.some(scoped.token)
+              : Option.none<Redacted.Redacted<string>>();
+          }),
+        );
+      const deviceEntryToken = scopedToken(DEVICE_ENTRY_SCOPE).pipe(
+        Effect.flatMap(Effect.fromOption),
+        Effect.catchTags({
+          NoSuchElementError: () => Effect.fail(new HandOverError({ reason: "scope-not-granted" })),
+        }),
+      );
+      const networkDirectoryToken = scopedToken(NETWORK_DIRECTORY_SCOPE).pipe(
+        Effect.flatMap(Effect.fromOption),
+        Effect.catchTags({
+          NoSuchElementError: () =>
+            Effect.fail(new NetworkDirectoryError({ reason: "scope-not-granted" })),
         }),
       );
 
@@ -833,6 +900,42 @@ export const layer = (options: AuthClientOptions) =>
             expiresIn: Duration.seconds(answer.value.expiresIn),
           } satisfies HandOver;
         }),
+        networks: Effect.gen(function* () {
+          if (Option.isNone(session)) return yield* new SignedOutError();
+          if (!scopesOf(session.value.scope).has(NETWORK_DIRECTORY_SCOPE)) {
+            return yield* new NetworkDirectoryError({ reason: "scope-not-granted" });
+          }
+          // One GET with the bearer only: no cookie, no origin and no query (the read's check 1).
+          const token = yield* networkDirectoryToken;
+          const response = yield* send(
+            HttpClientRequest.get(`${issuer}/lazurio-network-directory/networks`).pipe(
+              HttpClientRequest.bearerToken(token),
+            ),
+          ).pipe(Effect.mapError(() => new AuthUnreachableError({ operation: "networks" })));
+          const refused = (reason: NetworkDirectoryError["reason"]) =>
+            new NetworkDirectoryError({ reason, status: response.status });
+          if (response.status === 401) return yield* refused("unauthorized");
+          if (response.status === 503) {
+            const code = Option.map(
+              decodeNetworkDirectoryRefusal(yield* jsonOf(response)),
+              ({ error }) => error,
+            );
+            return yield* refused(
+              Option.getOrUndefined(code) === "network_directory_inconsistent"
+                ? "inconsistent"
+                : "unavailable",
+            );
+          }
+          if (response.status !== 200) return yield* refused("unexpected");
+          const answer = decodeNetworkDirectoryResponse(yield* jsonOf(response));
+          if (Option.isNone(answer)) return yield* refused("unexpected");
+          yield* Effect.logInfo("auth: network directory read", {
+            networks: answer.value.networks.length,
+          });
+          return answer.value.networks.map(({ tailnet, controlUrl, domains }) =>
+            domains === undefined ? { tailnet, controlUrl } : { tailnet, controlUrl, domains },
+          );
+        }).pipe(Effect.withSpan("AuthClient.networks")),
       });
     }),
   );
