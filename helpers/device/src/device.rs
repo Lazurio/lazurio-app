@@ -75,6 +75,7 @@ struct Channels {
     /// open.
     utility: Arc<dyn UtilityCheck>,
     utility_every: Duration,
+    utility_timeout: Duration,
     /// The earlier hand-overs of each Environment, until its `StopChannel`.
     attempts: HashMap<String, SharedAttempts>,
     /// Runs before each answer is sent, so a test can hold the request thread there.
@@ -126,6 +127,7 @@ impl Device {
                 ender: crate::engine::Engine::end,
                 utility: Arc::new(SystemCheck),
                 utility_every: guard::CHECK_EVERY,
+                utility_timeout: guard::CHECK_TIMEOUT,
                 attempts: HashMap::new(),
                 #[cfg(test)]
                 before_reply: None,
@@ -167,9 +169,15 @@ impl Device {
     /// A guard that asks `check` every `every`, for tests of the utility Lazurio Agent Desktop.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_utility(mut self, check: Arc<dyn UtilityCheck>, every: Duration) -> Self {
+    pub(crate) fn with_utility(
+        mut self,
+        check: Arc<dyn UtilityCheck>,
+        every: Duration,
+        timeout: Duration,
+    ) -> Self {
         self.channels.utility = check;
         self.channels.utility_every = every;
+        self.channels.utility_timeout = timeout;
         self
     }
 
@@ -279,6 +287,7 @@ impl Device {
         let guard = Arc::new(Guard::new(
             Arc::clone(&self.channels.utility),
             self.channels.utility_every,
+            self.channels.utility_timeout,
             Arc::clone(&lock),
             Arc::clone(&history),
             Arc::clone(&self.channels.lock_report),
@@ -1177,6 +1186,7 @@ mod tests {
         environment: &crate::testkit::FakeEnvironment,
         utility: &Arc<crate::testkit::FakeUtility>,
         every: Duration,
+        timeout: Duration,
         engine: Option<EngineSpec>,
     ) -> (
         Device,
@@ -1191,7 +1201,7 @@ mod tests {
         let directory = scratch("guarded");
         let mut device = test_device()
             .with_channels(environment.connector(), crate::testkit::quick_timing())
-            .with_utility(Arc::clone(utility) as Arc<dyn UtilityCheck>, every)
+            .with_utility(Arc::clone(utility) as Arc<dyn UtilityCheck>, every, timeout)
             .with_channel_report(
                 Arc::new(move |state| {
                     let _ = sender.lock().expect("the test's sender").send(state);
@@ -1249,8 +1259,13 @@ mod tests {
         });
         let utility = FakeUtility::absent();
         utility.set(guard::Pairing::Paired);
-        let (mut device, states, _locks, _) =
-            guarded_device(&environment, &utility, guard::CHECK_EVERY, None);
+        let (mut device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            None,
+        );
 
         start_env(&mut device, "env-a", HAND_OVER);
         assert_eq!(
@@ -1278,8 +1293,13 @@ mod tests {
         });
         let utility = FakeUtility::absent();
         utility.set(guard::Pairing::Failed);
-        let (mut device, states, _locks, _) =
-            guarded_device(&environment, &utility, guard::CHECK_EVERY, None);
+        let (mut device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            None,
+        );
 
         start_env(&mut device, "env-a", HAND_OVER);
         assert_eq!(
@@ -1315,8 +1335,13 @@ mod tests {
         let utility = FakeUtility::absent();
         // The interval is short here; the guard's own is 15 s.
         let every = Duration::from_millis(20);
-        let (mut device, states, lock_states, directory) =
-            guarded_device(&environment, &utility, every, Some(engines.spec()));
+        let (mut device, states, lock_states, directory) = guarded_device(
+            &environment,
+            &utility,
+            every,
+            guard::CHECK_TIMEOUT,
+            Some(engines.spec()),
+        );
 
         // A's agent runs a tool on engine 1 and holds the computer; B is connected.
         start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
@@ -1419,6 +1444,66 @@ mod tests {
                 channel_state::State::Connected(Connected {})
             )
         );
+        assert!(device.shutdown(Instant::now() + PATIENCE));
+    }
+
+    #[test]
+    fn a_check_that_hangs_opens_no_channel_and_closes_an_open_one() {
+        use crate::lazurio::app::device::v1::Connected;
+        use crate::testkit::{Event, FakeEnvironment, FakeUtility, PATIENCE, Session};
+
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            if session.ready() {
+                session.until_closed();
+            }
+        });
+        let utility = FakeUtility::absent();
+        // The interval and the limit are short here; the guard's own are 15 s and 5 s.
+        let (mut device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            Duration::from_millis(20),
+            Duration::from_millis(50),
+            None,
+        );
+
+        // A channel is open; then the check hangs, as a search on a prompt does.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-a".to_owned(),
+                channel_state::State::Connected(Connected {})
+            )
+        );
+        utility.hang();
+        assert_eq!(
+            state_of(&states),
+            ("env-a".to_owned(), refused(guard::CHECK_FAILED)),
+            "the periodic check failed within its limit and closed the channel"
+        );
+        assert_eq!(
+            environment.until(|event| *event == Event::Closed),
+            Event::Closed
+        );
+
+        // While that search still hangs, a new StartChannel opens nothing and asks nothing.
+        let asked = utility.asked();
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
+        assert_eq!(
+            state_of(&states),
+            ("env-a".to_owned(), refused(guard::CHECK_FAILED))
+        );
+        assert_eq!(utility.asked(), asked, "no second search while one hangs");
+        assert!(
+            !environment
+                .events
+                .try_iter()
+                .any(|event| event == Event::Tcp),
+            "nothing reached the Environment"
+        );
+
+        utility.release();
         assert!(device.shutdown(Instant::now() + PATIENCE));
     }
 }

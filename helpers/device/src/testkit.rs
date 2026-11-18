@@ -879,13 +879,15 @@ impl FakeEngines {
     }
 }
 
-/// A fake check for the utility Lazurio Agent Desktop: answers what the test sets, and counts how
-/// often it was asked.
+/// A fake check for the utility Lazurio Agent Desktop: answers what the test sets, counts how
+/// often it was asked, and can hang, as a search that waits on a prompt does.
 #[derive(Default)]
 pub struct FakeUtility {
     answer: Mutex<Option<Pairing>>,
     asked: Mutex<usize>,
     changed: std::sync::Condvar,
+    hanging: Mutex<bool>,
+    released: std::sync::Condvar,
 }
 
 impl FakeUtility {
@@ -898,6 +900,17 @@ impl FakeUtility {
     /// From now on, the check answers `pairing`.
     pub fn set(&self, pairing: Pairing) {
         *self.answer.lock().unwrap_or_else(PoisonError::into_inner) = Some(pairing);
+    }
+
+    /// From now on, a check waits until [`FakeUtility::release`] before it answers.
+    pub fn hang(&self) {
+        *self.hanging.lock().unwrap_or_else(PoisonError::into_inner) = true;
+    }
+
+    /// Lets every waiting check answer, and later ones answer at once.
+    pub fn release(&self) {
+        *self.hanging.lock().unwrap_or_else(PoisonError::into_inner) = false;
+        self.released.notify_all();
     }
 
     /// How often the check was asked so far.
@@ -925,6 +938,11 @@ impl UtilityCheck for FakeUtility {
             .unwrap_or(Pairing::Absent);
         *self.asked.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         self.changed.notify_all();
+        let hanging = self.hanging.lock().unwrap_or_else(PoisonError::into_inner);
+        let _released = self
+            .released
+            .wait_timeout_while(hanging, PATIENCE, |hanging| *hanging)
+            .unwrap_or_else(PoisonError::into_inner);
         answer
     }
 }
