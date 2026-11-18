@@ -120,9 +120,9 @@ interface FakeAuth {
   readonly received: Array<string>;
   settings: {
     accessTokenSeconds: number;
-    // How a refresh treats its `scope`: as Keycloak does, narrowing to it; ignoring it; or
-    // adding another audience to an exact scope.
-    scopedRefresh: "exact" | "ignores-scope" | "two-audiences";
+    // How a refresh treats its `scope`: narrowing to it, as the contract says; keeping openid
+    // beside it, as Keycloak 26.6.2 does; adding another audience; or dropping it.
+    scopedRefresh: "exact" | "keeps-openid" | "two-audiences" | "drops-scope";
     // Refuses this many hand-overs with 401 although their token is right.
     rejectHandOvers: number;
     // The code of a refused hand-over, instead of the table's.
@@ -327,13 +327,16 @@ const fakeAuth = Effect.acquireRelease(
           const requested = form.get("scope");
           fake.refreshScopes.push(requested);
           // RFC 6749 §6: a refresh only narrows what the sign-in granted.
+          const mode = fake.settings.scopedRefresh;
           const narrowed =
-            requested === null || fake.settings.scopedRefresh === "ignores-scope"
+            requested === null || mode === "keeps-openid"
               ? granted
-              : requested
-                  .split(" ")
-                  .filter((part) => granted.split(" ").includes(part))
-                  .join(" ");
+              : mode === "drops-scope"
+                ? "openid"
+                : requested
+                    .split(" ")
+                    .filter((part) => granted.split(" ").includes(part))
+                    .join(" ");
           return json(
             response,
             200,
@@ -1075,13 +1078,38 @@ describe("AuthClient.handOver", () => {
     ),
   );
 
-  it.effect("sends no token that is not exactly lazurio-device-entry's", () =>
+  it.effect("leaves openid beside the scope to Auth, which refuses it with 401", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        fake.settings.scopedRefresh = "keeps-openid";
+        const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
+        assert.deepStrictEqual(
+          isHandOverError(error) ? [error.reason, error.status, error.code] : [error._tag],
+          ["unauthorized", 401, "unauthorized"],
+        );
+        assert.deepStrictEqual(fake.refreshScopes, [DEVICE_ENTRY_SCOPE, DEVICE_ENTRY_SCOPE]);
+        assert.strictEqual(fake.handOvers.length, 2);
+        for (const request of fake.handOvers) {
+          const token = (request.authorization ?? "").replace(/^Bearer /u, "");
+          assert.deepStrictEqual(fake.accessTokens.get(token), {
+            scope: `openid ${DEVICE_ENTRY_SCOPE}`,
+            audiences: [DEVICE_ENTRY_SCOPE],
+          });
+        }
+        assert.strictEqual(yield* auth.state, "signedIn");
+      }),
+    ),
+  );
+
+  it.effect("sends no token with another audience or without the scope", () =>
     withHarness(({ fake, opened, client }) =>
       Effect.gen(function* () {
         const auth = yield* client();
         yield* signInThroughBrowser(auth, opened);
         const reasons: Array<string> = [];
-        for (const mode of ["ignores-scope", "two-audiences"] as const) {
+        for (const mode of ["two-audiences", "drops-scope"] as const) {
           fake.settings.scopedRefresh = mode;
           const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
           reasons.push(isHandOverError(error) ? error.reason : error._tag);

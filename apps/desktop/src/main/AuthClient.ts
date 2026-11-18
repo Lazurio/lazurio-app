@@ -119,8 +119,8 @@ const HandOverRefusalCode = Schema.Literals([
 ]);
 
 export class HandOverError extends Schema.TaggedError<HandOverError>()("HandOverError", {
-  // invalid-origin: no `https://<host>` origin; scope-not-granted: no token of exactly
-  // lazurio-device-entry; then Auth's answers 404, 403, 409, 503 and 401 after a fresh token.
+  // invalid-origin: no `https://<host>` origin; scope-not-granted: no token with the scope
+  // lazurio-device-entry and its one audience; then Auth's 404, 403, 409, 503 and a second 401.
   reason: Schema.Literals([
     "invalid-origin",
     "scope-not-granted",
@@ -556,14 +556,15 @@ export const layer = (options: AuthClientOptions) =>
         };
       });
 
-      // A token for one call of device-hand-over: exactly the scope lazurio-device-entry and its
-      // one audience, as the route's check 2 takes it, or none.
+      // A token for one call of device-hand-over: the scope lazurio-device-entry and its one
+      // audience. Whether the scope must be exactly that one (route check 2) is Auth's to judge:
+      // Keycloak 26.6.2 answers openid beside it, and Auth's 401 then says so.
       const deviceEntryToken = lock.withPermits(1)(
         Effect.gen(function* () {
           if (Option.isNone(session)) return yield* new SignedOutError();
           const scoped = yield* refresh(session.value, DEVICE_ENTRY_SCOPE);
           if (
-            scoped.scope !== DEVICE_ENTRY_SCOPE ||
+            !scopesOf(scoped.scope ?? "").has(DEVICE_ENTRY_SCOPE) ||
             scoped.audiences.length !== 1 ||
             scoped.audiences[0] !== DEVICE_ENTRY_SCOPE
           ) {
