@@ -30,8 +30,9 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
     return stop;
   }, []);
   const text = messages[localeOf(navigator.language)];
-  // Whether an agent holds the computer now: Agent Desktop's section with Stop then comes first.
-  const agentWorks = device !== null && device.agent !== null && device.agent !== "unknown";
+  // Whether an agent holds the computer now, or may (the helper was lost unconfirmed): Agent
+  // Desktop's section, with Stop or its warning, then comes first and the column stays.
+  const agentWorks = device !== null && device.agent !== null;
   const [copyState, setCopyState] = useState<"copied" | "failed" | null>(null);
   const copyStatus = () => {
     window.lazurio.copyStatus().then(

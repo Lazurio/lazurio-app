@@ -723,13 +723,10 @@ const program = Effect.gen(function* () {
       }),
     ),
   });
-  // While an agent works on the computer, the status column with its Stop shows by itself: the
-  // window then never hides that an agent holds the computer (docs/adr/0006), until Agent Desktop
-  // has a bar of its own.
-  agentWorksNow = () => {
-    const agent = deviceControls.current().agent;
-    return agent !== null && agent !== "unknown";
-  };
+  // While an agent holds the computer, or the helper was lost and nothing confirmed that its work
+  // ended, the status column with Stop or its warning shows by itself and stays in view
+  // (docs/adr/0006), until Agent Desktop has a bar of its own.
+  agentWorksNow = () => deviceControls.current().agent !== null;
   let agentWorked = false;
   const showWhileAgentWorks = () => {
     const works = agentWorksNow();

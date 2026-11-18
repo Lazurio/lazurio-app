@@ -201,9 +201,25 @@ describe("Lazurio App GEN4", () => {
       Reflect.get(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}, "lazurio-device"),
     );
     if (typeof pid !== "number") return assert.fail("the app named no PID of its Device helper");
+    // The column is hidden before the helper is lost without confirming that its engines ended.
+    await shell.evaluate(() => window.lazurio.setStatusPanel(false));
     process.kill(pid, "SIGKILL");
     const problem = shell.locator('[data-device-state="lost"] [data-device-problem="lost"]');
     await problem.waitFor();
+    // The unconfirmed state opens the column, keeps it and the window in view, and Hide is off.
+    const inView = () =>
+      app.evaluate(({ BaseWindow }) => {
+        const window = BaseWindow.getAllWindows()[0];
+        const local = window?.contentView.children[0];
+        return window?.isVisible() === true && local?.getVisible() === true;
+      });
+    assert.isTrue(await inView());
+    assert.isTrue(await shell.locator('[data-action="status-hide"]').isDisabled());
+    await shell.evaluate(() => window.lazurio.setStatusPanel(false));
+    await app.evaluate(({ BaseWindow }) => {
+      BaseWindow.getAllWindows()[0]?.hide();
+    });
+    assert.isTrue(await inView());
     assert.match(await problem.innerText(), /not known whether|nevíme, jestli/iu);
     assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
     // The updates' section knows that an install would wait for the helper.
