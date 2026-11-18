@@ -84,20 +84,26 @@ export const follow = Effect.fn("NetworkDirectory.follow")(function* (options: R
           Effect.option,
         );
         if (Option.isNone(networks)) return;
-        yield* options.onRead("read");
         if (networks.value.length === 0) {
           yield* Effect.logInfo("network directory: no network for this person");
-          return;
+          return yield* options.onRead("read");
         }
         const text = textOf(networks.value);
-        // A list the app would refuse whole is no list to start with.
+        // The list replaces the last one whole, or not at all: one network the app refuses keeps
+        // the last complete list (Auth's contract, Required consumer proof).
         const directory = yield* TailnetDirectory.fromText(text, options.computer).pipe(
           Effect.option,
         );
-        if (Option.isNone(directory) || directory.value.tailnets.length === 0) {
-          yield* Effect.logWarning("network directory: no network the app accepts");
-          return;
+        if (Option.isNone(directory) || directory.value.refused.length > 0) {
+          yield* Effect.logWarning("network directory refused whole", {
+            refused: Option.match(directory, {
+              onNone: () => [],
+              onSome: (value) => value.refused,
+            }),
+          });
+          return yield* options.onRead("not-read");
         }
+        yield* options.onRead("read");
         const saved = yield* readSaved(options.savedPath);
         if (Option.isNone(saved) || saved.value !== text) {
           yield* fileSystem.makeDirectory(path.dirname(options.savedPath), { recursive: true });

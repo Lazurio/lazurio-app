@@ -209,6 +209,27 @@ describe("NetworkDirectory.follow", () => {
     ),
   );
 
+  it.effect("keeps the last complete list when one network of a new answer is refused", () =>
+    withFollow(
+      () =>
+        Effect.succeed([
+          OTHER,
+          { tailnet: "outside", controlUrl: "https://headscale.outside.example.com" },
+        ]),
+      Option.some(textOf([EXAMPLE])),
+      ({ auth, savedPath, changes, outcomes, handled }) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          yield* fileSystem.writeFileString(savedPath, textOf([EXAMPLE]));
+          yield* auth.signIn;
+          yield* handled;
+          assert.deepStrictEqual(yield* readSaved(savedPath), Option.some(textOf([EXAMPLE])));
+          assert.strictEqual(changes(), 0);
+          assert.deepStrictEqual(outcomes, ["not-read"]);
+        }),
+    ),
+  );
+
   it.effect("asks for a new sign-in when the session lacks the directory's scope", () => {
     // A session from a version that asked only for the device scope, then a new sign-in.
     const answers: Array<Effect.Effect<ReadonlyArray<DirectoryNetwork>, NetworkDirectoryError>> = [

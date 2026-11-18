@@ -389,22 +389,10 @@ const program = Effect.gen(function* () {
         }),
       )
     : Option.none<DeviceSwitches.DeviceSwitches>();
-  const noSwitch = Effect.fail(new DeviceSwitches.DeviceSwitchError({ problem: "not-listed" }));
-  const deviceControls: DeviceIpc.DeviceControls = Option.match(switches, {
-    onSome: (service) => service,
-    onNone: () => ({
-      current: () => DeviceService.withoutHelper(deviceHelper === undefined ? "absent" : "failed"),
-      subscribe: () => () => {},
-      stop: Effect.void,
-      setSwitch: () => noSwitch,
-      addEnvironment: () => noSwitch,
-      removeEnvironment: () => noSwitch,
-      // Without the helper's switches the account still signs out (Account.signOutOf).
-      signOut: auth.signOut.pipe(
-        Effect.mapError(() => new DeviceSwitches.DeviceSwitchError({ problem: "not-saved" })),
-      ),
-    }),
-  });
+  // Without the helper's switches, Agent Desktop's section still shows and ends the app's account.
+  const deviceControls: DeviceIpc.DeviceControls = Option.isSome(switches)
+    ? switches.value
+    : yield* Account.withoutSwitches(deviceHelper === undefined ? "absent" : "failed", auth);
   // The updater's view of the computer: the configured helper's, or the default (always idle).
   const idleByDefault = yield* DeviceActivity;
   const deviceActivity = Option.getOrElse(
