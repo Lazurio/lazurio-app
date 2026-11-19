@@ -596,8 +596,8 @@ describe("DeviceSwitches", () => {
         const environments = memoryEnvironments([ORIGIN]);
         const { switches, names } = yield* setUp({ account: "signedIn", environments });
         switches.pageShown(`${ORIGIN}/`);
-        yield* Queue.offer(names.answers, Option.some({ name: "Bob" }));
-        yield* stateWhere(switches, (status) => switchOf(status)?.name === "Bob");
+        yield* Queue.offer(names.answers, Option.some({ name: "Bob Dvořák" }));
+        yield* stateWhere(switches, (status) => switchOf(status)?.name === "Bob Dvořák");
         // The same page again reads nothing; another page and back reads once more.
         switches.pageShown(`${ORIGIN}/settings/tools`);
         switches.pageShown("https://dashboard.lazurio.ai/");
@@ -608,7 +608,7 @@ describe("DeviceSwitches", () => {
         switches.pageShown(`${ORIGIN}/`);
         for (let read = 0; read < 3; read += 1) yield* Queue.take(names.asked);
         assert.deepStrictEqual(names.reads, [ORIGIN, ORIGIN, ORIGIN]);
-        assert.strictEqual(switchOf(switches.current())?.name, "Bob");
+        assert.strictEqual(switchOf(switches.current())?.name, "Bob Dvořák");
         // A read for an Environment removed meanwhile keeps nothing.
         yield* switches.removeEnvironment(ORIGIN);
         const kept = nextChange(switches);

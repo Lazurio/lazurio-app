@@ -24,6 +24,7 @@ import type { DeviceEnvironments } from "./DeviceEnvironments.ts";
 import type { DeviceRequestError, DeviceService } from "./DeviceService.ts";
 import {
   environmentName,
+  keptNames,
   namedEnvironment,
   type EnvironmentNames,
 } from "../shared/environmentName.ts";
@@ -202,7 +203,10 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     if (!environments.origins().includes(origin)) return;
     const names = yield* readNames(origin);
     if (Option.isNone(names)) return;
-    const kept = yield* Effect.exit(environments.setNames(origin, names.value));
+    // A stand-in that only repeats the address never replaces a name kept before.
+    const kept = yield* Effect.exit(
+      environments.setNames(origin, keptNames(origin, names.value, environments.names(origin))),
+    );
     if (Exit.isFailure(kept)) {
       yield* Effect.logWarning("the Environment's names could not be saved", { origin });
     }

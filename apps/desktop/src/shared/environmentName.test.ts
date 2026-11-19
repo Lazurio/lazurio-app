@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { environmentName, namedEnvironment } from "./environmentName.ts";
+import { environmentName, keptNames, namedEnvironment } from "./environmentName.ts";
 
 describe("environmentName", () => {
   it("names an Environment by its host, without the Organization's repeated prefix", () => {
@@ -55,5 +55,34 @@ describe("environmentName", () => {
       organization: "Ukázková Organizace",
     });
     assert.deepStrictEqual(namedEnvironment(origin, {}), environmentName(origin));
+  });
+});
+
+describe("a name that only repeats the address", () => {
+  const ORIGIN = "https://launchpad.lazurio-bob.lazurioexampleorganization.lazurio.io";
+
+  it("counts for nothing, so the name from the address shows", () => {
+    assert.deepStrictEqual(
+      namedEnvironment(ORIGIN, { name: "lazurio-bob", organization: "lazurioexampleorganization" }),
+      { name: "Bob", organization: "Lazurioexampleorganization" },
+    );
+    assert.strictEqual(namedEnvironment(ORIGIN, { name: "Lazurio Bob" }).name, "Bob");
+  });
+
+  it("never replaces a real name kept before, while a new real name does", () => {
+    const before = { name: "Bob Dvořák", organization: "Ukázková Organizace" };
+    assert.deepStrictEqual(
+      keptNames(
+        ORIGIN,
+        { name: "lazurio-bob", organization: "lazurioexampleorganization" },
+        before,
+      ),
+      before,
+    );
+    assert.deepStrictEqual(keptNames(ORIGIN, { name: "Bob" }, before), {
+      name: "Bob",
+      organization: "Ukázková Organizace",
+    });
+    assert.deepStrictEqual(keptNames(ORIGIN, { name: "lazurio-bob" }, {}), {});
   });
 });
