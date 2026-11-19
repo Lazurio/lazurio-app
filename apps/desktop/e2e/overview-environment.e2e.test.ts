@@ -88,6 +88,8 @@ beforeAll(async () => {
         ),
         LAZURIO_FAKE_RUNNING_URL: `http://127.0.0.1:${controlPort}/running`,
         LAZURIO_FAKE_UPSTREAM: `127.0.0.1:${environmentPort}`,
+        // Later than the window's first page: the app must not navigate before it has the answer.
+        LAZURIO_FAKE_SLOW_PLAIN_CHALLENGE_MS: "3000",
         LAZURIO_APP_DEV_TAILNETS: JSON.stringify([
           {
             tailnet: "e2e",
