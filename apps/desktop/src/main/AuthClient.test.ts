@@ -36,6 +36,7 @@ import {
   type AuthClientShape,
   type HandOver,
 } from "./AuthClient.ts";
+import { openOrOffer } from "./BrowserOpen.ts";
 import type { Keystore } from "./NodeKeys.ts";
 
 const isSignInError = Schema.is(SignInError);
@@ -1164,6 +1165,33 @@ describe("AuthClient.handOver", () => {
         const auth = yield* client();
         const error = yield* Effect.flip(auth.handOver(ENVIRONMENT_ORIGIN));
         assert.isTrue(isSignedOut(error));
+      }),
+    ),
+  );
+});
+
+describe("AuthClient.signIn when the system's browser does not open", () => {
+  it.effect("keeps waiting while the person opens the offered address themselves", () =>
+    withHarness(({ fake, client }) =>
+      Effect.gen(function* () {
+        const offered = yield* Deferred.make<string>();
+        const auth = yield* client({
+          // The system cannot open the address; the app offers it to copy (BrowserOpen).
+          openBrowser: openOrOffer(
+            () => Promise.reject(new Error("Failed to open (0x483)")),
+            (address) => {
+              Deferred.doneUnsafe(offered, Effect.succeed(address));
+            },
+          ),
+        });
+        const signingIn = yield* Effect.forkChild(auth.signIn);
+        // The person copies the address and opens it in a browser of their own, later.
+        const address = yield* Deferred.await(offered);
+        const page = yield* browse(address);
+        assert.strictEqual(page.status, 200);
+        yield* Fiber.join(signingIn);
+        assert.strictEqual(yield* auth.state, "signedIn");
+        assert.deepStrictEqual(fake.grants, ["authorization_code"]);
       }),
     ),
   );

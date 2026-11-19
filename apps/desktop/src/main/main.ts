@@ -28,6 +28,7 @@ import { statusText } from "../shared/statusText.ts";
 import { localeOf, messages } from "../ui/messages.ts";
 
 import * as AuthClient from "./AuthClient.ts";
+import * as BrowserOpen from "./BrowserOpen.ts";
 import { DeviceActivity } from "./DeviceActivity.ts";
 import * as DeviceEnvironments from "./DeviceEnvironments.ts";
 import * as DeviceIpc from "./DeviceIpc.ts";
@@ -60,11 +61,11 @@ LocalScheme.registerPrivilegesSync();
 Electron.app.enableSandbox();
 
 // The app's sign-in opens in the system's browser (AuthClient, RFC 8252).
-const openInSystemBrowser = (address: string) =>
-  Effect.tryPromise({
-    try: () => Electron.shell.openExternal(address),
-    catch: () => new AuthClient.SignInError({ reason: "browser" }),
-  }).pipe(Effect.tapError(() => Effect.sync(() => Hardening.browserFailed(address))));
+// The app's sign-in keeps waiting when the browser does not open; the person copies the address.
+const openInSystemBrowser = BrowserOpen.openOrOffer(
+  (address) => Electron.shell.openExternal(address),
+  Hardening.browserFailed,
+);
 
 // The notice of the first hidden window, as the system shows it.
 const systemNotice = (body: string) =>
@@ -196,12 +197,11 @@ const packagedDirectory = Effect.gen(function* () {
   const path = yield* Path.Path;
   const builtInFile = path.join(process.resourcesPath, "tailnets", "directory.json");
   // A stable build joins no built-in network (TailnetDirectory.builtInAllowed).
-  const builtIn = TailnetDirectory.builtInAllowed(Electron.app.getVersion())
+  const platform = yield* HostProcess.Platform;
+  const builtIn = TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform)
     ? TailnetDirectory.fromFile(builtInFile, NodeOS.hostname())
     : Effect.succeed(TailnetDirectory.NO_TAILNETS);
-  if ((yield* HostProcess.Platform) !== "win32") {
-    return { source: "built-in", directory: yield* builtIn };
-  }
+  if (platform !== "win32") return { source: "built-in", directory: yield* builtIn };
   // The packaged tailnet helper reads the policy and the person's setting through the registry's
   // API; the setting counts only where the helper confirms there is no policy (TailnetPolicy).
   const helper = path.join(process.resourcesPath, "helpers", "lazurio-tailnet.exe");
@@ -227,7 +227,8 @@ const tailnetsToJoin = Effect.gen(function* () {
     return {
       tailnets: directory.tailnets,
       networkMissing:
-        source === "built-in" && !TailnetDirectory.builtInAllowed(Electron.app.getVersion()),
+        source === "built-in" &&
+        !TailnetDirectory.builtInAllowed(Electron.app.getVersion(), yield* HostProcess.Platform),
     };
   }
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
