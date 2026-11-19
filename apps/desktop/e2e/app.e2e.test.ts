@@ -301,6 +301,7 @@ describe("Lazurio App GEN4", () => {
       generation: "GEN4",
       helpers: [],
       tailnets: [{ tailnet: "e2e", state: "running", addresses: ["100.64.0.1"] }],
+      networkMissing: false,
       updates: { channel: "latest", state: { phase: "off", reason: "unpackaged" } },
     };
     await app.evaluate(
@@ -311,5 +312,29 @@ describe("Lazurio App GEN4", () => {
       { channel: STATUS_CHANGED_CHANNEL, status: changed },
     );
     await shell.locator('[data-tailnet="e2e"][data-state="running"]').waitFor();
+    // The node's address is under the technical details, not in the network's row.
+    assert.strictEqual(
+      await shell
+        .locator('[data-tailnet="e2e"]')
+        .innerText()
+        .then((row) => row.includes("100.64")),
+      false,
+    );
+    await shell.locator('[data-tailnet-addresses="e2e"]').waitFor({ state: "attached" });
+
+    // A stable build without the Organization's network says so instead of joining another one.
+    await app.evaluate(
+      ({ webContents }, { channel, status }) => {
+        for (const contents of webContents.getAllWebContents())
+          if (contents.getURL().startsWith("lazurio-app:")) contents.send(channel, status);
+      },
+      {
+        channel: STATUS_CHANGED_CHANNEL,
+        status: { ...changed, tailnets: [], networkMissing: true },
+      },
+    );
+    const missing = shell.locator("[data-network-missing]");
+    await missing.waitFor();
+    assert.match(await missing.innerText(), /not set up yet|zatím není nastavená/u);
   });
 });

@@ -19,6 +19,7 @@ const STATUS: AppStatus = {
       reason: "no-keystore",
     },
   ],
+  networkMissing: false,
   updates: { channel: "latest", state: { phase: "ready", version: "0.1.1" } },
 };
 

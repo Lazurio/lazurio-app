@@ -28,6 +28,7 @@ import { statusText } from "../shared/statusText.ts";
 import { localeOf, messages } from "../ui/messages.ts";
 
 import * as AuthClient from "./AuthClient.ts";
+import * as BrowserOpen from "./BrowserOpen.ts";
 import { DeviceActivity } from "./DeviceActivity.ts";
 import * as DeviceEnvironments from "./DeviceEnvironments.ts";
 import * as DeviceIpc from "./DeviceIpc.ts";
@@ -60,11 +61,11 @@ LocalScheme.registerPrivilegesSync();
 Electron.app.enableSandbox();
 
 // The app's sign-in opens in the system's browser (AuthClient, RFC 8252).
-const openInSystemBrowser = (address: string) =>
-  Effect.tryPromise({
-    try: () => Electron.shell.openExternal(address),
-    catch: () => new AuthClient.SignInError({ reason: "browser" }),
-  });
+// The app's sign-in keeps waiting when the browser does not open; the person copies the address.
+const openInSystemBrowser = BrowserOpen.openOrOffer(
+  (address) => Electron.shell.openExternal(address),
+  Hardening.browserFailed,
+);
 
 // The notice of the first hidden window, as the system shows it.
 const systemNotice = (body: string) =>
@@ -188,29 +189,30 @@ const testHooks = Effect.gen(function* () {
   };
 });
 
-// The tailnets a packaged app joins (TailnetDirectory, ADR 0008): on Windows an IT policy, when the
-// computer's IT set one (TailnetPolicy, Lazurio App (Alpha) at a client), and the directory built into the
-// app otherwise. Development may set them as a JSON array of Tailnet.TailnetConfig in
-// LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
+// The tailnets a packaged app joins (ADR 0008): on Windows IT's policy or the person's setting,
+// else the built-in directory where TailnetDirectory.builtInAllowed lets it (not a stable Windows
+// build). Development may set them as JSON in LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
 const packagedDirectory = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const builtIn = path.join(process.resourcesPath, "tailnets", "directory.json");
-  if ((yield* HostProcess.Platform) !== "win32") {
-    return {
-      source: "built-in",
-      directory: yield* TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
-    };
-  }
+  const builtInFile = path.join(process.resourcesPath, "tailnets", "directory.json");
+  // A stable Windows build joins no built-in network; a nightly and any build off Windows do.
+  const platform = yield* HostProcess.Platform;
+  const builtIn = TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform)
+    ? TailnetDirectory.fromFile(builtInFile, NodeOS.hostname())
+    : Effect.succeed(TailnetDirectory.NO_TAILNETS);
+  if (platform !== "win32") return { source: "built-in", directory: yield* builtIn };
   // The packaged tailnet helper reads the policy and the person's setting through the registry's
   // API; the setting counts only where the helper confirms there is no policy (TailnetPolicy).
   const helper = path.join(process.resourcesPath, "helpers", "lazurio-tailnet.exe");
   return yield* TailnetPolicy.directoryOf(
     (source) => TailnetPolicy.readWindows(helper, source),
-    TailnetDirectory.fromFile(builtIn, NodeOS.hostname()),
+    builtIn,
     NodeOS.hostname(),
   );
 });
 
+// The tailnets to join, and whether the Organization's network is missing: a stable build with
+// neither IT's policy nor the person's setting, which joins nothing and says so.
 const tailnetsToJoin = Effect.gen(function* () {
   if (Electron.app.isPackaged) {
     const { source, directory } = yield* packagedDirectory;
@@ -221,10 +223,18 @@ const tailnetsToJoin = Effect.gen(function* () {
       source,
       tailnets: directory.tailnets.map((tailnet) => tailnet.tailnet),
     });
-    return directory.tailnets;
+    return {
+      tailnets: directory.tailnets,
+      networkMissing:
+        source === "built-in" &&
+        !TailnetDirectory.builtInAllowed(Electron.app.getVersion(), yield* HostProcess.Platform),
+    };
   }
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
-  return Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [];
+  return {
+    tailnets: Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [],
+    networkMissing: false,
+  };
 });
 
 // The page of the web Lazurio the main window shows (RemoteUrl). Development may set one, for trying
@@ -455,12 +465,15 @@ const program = Effect.gen(function* () {
     allowWithoutKeystore: !Electron.app.isPackaged,
   });
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
+  const joining = yield* tailnetsToJoin;
+  // Without the Organization's network the status column opens and says what is missing.
+  if (joining.networkMissing) setStatusShown(true);
   const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
   const tailnets: Tailnet.Tailnets =
     tailnetHelper !== undefined && Option.isSome(tailnetHelper.connection)
       ? yield* Tailnet.run({
           connection: tailnetHelper.connection.value,
-          tailnets: yield* tailnetsToJoin,
+          tailnets: joining.tailnets,
           session: Electron.session.fromPartition(MainWindow.REMOTE_PARTITION),
           observer: hooks.observer,
           stateRoot,
@@ -610,6 +623,7 @@ const program = Effect.gen(function* () {
     generation: "GEN4",
     helpers: helpers.map((helper) => helper.status),
     tailnets: tailnets.current(),
+    networkMissing: joining.networkMissing,
     updates: updates.current(),
   });
   // Every change of status goes to every local window, from before the first window exists. A

@@ -2,6 +2,9 @@ import * as Effect from "effect/Effect";
 
 import * as Electron from "electron";
 
+import { APP_NAME } from "../shared/appName.ts";
+import { localeOf, messages } from "../ui/messages.ts";
+
 import {
   destinationOf,
   step,
@@ -23,9 +26,28 @@ export interface NavigationObserver {
   readonly refused: (url: string, frame: Frame) => void;
 }
 
+// The system could not open the address (on Windows, for example, an account with no application
+// for links): the person gets the address to copy instead of nothing happening.
+export const browserFailed = (url: string) => {
+  const text = messages[localeOf(Electron.app.getLocale())].browser;
+  void Electron.dialog
+    .showMessageBox({
+      type: "warning",
+      title: APP_NAME,
+      message: text.failed,
+      detail: url,
+      buttons: [text.copy, text.close],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    .then(({ response }) => {
+      if (response === 0) Electron.clipboard.writeText(url);
+    });
+};
+
 export const electronObserver: NavigationObserver = {
   openExternally: (url) => {
-    void Electron.shell.openExternal(url);
+    Electron.shell.openExternal(url).catch(() => browserFailed(url));
   },
   refused: () => {},
 };

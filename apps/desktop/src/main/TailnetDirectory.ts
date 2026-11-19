@@ -120,3 +120,12 @@ export const fromFile = Effect.fn("TailnetDirectory.fromFile")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   return yield* fromText(yield* fileSystem.readFileString(path), computer);
 });
+
+// Whether a packaged build may join the directory built into the app (Lazurio Example, Lazurio's
+// own test network): a nightly may, for Lazurio's testers, and so may any build off Windows, which
+// has no other source yet. A stable Windows build may not: a person at a customer whose network
+// is not set yet is never sent to sign in to one that is not theirs (v0.1.0, 2026-11-19).
+export const builtInAllowed = (appVersion: string, platform: string): boolean =>
+  platform !== "win32" || /-nightly\./u.test(appVersion);
+
+export const NO_TAILNETS: Directory = { tailnets: [], refused: [] };

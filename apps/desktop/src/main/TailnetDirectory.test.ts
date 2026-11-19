@@ -5,7 +5,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { fromFile, fromText, nodeHostname, refusalOf } from "./TailnetDirectory.ts";
+import { builtInAllowed, fromFile, fromText, nodeHostname, refusalOf } from "./TailnetDirectory.ts";
 
 const withDirectory = <A, E>(
   text: string,
@@ -197,4 +197,16 @@ describe("fromText", () => {
       assert.strictEqual(directory.refused[2]?.reason, "an earlier entry has the same name");
     }),
   );
+});
+
+describe("builtInAllowed", () => {
+  it("keeps a stable Windows build out of the built-in network, and nothing else", () => {
+    assert.isTrue(builtInAllowed("0.1.1-nightly.20261119.20", "win32"));
+    assert.isFalse(builtInAllowed("0.1.0", "win32"));
+    assert.isFalse(builtInAllowed("0.1.1", "win32"));
+    // A Mac (and Linux) has no other source of networks yet, so its stable build keeps it.
+    assert.isTrue(builtInAllowed("0.1.1", "darwin"));
+    assert.isTrue(builtInAllowed("0.1.1", "linux"));
+    assert.isTrue(builtInAllowed("0.1.1-nightly.20261119.20", "darwin"));
+  });
 });

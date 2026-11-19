@@ -168,6 +168,9 @@ export interface AppStatus {
   readonly generation: "GEN4";
   readonly helpers: ReadonlyArray<HelperStatus>;
   readonly tailnets: ReadonlyArray<TailnetStatus>;
+  // A stable build with neither IT's policy nor the person's setting: no network of the
+  // Organization, and none joined in its place.
+  readonly networkMissing: boolean;
   readonly updates: UpdatesStatus;
 }
 

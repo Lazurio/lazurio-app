@@ -18,6 +18,10 @@ export interface Text {
   readonly failed: string;
   readonly tailnets: string;
   readonly noTailnets: string;
+  // A stable build without the Organization's network.
+  readonly networkMissing: string;
+  // The heading of the nodes' addresses under the technical details.
+  readonly addresses: string;
   readonly starting: string;
   readonly "needs-login": string;
   readonly running: string;
@@ -35,6 +39,8 @@ export interface Text {
   // The app's status column, hidden by default, and its actions.
   readonly status: StatusText;
   readonly menu: MenuText;
+  // The system could not open an address in the browser.
+  readonly browser: { readonly failed: string; readonly copy: string; readonly close: string };
 }
 
 interface StatusText {
@@ -194,6 +200,8 @@ const cs: Text = {
   failed: "Nespustil se",
   tailnets: "Síť Organizace",
   noTailnets: "Žádná síť",
+  addresses: "Adresy v síti",
+  networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Soubor se sítí vám pošle Lazurio nebo Admin vaší Organizace, případně ji nastaví IT. Po jeho spuštění ${APP_NAME} ukončete a spusťte znovu.`,
   starting: "Připojuje se",
   "needs-login": "Čeká na přihlášení",
   running: "Připojeno",
@@ -334,6 +342,11 @@ const cs: Text = {
     copyFailed: "Stav se nepodařilo zkopírovat.",
     details: "Technické podrobnosti",
   },
+  browser: {
+    failed: "Prohlížeč se nepodařilo otevřít. Zkopírujte adresu a otevřete ji v prohlížeči sami.",
+    copy: "Kopírovat adresu",
+    close: "Zavřít",
+  },
   menu: {
     edit: "Úpravy",
     undo: "Zpět",
@@ -361,6 +374,8 @@ const en: Text = {
   failed: "Did not start",
   tailnets: "Organization networks",
   noTailnets: "No network",
+  addresses: "Addresses in the network",
+  networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Lazurio or your Organization's Admin sends you the file with the network, or your IT sets it. After running it, quit ${APP_NAME} and start it again.`,
   starting: "Connecting",
   "needs-login": "Waiting for sign-in",
   running: "Connected",
@@ -503,6 +518,12 @@ const en: Text = {
     copied: "The status is copied. Paste it into a message.",
     copyFailed: "The status could not be copied.",
     details: "Technical details",
+  },
+  browser: {
+    failed:
+      "The browser could not be opened. Copy the address and open it in your browser yourself.",
+    copy: "Copy address",
+    close: "Close",
   },
   menu: {
     edit: "Edit",
