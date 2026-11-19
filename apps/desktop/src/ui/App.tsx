@@ -82,7 +82,11 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
       {agentWorks ? <AgentDesktopSection status={device} text={text.device} /> : null}
       <section aria-label={text.tailnets}>
         <h2>{text.tailnets}</h2>
-        {current.tailnets.length === 0 ? (
+        {current.networkMissing ? (
+          <p className="shell__reason" data-network-missing="">
+            {text.networkMissing}
+          </p>
+        ) : current.tailnets.length === 0 ? (
           <p className="shell__empty">{text.noTailnets}</p>
         ) : (
           <ul className="shell__helpers">
@@ -97,11 +101,6 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
                 >
                   <span>{tailnet.tailnet}</span>
                   <span className="shell__state">{label.state}</span>
-                  {label.addresses?.map((address) => (
-                    <span key={address} className="shell__detail">
-                      {address}
-                    </span>
-                  ))}
                   {label.detail === undefined ? null : (
                     <div className="shell__reason">
                       <p>{label.detail.text}</p>
@@ -145,6 +144,28 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
           <dt>{text.generation}</dt>
           <dd>{current.generation}</dd>
         </dl>
+        {/* A running node's addresses in its network, which only a technical look needs. */}
+        {current.tailnets.some((tailnet) => tailnet.state === "running") ? (
+          <section aria-label={text.addresses}>
+            <h3>{text.addresses}</h3>
+            <ul className="shell__helpers">
+              {current.tailnets.flatMap((tailnet) =>
+                tailnet.state === "running"
+                  ? [
+                      <li key={tailnet.tailnet} data-tailnet-addresses={tailnet.tailnet}>
+                        <span>{tailnet.tailnet}</span>
+                        {tailnet.addresses.map((address) => (
+                          <span key={address} className="shell__detail">
+                            {address}
+                          </span>
+                        ))}
+                      </li>,
+                    ]
+                  : [],
+              )}
+            </ul>
+          </section>
+        ) : null}
         <section aria-label={text.helpers}>
           <h3>{text.helpers}</h3>
           <ul className="shell__helpers">

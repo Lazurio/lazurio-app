@@ -194,6 +194,7 @@ describe("Lazurio App GEN4 with a remote page", () => {
           addresses: ["100.64.0.12", "fd7a:115c:a1e0:ab12:4843:cd96:6240:c"],
         },
       ],
+      networkMissing: false,
       updates: { channel: "nightly", state: { phase: "off", reason: "unpackaged" } },
     };
     await app.evaluate(
@@ -241,7 +242,9 @@ describe("Lazurio App GEN4 with a remote page", () => {
     assert.deepStrictEqual(lines, {
       title: 1,
       titleText: APP_NAME,
+      // The network's row, its addresses under the technical details, then the helper programs.
       names: [
+        ["lazurioexampleorganization", 1],
         ["lazurioexampleorganization", 1],
         ["lazurio-tailnet", 1],
         ["lazurio-device", 1],
