@@ -4,9 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Electron from "electron";
 
 // A window that shows while its pages count themselves hidden stays blank: after a start with the
-// display off and after the display woke (#36, 2026-11-19). Only on Windows, and only when the
-// window shows, is restored, focused, the system resumes or unlocks, or it has the focus: a
-// covered window's page is rightly hidden, and a Mac's covered windows are left as they are.
+// display off and after the display woke (#36, 2026-11-19). Only on Windows, and only for the
+// window in front (shown, unminimized, focused), checked again after every wait: a covered
+// window's page is rightly hidden and keeps its state, and a Mac's windows are left as they are.
 
 export interface WatchedView {
   // For the log only: column, page, waiting, bar, agent-desktop.
@@ -18,7 +18,9 @@ export interface WatchedView {
 
 // What the check needs from Electron, so that its decisions are unit-tested (Repaint.test.ts).
 export interface RepaintPort<View> {
-  readonly windowShowing: () => boolean;
+  // Whether the window is in front: shown, not minimized and focused. Only then is a hidden page
+  // wrong; a covered window's pages are rightly hidden and keep their state (review of #77).
+  readonly windowInFront: () => boolean;
   // The views the window means to show now, read again after every wait.
   readonly views: () => ReadonlyArray<{
     readonly name: string;
@@ -35,9 +37,9 @@ export interface RepaintPort<View> {
   readonly log: (fields: Readonly<Record<string, string>>) => void;
 }
 
-// Whether the view is still one the window means to show, in a window that shows.
+// Whether the view is still one the window means to show, in a window in front.
 const stillShown = <View>(port: RepaintPort<View>, name: string, view: View): boolean =>
-  port.windowShowing() &&
+  port.windowInFront() &&
   port.usable(view) &&
   port.views().some((entry) => entry.name === name && entry.view === view);
 
@@ -91,7 +93,8 @@ export const keepPainted = Effect.fn("Repaint.keepPainted")(function* (
   if ((yield* HostProcess.Platform) !== "win32") return;
   const run = Effect.runForkWith(yield* Effect.context<never>());
   const port: RepaintPort<Electron.WebContentsView> = {
-    windowShowing: () => !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
+    windowInFront: () =>
+      !window.isDestroyed() && window.isVisible() && !window.isMinimized() && window.isFocused(),
     views,
     usable,
     visibilityOf: async (view) => {
@@ -126,18 +129,12 @@ export const keepPainted = Effect.fn("Repaint.keepPainted")(function* (
   window.on("focus", check("focus"));
   Electron.powerMonitor.on("resume", resumed);
   Electron.powerMonitor.on("unlock-screen", unlocked);
-  // The display wakes without any event: while the person uses the computer, the window in front,
-  // which nothing covers, is wrong to have a hidden page.
+  // The display wakes without any event: while the person uses the computer, the window in front
+  // is wrong to have a hidden page.
   const active = check("active");
   // @effect-diagnostics-next-line globalTimersInEffect:off - It lives as long as the window, past any scope.
   const timer = setInterval(() => {
-    if (
-      !window.isDestroyed() &&
-      window.isFocused() &&
-      Electron.powerMonitor.getSystemIdleTime() <= ACTIVE_WITHIN_SECONDS
-    ) {
-      active();
-    }
+    if (Electron.powerMonitor.getSystemIdleTime() <= ACTIVE_WITHIN_SECONDS) active();
   }, CHECK_EVERY_MS);
   window.once("closed", () => {
     clearInterval(timer);

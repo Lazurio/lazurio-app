@@ -9,12 +9,16 @@ const fakeWindow = (options: {
   // The answers, in order, and what happens while each one is awaited.
   readonly answers: ReadonlyArray<{ readonly visibility: string; readonly meanwhile?: () => void }>;
 }) => {
-  const state = { showing: true, shown: new Set(options.views.map((view) => view.name)) };
+  const state = {
+    showing: true,
+    focused: true,
+    shown: new Set(options.views.map((view) => view.name)),
+  };
   const done: Array<string> = [];
   const logged: Array<Readonly<Record<string, string>>> = [];
   const answers = [...options.answers];
   const port: RepaintPort<string> = {
-    windowShowing: () => state.showing,
+    windowInFront: () => state.showing && state.focused,
     views: () =>
       options.views
         .filter((view) => state.shown.has(view.name))
@@ -153,5 +157,34 @@ describe("Repaint.checkViews", () => {
       "reattach column",
       "reload column",
     ]);
+  });
+
+  // A covered window has rightly hidden pages: resume and unlock leave it and its state alone.
+  it("leaves a window that is not in front alone on resume or unlock", async () => {
+    const window = fakeWindow({
+      views: [{ name: "agent-desktop", reloadable: true }],
+      answers: [{ visibility: "hidden" }, { visibility: "hidden" }],
+    });
+    window.state.focused = false;
+    await checkViews(window.port, "resume");
+    await checkViews(window.port, "unlock-screen");
+    assert.deepStrictEqual(window.done, []);
+  });
+
+  it("stops when the window loses the front while an answer is awaited", async () => {
+    const window = fakeWindow({
+      views: [{ name: "column", reloadable: true }],
+      answers: [
+        { visibility: "hidden" },
+        {
+          visibility: "hidden",
+          meanwhile: () => {
+            window.state.focused = false;
+          },
+        },
+      ],
+    });
+    await checkViews(window.port, "resume");
+    assert.deepStrictEqual(window.done, ["reattach column"]);
   });
 });
