@@ -84,12 +84,16 @@ afterAll(async () => {
 describe("Lazurio App GEN4 status", () => {
   it("shows a tailnet change that happens while its main window is still opening", async () => {
     const tailnet = shell.locator('[data-tailnet="e2e"]');
-    await shell.locator('main[data-status="live"]').waitFor();
+    // The status column is hidden by default (#61), so its page is waited for as loaded, not as
+    // visible: on Windows a hidden view's elements are not visible.
+    await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
     await pageRequested.promise;
     assert.notStrictEqual(await tailnet.getAttribute("data-state"), "running");
 
     running.resolve();
-    await shell.locator('[data-tailnet="e2e"][data-state="running"]').waitFor({ timeout: 10_000 });
+    await shell
+      .locator('[data-tailnet="e2e"][data-state="running"]')
+      .waitFor({ state: "attached", timeout: 10_000 });
     page.resolve();
   });
 });
