@@ -326,11 +326,17 @@ describe("Agent Desktop's switch", () => {
     await inPhase("off", "off");
     assert.strictEqual(await shell.locator("[data-device-add]").count(), 0);
     assert.strictEqual(await environmentRow().locator("[data-switch-problem]").count(), 0);
-    // An Off switch says what turning it on does.
+    // An Off switch says so in a word; what turning it on does sits behind the window's "?".
     assert.match(
-      await environmentRow().locator("[data-switch-hint]").innerText(),
-      /no agent from this Environment|agent z tohoto Prostředí/u,
+      await environmentRow().locator("[data-row-state]").innerText(),
+      /^(Off|Vypnuto)$/u,
     );
+    await shell.locator(".ad__head .ad__help summary").click();
+    assert.match(
+      await shell.locator(".ad__head .ad__help p").innerText(),
+      /lets agents|pustí agenty/u,
+    );
+    await shell.locator(".ad__head .ad__help summary").click();
   });
 
   it("signs in in the browser when the switch goes on, then starts the channel with a hand-over", async () => {
@@ -372,9 +378,17 @@ describe("Agent Desktop's switch", () => {
     // No second sign-in: the session from before still holds.
     assert.strictEqual(signIns, 1);
     assert.deepStrictEqual(handOverOrigins, [ENVIRONMENT, ENVIRONMENT, ENVIRONMENT]);
-    const problem = await environmentRow().locator("[data-switch-problem]").innerText();
-    assert.match(problem, /uninstall it|utilitu odinstalujte/u);
-    assert.match(problem, /io\.lazurio\.agent-desktop/u);
+    const problem = environmentRow().locator("[data-switch-problem]");
+    assert.match(
+      await problem.locator(".ad__problem-text").innerText(),
+      /old Lazurio Agent Desktop|starého Lazurio Agent Desktopu/u,
+    );
+    assert.strictEqual(await problem.getAttribute("data-switch-problem"), "agent_desktop_paired");
+    // How to fix it: three steps, the utility's keychain entries among them.
+    await problem.locator("[data-switch-fix] summary").click();
+    const steps = await problem.locator("[data-switch-fix] ol").innerText();
+    assert.match(steps, /Uninstall|odinstalujte/u);
+    assert.match(steps, /io\.lazurio\.agent-desktop/u);
     await screenshot("integration-section-refused.png");
   });
 
@@ -392,6 +406,7 @@ describe("Agent Desktop's switch", () => {
     await inPhase("off", "off");
     assert.strictEqual(await environmentRow().locator("[data-switch-problem]").count(), 0);
     assert.strictEqual(await shell.locator("[data-device-add]").count(), 0);
+    await environmentRow().locator('[data-action="device-more"]').click();
     await environmentRow().locator('[data-action="device-remove"]').click();
     await shell.locator('[data-device-environments="none"]').waitFor();
     await shell.locator(`[data-device-add="${ENVIRONMENT}"]`).waitFor();
@@ -473,6 +488,7 @@ describe("Agent Desktop's switch", () => {
     await column.locator('[data-action="status-hide"]:not([disabled])').click();
     await column.evaluate(() => window.lazurio.status());
     assert.isFalse(await columnShown());
+    await environmentRow().locator('[data-action="device-more"]').click();
     await environmentRow().locator('[data-action="device-remove"]').click();
     await shell.locator('[data-device-environments="none"]').waitFor();
     // The next test signs in again.
@@ -503,7 +519,7 @@ describe("Agent Desktop's switch", () => {
     await inPhase("off");
     assert.isFalse(isAlive(pid));
     const problem = await environmentRow().locator("[data-switch-problem]").innerText();
-    assert.match(problem, /did not confirm|nepotvrdil/u);
+    assert.match(problem, /was ended|byl ukončen/u);
     // The helper cannot be reached any more; it confirmed that every agent's work ended.
     await shell
       .locator('[data-device-state="lost"] [data-device-problem="lost-confirmed"]')

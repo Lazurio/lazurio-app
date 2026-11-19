@@ -57,6 +57,9 @@ export const make = Effect.fn("DevicePanel.make")(function* (options: DevicePane
       minimizable: false,
       fullscreenable: false,
     });
+    // A small window of one purpose has no menu of its own (Windows, Linux); Chromium's editing
+    // keys (copy, paste, select all) work without one.
+    window.removeMenu();
     const view = new Electron.WebContentsView(localViewOptions(options.preloadPath));
     view.setBackgroundColor(BACKGROUND);
     registerView(view.webContents, "Local");

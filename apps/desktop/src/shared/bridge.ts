@@ -180,6 +180,8 @@ export interface DeviceStatus {
   readonly agent: { readonly environmentId: string; readonly label: string } | null | "unknown";
   // The app's own Lazurio account (its sign-in with Lazurio Auth).
   readonly account: "signed-in" | "signed-out";
+  // The account's name from the sign-in's ID token, when it carried one.
+  readonly accountName?: string;
   // The Environments the person added, each with its switch, off after every start.
   readonly switches: ReadonlyArray<DeviceSwitchStatus>;
   // The origin of the Environment the main window shows, when it is not in the list yet.

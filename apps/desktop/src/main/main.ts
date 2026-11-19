@@ -97,6 +97,7 @@ const testHooks = Effect.gen(function* () {
       authIssuer: Option.none<string>(),
       openBrowser: openInSystemBrowser,
       helperStarted: (_name: string, _pid: number) => {},
+      fixtures: false,
       notice: systemNotice,
       secondInstance: () => {},
       trayMenu: (_menu: Electron.Menu) => {},
@@ -198,6 +199,8 @@ const testHooks = Effect.gen(function* () {
     authIssuer,
     openBrowser,
     helperStarted,
+    // Agent Desktop's sample states for its screenshots (AgentDesktopFixtures).
+    fixtures: true,
   };
 });
 
@@ -493,7 +496,7 @@ const program = Effect.gen(function* () {
   );
   yield* Hardening.guardAllWebContents(hooks.observer);
   yield* Hardening.hardenSession(Electron.session.defaultSession);
-  yield* LocalScheme.serve(path.join(appPath, "dist-ui"));
+  yield* LocalScheme.serve(path.join(appPath, "dist-ui"), { fixtures: hooks.fixtures });
 
   // The helpers live in a scope of their own, which the updater closes before it installs: on
   // Windows a running helper keeps its .exe locked (docs/adr/0005, point 5).

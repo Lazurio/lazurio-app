@@ -20,6 +20,7 @@ import type {
 import type { AuthClientShape, AuthState, HandOver, HandOverError } from "./AuthClient.ts";
 import type { DeviceEnvironments } from "./DeviceEnvironments.ts";
 import type { DeviceRequestError, DeviceService } from "./DeviceService.ts";
+import { environmentName } from "../shared/environmentName.ts";
 import { environmentOriginOf } from "./Navigation.ts";
 
 // Agent Desktop's switches (docs/adr/0006, contract v3 in the app): off after every start, on only
@@ -167,10 +168,13 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
   for (const origin of environments.origins()) yield* entryOf(origin);
 
   let account: AuthState = yield* auth.state;
+  // The account's name from the sign-in's ID token, read again at every change of the state.
+  let accountName = Option.getOrUndefined(yield* auth.accountName);
   yield* auth.changes.pipe(
     Stream.runForEach((next) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         account = next;
+        accountName = Option.getOrUndefined(yield* auth.accountName);
         changed();
       }),
     ),
@@ -231,7 +235,7 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       return device
         .startChannel({
           environmentId: origin,
-          environmentLabel: host,
+          environmentLabel: environmentName(origin).name,
           attachUrl: `wss://${host}/.lazurio/computers/attach`,
           handOver: bytes,
         })
@@ -437,6 +441,7 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       return {
         ...helper,
         account: account === "signedIn" ? "signed-in" : "signed-out",
+        ...(account === "signedIn" && accountName !== undefined ? { accountName } : {}),
         switches: environments.origins().map((origin) => ({
           origin,
           host: hostOf(origin),

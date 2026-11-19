@@ -425,3 +425,483 @@ body {
   opacity: 0.6;
   cursor: default;
 }
+
+/* Agent Desktop's panel "This computer" (AgentDesktopView.tsx), after the approved GEN4 prototype:
+   the agent at work, the Environments with their switches, the account at the foot. */
+.ad {
+  --ad-card: #f5f6f8;
+  --ad-on: #1f7a4d;
+  --ad-busy: #b26a00;
+  --ad-stop: #e5484d;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ad {
+    --ad-card: #1a1d24;
+    --ad-on: #3fb07a;
+    --ad-busy: #e0a33a;
+    --ad-stop: #e5484d;
+  }
+}
+
+.ad__body {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: 12px;
+  padding: 20px 20px 12px;
+}
+
+.ad__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ad__head h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+/* "?" and what it says, on request; its title says the same on hover. */
+.ad__help {
+  position: relative;
+}
+
+.ad__help summary {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ad__help summary::-webkit-details-marker,
+.ad__more summary::-webkit-details-marker,
+.ad__technical summary::-webkit-details-marker,
+.ad__fix summary::-webkit-details-marker {
+  display: none;
+}
+
+.ad__help p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ad__head .ad__help[open] {
+  position: static;
+}
+
+.ad__head .ad__help[open] p {
+  position: absolute;
+  z-index: 2;
+  right: 20px;
+  left: 20px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.ad__muted {
+  margin: 0;
+  color: var(--muted);
+}
+
+.ad__notice {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--problem) 12%, var(--surface));
+}
+
+.ad__notice p {
+  margin: 0;
+}
+
+/* The agent at work: a dot, who works and in what, and Stop. */
+.ad__working {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ad-busy) 16%, var(--surface));
+}
+
+.ad__working-text {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ad__working-text small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ad__stop {
+  flex: none;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--ad-stop);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ad__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.ad__dot[data-state="connected"] {
+  background: var(--ad-on);
+}
+
+.ad__dot[data-state="working"],
+.ad__dot[data-state="signing-in"],
+.ad__dot[data-state="connecting"],
+.ad__dot[data-state="reconnecting"],
+.ad__dot[data-state="stopping"] {
+  background: var(--ad-busy);
+}
+
+.ad__dot[data-state="error"],
+.ad__dot[data-state="unknown"] {
+  background: var(--problem);
+}
+
+.ad__envs {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ad__env {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.ad__env:first-child {
+  border-top: 0;
+}
+
+/* Badge, name with its Organization, state and switch on one line; the name gives way. */
+.ad__env-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding-right: 22px;
+}
+
+.ad__badge {
+  display: grid;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.ad__env-name {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.ad__env-name strong,
+.ad__env-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ad__env-name strong {
+  font-weight: 600;
+}
+
+.ad__env-name small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ad__state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 45%;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.ad__switch {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--line);
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+
+.ad__switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 0.16s ease;
+}
+
+.ad__switch[aria-checked="true"] {
+  background: var(--ad-on);
+}
+
+.ad__switch[aria-checked="true"]::after {
+  transform: translateX(14px);
+}
+
+.ad__switch:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ad__switch,
+  .ad__switch::after {
+    transition: none;
+  }
+}
+
+/* What went wrong under the row: one sentence, one action, the rest folded. */
+.ad__problem {
+  display: grid;
+  gap: 6px;
+  padding-left: 30px;
+}
+
+.ad__problem-text {
+  margin: 0;
+  color: var(--problem);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ad__fix summary,
+.ad__technical summary {
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ad__fix summary {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ad__fix ol {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ad__technical p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ad__copyable {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.ad__copyable pre {
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--ad-card);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The row's own menu, at its top right, apart from any problem: the address and Remove. */
+.ad__more {
+  position: absolute;
+  top: 9px;
+  right: -6px;
+}
+
+.ad__more summary {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--muted);
+  list-style: none;
+  cursor: pointer;
+}
+
+.ad__menu {
+  position: absolute;
+  z-index: 2;
+  top: 26px;
+  right: 0;
+  display: grid;
+  gap: 8px;
+  width: 240px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.ad__menu p {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ad__menu code {
+  color: var(--text);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ad__quiet {
+  justify-self: start;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ad__danger {
+  color: var(--problem);
+}
+
+.ad__primary {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ad__empty {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.ad__empty p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.ad__error {
+  margin: 0;
+  color: var(--problem);
+  font-size: 13px;
+}
+
+/* The account at the window's foot. */
+.ad__account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ad__account span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ad button:focus-visible,
+.ad summary:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ad__more summary:hover,
+  .ad__quiet:hover {
+    background: var(--ad-card);
+  }
+}
+
+.ad button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.ad__account .ad__quiet,
+.ad__problem .ad__quiet {
+  flex: none;
+  white-space: nowrap;
+}

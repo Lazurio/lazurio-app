@@ -2,6 +2,7 @@ import { StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AgentBar } from "./AgentBar.tsx";
+import { AgentDesktopFixtures } from "./AgentDesktopFixtures.tsx";
 import { AgentDesktopWindow } from "./AgentDesktopWindow.tsx";
 import { App } from "./App.tsx";
 import { viewOf } from "./view.ts";
@@ -18,6 +19,8 @@ function LocalPage() {
       return <AgentBar />;
     case "agent-desktop":
       return <AgentDesktopWindow />;
+    case "agent-desktop-fixtures":
+      return <AgentDesktopFixtures />;
     case "column":
       return <App status={window.lazurio.status()} />;
   }

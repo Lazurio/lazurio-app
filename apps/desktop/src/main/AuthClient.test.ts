@@ -12,6 +12,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -133,6 +134,8 @@ interface FakeAuth {
     // The state the redirect carries back, when it should differ from the request's.
     returnState: string | undefined;
     idTokenNonce: string | undefined;
+    // The person's names the ID token carries, if any.
+    idTokenNames: { readonly name?: string; readonly preferred_username?: string };
     // The ID token of a sign-in: a valid one, none, an expired one, one issued later than now,
     // or one whose authorized party is another client.
     idToken: "valid" | "missing" | "expired" | "issued-later" | "other-party";
@@ -185,6 +188,7 @@ const fakeAuth = Effect.acquireRelease(
         handOverStatus: 200,
         returnState: undefined,
         idTokenNonce: undefined,
+        idTokenNames: {},
         idToken: "valid",
         denyAuthorization: false,
         now: () => 0,
@@ -202,6 +206,7 @@ const fakeAuth = Effect.acquireRelease(
         ...(kind === "other-party" ? { azp: "another-client" } : {}),
         sub: "person-1",
         nonce: fake.settings.idTokenNonce ?? nonce,
+        ...fake.settings.idTokenNames,
         iat: issuedAt,
         exp: issuedAt + 300,
       });
@@ -794,6 +799,36 @@ describe("AuthClient.signIn", () => {
 });
 
 describe("AuthClient session", () => {
+  it.effect("names the account from the ID token, also after a restart", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        fake.settings.idTokenNames = { name: "Bob Novák", preferred_username: "bob" };
+        const auth = yield* client();
+        assert.isTrue(Option.isNone(yield* auth.accountName));
+        yield* signInThroughBrowser(auth, opened);
+        assert.deepStrictEqual(yield* auth.accountName, Option.some("Bob Novák"));
+        assert.deepStrictEqual(yield* (yield* client()).accountName, Option.some("Bob Novák"));
+        yield* auth.signOut;
+        assert.isTrue(Option.isNone(yield* auth.accountName));
+      }),
+    ),
+  );
+
+  it.effect("takes the preferred user name without a name, and none without either", () =>
+    withHarness(({ fake, opened, client }) =>
+      Effect.gen(function* () {
+        fake.settings.idTokenNames = { preferred_username: "bob" };
+        const auth = yield* client();
+        yield* signInThroughBrowser(auth, opened);
+        assert.deepStrictEqual(yield* auth.accountName, Option.some("bob"));
+        yield* auth.signOut;
+        fake.settings.idTokenNames = {};
+        yield* signInThroughBrowser(auth, opened);
+        assert.isTrue(Option.isNone(yield* auth.accountName));
+      }),
+    ),
+  );
+
   it.effect("revokes the refresh token at a sign-out right after a restart", () =>
     withHarness(({ fake, opened, sessionPath, client }) =>
       Effect.gen(function* () {

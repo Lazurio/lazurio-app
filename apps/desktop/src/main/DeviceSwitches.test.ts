@@ -52,6 +52,10 @@ const fakeAuth = (initial: AuthState) =>
     let issued = 0;
     const shape: AuthClientShape = {
       state: SubscriptionRef.get(state),
+      // The ID token's name, once signed in.
+      accountName: SubscriptionRef.get(state).pipe(
+        Effect.map((now) => (now === "signedIn" ? Option.some("Bob Novák") : Option.none())),
+      ),
       changes: SubscriptionRef.changes(state),
       signIn: Effect.gen(function* () {
         calls.signIn += 1;
@@ -217,7 +221,8 @@ describe("DeviceSwitches", () => {
       assert.deepStrictEqual(auth.handOverOrigins, [ORIGIN]);
       const [start] = startsOf(helper);
       assert.strictEqual(start?.environmentId, ORIGIN);
-      assert.strictEqual(start?.environmentLabel, HOST);
+      // The Environment's name for the bar and the helper's state, not its address.
+      assert.strictEqual(start?.environmentLabel, "Bob");
       assert.strictEqual(start?.attachUrl, `wss://${HOST}/.lazurio/computers/attach`);
       // The Environment lies in the app's tailnet: the channel goes through its proxy.
       assert.strictEqual(start?.proxy?.host, "127.0.0.1");
@@ -402,6 +407,16 @@ describe("DeviceSwitches", () => {
       yield* helper.send(needsHandOver(1000));
       yield* TestClock.adjust(Duration.minutes(1));
       assert.lengthOf(startsOf(helper), 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("names the signed-in account, and no one once signed out", () =>
+    Effect.gen(function* () {
+      const { auth, switches } = yield* setUp({ account: "signedIn" });
+      assert.strictEqual(switches.current().accountName, "Bob Novák");
+      yield* SubscriptionRef.set(auth.state, "signedOut");
+      const status = yield* stateWhere(switches, (current) => current.account === "signed-out");
+      assert.isUndefined(status.accountName);
     }).pipe(Effect.scoped),
   );
 
