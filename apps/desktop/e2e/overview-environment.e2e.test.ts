@@ -242,8 +242,10 @@ describe("Lazurio App GEN4 opening an Environment from the Overview", () => {
         });
       }
     });
-    const cover = app.windows().find((window) => window.url().includes("problem=proxy"));
+    // Its address has #waiting from its first load; Playwright learns the newest a moment later (#74).
+    const cover = app.windows().find((window) => window.url().includes("#waiting"));
     if (cover === undefined) throw new Error("no cover page");
+    await cover.waitForURL(/problem=proxy/u);
     await cover.locator('main[data-problem="proxy"]').waitFor();
 
     await credentialsIn;

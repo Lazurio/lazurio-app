@@ -122,8 +122,11 @@ describe("Lazurio App GEN4 leaving a waiting Environment", () => {
         });
       }
     }, overviewUrl);
-    const cover = app.windows().find((window) => window.url().includes("problem=waiting"));
+    // The app's page in the page's place has #waiting in its address from its first load; Playwright
+    // learns its newest address a moment after the main process (#74).
+    const cover = app.windows().find((window) => window.url().includes("#waiting"));
     if (cover === undefined) throw new Error("no waiting page");
+    await cover.waitForURL(/problem=waiting/u);
     await cover.locator('main[data-problem="waiting"]').waitFor();
 
     // Back to the Overview, which answers later than the next attempt would start.

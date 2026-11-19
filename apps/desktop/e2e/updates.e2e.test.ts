@@ -25,7 +25,9 @@ beforeAll(async () => {
     env: { ...process.env, LAZURIO_APP_E2E: "true", LAZURIO_APP_E2E_USER_DATA: userData },
   });
   shell = await columnPage(app);
-  await shell.locator('main[data-status="live"]').waitFor();
+  // The column's page is ready once live (#71): on a Windows runner its view may not count as
+  // visible yet, and a later step that needs it visible waits for that itself.
+  await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
 });
 
 afterAll(async () => {
