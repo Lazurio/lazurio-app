@@ -223,7 +223,8 @@ describe("Lazurio App GEN4", () => {
         return window?.isVisible() === true && local?.getVisible() === true;
       });
     assert.isTrue(await inView());
-    assert.isTrue(await shell.locator('[data-action="status-hide"]').isDisabled());
+    // The column learns of the lost helper a moment after its state changes: wait for Hide to be off.
+    await shell.locator('[data-action="status-hide"][disabled]').waitFor();
     await shell.evaluate(() => window.lazurio.setStatusPanel(false));
     // Hidden, the window shows again; one that never does fails the test by its timeout.
     const shownAgain = await app.evaluate(async ({ BaseWindow }) => {

@@ -61,6 +61,11 @@ function EnvironmentSwitch({
         <span>{entry.host}</span>
       </label>
       <span className="shell__state">{label.state}</span>
+      {entry.switch.phase === "off" && label.problem === null ? (
+        <p className="shell__reason" data-switch-hint="">
+          {text.switchOffHint}
+        </p>
+      ) : null}
       {label.problem === null ? null : (
         <p className="shell__reason shell__problem" role="alert" data-switch-problem="">
           {label.problem}

@@ -326,6 +326,11 @@ describe("Agent Desktop's switch", () => {
     await inPhase("off", "off");
     assert.strictEqual(await shell.locator("[data-device-add]").count(), 0);
     assert.strictEqual(await environmentRow().locator("[data-switch-problem]").count(), 0);
+    // An Off switch says what turning it on does.
+    assert.match(
+      await environmentRow().locator("[data-switch-hint]").innerText(),
+      /no agent from this Environment|agent z tohoto Prostředí/u,
+    );
   });
 
   it("signs in in the browser when the switch goes on, then starts the channel with a hand-over", async () => {
@@ -438,7 +443,9 @@ describe("Agent Desktop's switch", () => {
     await column.evaluate(() => window.lazurio.setStatusPanel(true));
     await column.evaluate(() => window.lazurio.status());
     assert.isTrue(await columnShown());
-    assert.isTrue(await column.locator('[data-action="status-hide"]').isDisabled());
+    // The column learns that an agent works a moment after its state changes: wait for Hide to be
+    // off rather than read it at once.
+    await column.locator('[data-action="status-hide"][disabled]').waitFor();
     await column.evaluate(() => window.lazurio.setStatusPanel(false));
     assert.isTrue(await columnShown());
     await app.evaluate(({ Menu }) => {
