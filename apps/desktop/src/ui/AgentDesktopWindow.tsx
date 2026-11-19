@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { DeviceStatus } from "../shared/bridge.ts";
 import { AgentDesktopView, type AgentDesktopActions } from "./AgentDesktopView.tsx";
-import { localeOf, messages, type DeviceText } from "./messages.ts";
+import { localeOf, messages, type DeviceText, type Locale } from "./messages.ts";
 
 // The bridge's calls for Agent Desktop's panel: only the app's local windows have them.
 const bridgeActions: AgentDesktopActions = {
@@ -22,10 +22,15 @@ export function AgentDesktopWindow() {
     void window.lazurio.device.getState().then(setStatus);
     return stop;
   }, []);
-  const text = messages[localeOf(navigator.language)].device;
+  const locale = localeOf(navigator.language);
   return (
     <main className="device-window" data-view="agent-desktop">
-      <AgentDesktopView status={status} text={text} actions={bridgeActions} />
+      <AgentDesktopView
+        status={status}
+        text={messages[locale].device}
+        locale={locale}
+        actions={bridgeActions}
+      />
     </main>
   );
 }
@@ -34,9 +39,11 @@ export function AgentDesktopWindow() {
 export function AgentDesktopSection({
   status,
   text,
+  locale,
 }: {
   readonly status: DeviceStatus | null;
   readonly text: DeviceText;
+  readonly locale: Locale;
 }) {
-  return <AgentDesktopView status={status} text={text} actions={bridgeActions} />;
+  return <AgentDesktopView status={status} text={text} locale={locale} actions={bridgeActions} />;
 }

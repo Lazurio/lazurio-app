@@ -174,6 +174,9 @@ export interface DeviceText {
   readonly copied: string;
   // "{code}" stands for the code of a refusal.
   readonly code: string;
+  // Under a switch's problem: the problem is the outcome of the last attempt, from "{time}" (the
+  // time of day, with the date when it was another day).
+  readonly asOf: string;
   // The column's way into the Agent Desktop window, the bar's button, and the label of "?".
   readonly openWindow: string;
   readonly barOpen: string;
@@ -364,6 +367,7 @@ const cs: Text = {
     copy: "Kopírovat",
     copied: "Zkopírováno",
     code: "Kód: {code}",
+    asOf: "Stav z {time}",
     openWindow: "Otevřít Agent Desktop",
     barOpen: "Agent Desktop",
     help: "Nápověda",
@@ -605,6 +609,7 @@ const en: Text = {
     copy: "Copy",
     copied: "Copied",
     code: "Code: {code}",
+    asOf: "As of {time}",
     openWindow: "Open Agent Desktop",
     barOpen: "Agent Desktop",
     help: "Help",

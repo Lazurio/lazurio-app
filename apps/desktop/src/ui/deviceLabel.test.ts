@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 
 import type {
   DeviceChannelState,
@@ -6,7 +7,7 @@ import type {
   DeviceSwitchProblem,
   DeviceSwitchStatus,
 } from "../shared/bridge.ts";
-import { problemCode, problemKey, problemRetries, rowState } from "./deviceLabel.ts";
+import { problemCode, problemKey, problemRetries, problemTime, rowState } from "./deviceLabel.ts";
 import { messages } from "./messages.ts";
 
 const entry = (
@@ -113,5 +114,41 @@ describe("the problems of a switch", () => {
       problemCode({ from: "auth", reason: "unknown-environment" }),
       "unknown-environment",
     );
+  });
+});
+
+describe("problemTime", () => {
+  // Local times, so the test holds in any time zone.
+  const local = (year: number, month: number, day: number, hour: number, minute: number) =>
+    DateTime.toEpochMillis(
+      DateTime.makeZonedUnsafe(
+        { year, month, day, hour, minute },
+        { timeZone: DateTime.zoneMakeLocal(), adjustForTimeZone: true },
+      ),
+    );
+  const now = local(2026, 11, 19, 16, 0);
+
+  it("gives the time of day for today, 24-hour in Czech", () => {
+    assert.strictEqual(problemTime(local(2026, 11, 19, 13, 45), now, "cs"), "13:45");
+    assert.strictEqual(problemTime(local(2026, 11, 19, 9, 5), now, "cs"), "9:05");
+    assert.strictEqual(
+      messages.cs.device.asOf.replace(
+        "{time}",
+        problemTime(local(2026, 11, 19, 13, 45), now, "cs"),
+      ),
+      "Stav z 13:45",
+    );
+  });
+
+  it("adds the date for another day, and the year for another year", () => {
+    assert.strictEqual(problemTime(local(2026, 11, 18, 13, 45), now, "cs"), "18. 11. 13:45");
+    assert.strictEqual(problemTime(local(2025, 12, 31, 23, 59), now, "cs"), "31. 12. 2025 23:59");
+  });
+
+  it("gives English in the system's format, with the minutes and the date when needed", () => {
+    const today = problemTime(local(2026, 11, 19, 13, 45), now, "en");
+    assert.match(today, /45/u);
+    assert.notMatch(today, /11|19/u);
+    assert.match(problemTime(local(2026, 11, 18, 13, 45), now, "en"), /18/u);
   });
 });

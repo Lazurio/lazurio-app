@@ -1,5 +1,7 @@
+import * as DateTime from "effect/DateTime";
+
 import type { DeviceSwitchProblem, DeviceSwitchStatus } from "../shared/bridge.ts";
-import type { DeviceText } from "./messages.ts";
+import type { DeviceText, Locale } from "./messages.ts";
 
 // Agent Desktop's switches in words: one short state per switch, and for a switch that went off by
 // itself one short sentence, the details behind it and whether trying again can help.
@@ -146,3 +148,22 @@ export const problemCode = (problem: DeviceSwitchProblem): string =>
   problem.from === "helper" && problem.httpStatus !== 0
     ? `${problem.reason} ${problem.httpStatus}`
     : problem.reason;
+
+// When a switch's problem happened, for "As of …" under its sentence: the time of day, with the
+// date when it was another day (and the year when another year). Czech in Czech, 24-hour; English
+// in the system's own format. In the computer's time zone.
+export const problemTime = (at: number, now: number, locale: Locale): string => {
+  const zone = DateTime.zoneMakeLocal();
+  const then = DateTime.makeZonedUnsafe(at, { timeZone: zone });
+  const thenParts = DateTime.toParts(then);
+  const nowParts = DateTime.toParts(DateTime.makeZonedUnsafe(now, { timeZone: zone }));
+  const sameYear = thenParts.year === nowParts.year;
+  const sameDay = sameYear && thenParts.month === nowParts.month && thenParts.day === nowParts.day;
+  return DateTime.format(then, {
+    ...(locale === "cs" ? { locale: "cs-CZ", hourCycle: "h23" as const } : {}),
+    hour: "numeric",
+    minute: "2-digit",
+    ...(sameDay ? {} : { day: "numeric", month: "numeric" }),
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+};

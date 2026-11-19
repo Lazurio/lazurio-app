@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { environmentName } from "./environmentName.ts";
+import { environmentName, namedEnvironment } from "./environmentName.ts";
 
 describe("environmentName", () => {
   it("names an Environment by its host, without the Organization's repeated prefix", () => {
@@ -38,5 +38,22 @@ describe("environmentName", () => {
       name: "not an address",
       organization: null,
     });
+  });
+
+  it("prefers the names the Environment's Lazurio gave, each apart, over its address", () => {
+    const origin = "https://launchpad.lazurio-bob.lazurioexampleorganization.lazurio.io";
+    assert.deepStrictEqual(
+      namedEnvironment(origin, { name: "Bob Dvořák", organization: "Ukázková Organizace" }),
+      { name: "Bob Dvořák", organization: "Ukázková Organizace" },
+    );
+    assert.deepStrictEqual(namedEnvironment(origin, { name: "Bob Dvořák" }), {
+      name: "Bob Dvořák",
+      organization: "Lazurioexampleorganization",
+    });
+    assert.deepStrictEqual(namedEnvironment(origin, { organization: "Ukázková Organizace" }), {
+      name: "Bob",
+      organization: "Ukázková Organizace",
+    });
+    assert.deepStrictEqual(namedEnvironment(origin, {}), environmentName(origin));
   });
 });

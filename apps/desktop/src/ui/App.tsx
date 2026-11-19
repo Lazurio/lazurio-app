@@ -79,7 +79,13 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
       </header>
       {/* While an agent works, or may (the helper was lost unconfirmed), the column shows Agent
           Desktop's section with Stop or its warning first, as in the Agent Desktop window. */}
-      {agentWorks ? <AgentDesktopSection status={device} text={text.device} /> : null}
+      {agentWorks ? (
+        <AgentDesktopSection
+          status={device}
+          text={text.device}
+          locale={localeOf(navigator.language)}
+        />
+      ) : null}
       <section aria-label={text.tailnets}>
         <h2>{text.tailnets}</h2>
         {current.networkMissing ? (

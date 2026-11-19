@@ -51,6 +51,7 @@ import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
+import * as ShellNames from "./ShellNames.ts";
 import * as Tailnet from "./Tailnet.ts";
 import * as ReleaseFeed from "./ReleaseFeed.ts";
 import * as SettingWatch from "./SettingWatch.ts";
@@ -577,6 +578,12 @@ const program = Effect.gen(function* () {
           environments: yield* DeviceEnvironments.open(
             path.join(Electron.app.getPath("userData"), "agent-desktop-environments.json"),
           ),
+          // The Environment's names from its Lazurio, read as the main window's page reads them:
+          // with that window's session, so its cookie and its tailnet's proxy, and nothing more.
+          readNames: (origin) =>
+            ShellNames.read(origin, (url, init) =>
+              Electron.session.fromPartition(MainWindow.REMOTE_PARTITION).fetch(url, init),
+            ),
         }),
       )
     : Option.none<DeviceSwitches.DeviceSwitches>();
@@ -815,6 +822,8 @@ const program = Effect.gen(function* () {
         }) as unknown as Array<Electron.MenuItemConstructorOptions>,
       ),
     );
+    // On Windows and Linux that set the menu on the Agent Desktop window too, which has none.
+    if (Option.isSome(devicePanel)) devicePanel.value.removeMenu();
   };
   refreshMenu();
   yield* WindowIpc.serve({

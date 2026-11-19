@@ -26,6 +26,9 @@ export interface DevicePanelOptions {
 export interface DevicePanel {
   // Opens the window, or brings the open one to the front; `anchor` places a new one's corner.
   readonly open: (anchor?: { readonly x: number; readonly y: number }) => void;
+  // Removes the menu again: on Windows and Linux Menu.setApplicationMenu sets the app's menu on
+  // every window, this one too. The app calls it after each.
+  readonly removeMenu: () => void;
 }
 
 // The window lives at most as long as the scope.
@@ -83,6 +86,9 @@ export const make = Effect.fn("DevicePanel.make")(function* (options: DevicePane
     });
     void view.webContents.loadURL(AGENT_DESKTOP_PAGE);
   };
-  const panel: DevicePanel = { open };
+  const removeMenu = () => {
+    if (Option.isSome(current) && !current.value.isDestroyed()) current.value.removeMenu();
+  };
+  const panel: DevicePanel = { open, removeMenu };
   return panel;
 });

@@ -1,4 +1,7 @@
-import type { DeviceStatus, DeviceSwitchStatus } from "../shared/bridge.ts";
+import * as DateTime from "effect/DateTime";
+
+import type { DeviceStatus, DeviceSwitchProblem, DeviceSwitchStatus } from "../shared/bridge.ts";
+import type { EnvironmentNames } from "../shared/environmentName.ts";
 import { AgentDesktopView, type AgentDesktopActions } from "./AgentDesktopView.tsx";
 import { localeOf, messages } from "./messages.ts";
 
@@ -13,6 +16,18 @@ const LONG_B =
   "https://launchpad.nejneobhospodarovavatelnejsimi-zakaznicka-podpora.nejneobhospodarovavatelnejsimi.lazurio.io";
 const LONG_C = "https://launchpad.x.organizace-s-velmi-dlouhym-nazvem-pro-zkousku.lazurio.io";
 
+// The names the Environments' Lazurio gives (shell.json). LONG_C has none: its row shows the
+// name from its address.
+const NAMES: Readonly<Record<string, EnvironmentNames>> = {
+  [BOB]: { name: "Bob", organization: "Ukázková Organizace" },
+  [LONG_A]: {
+    name: "Bartoloměj Nejneobhospodařovávatelnější-Dlouhý, finanční oddělení a čtvrtletní reporting",
+    organization:
+      "Ukázková Organizace pro zkoušku nejdelších názvů, s. r. o., odštěpný závod Morava",
+  },
+  [LONG_B]: { name: "Zákaznická podpora – Žluťoučký kůň úpěl ďábelské ódy" },
+};
+
 const row = (
   origin: string,
   phase: DeviceSwitchStatus["switch"],
@@ -20,8 +35,17 @@ const row = (
 ): DeviceSwitchStatus => ({
   origin,
   host: URL.parse(origin)?.hostname ?? origin,
+  ...NAMES[origin],
   switch: phase,
   channel,
+});
+
+// A switch that went off with a problem, a while ago: the window says from when.
+const MINUTE = 60_000;
+const failed = (problem: DeviceSwitchProblem, minutesAgo = 47): DeviceSwitchStatus["switch"] => ({
+  phase: "off",
+  problem,
+  at: DateTime.toEpochMillis(DateTime.nowUnsafe()) - minutesAgo * MINUTE,
 });
 
 const status = (
@@ -65,22 +89,14 @@ const AGENT_DESKTOP_FIXTURES: Readonly<Record<string, DeviceStatus>> = {
   stopping: named([row(BOB, { phase: "stopping" })]),
   reconnecting: named([row(BOB, { phase: "retrying", cause: "needs-hand-over" })]),
   "error-paired": named([
-    row(BOB, {
-      phase: "off",
-      problem: { from: "helper", reason: "agent_desktop_paired", httpStatus: 0 },
-    }),
+    row(BOB, failed({ from: "helper", reason: "agent_desktop_paired", httpStatus: 0 })),
   ]),
   "error-unknown-environment": named([
-    row(BOB, { phase: "off", problem: { from: "auth", reason: "unknown-environment" } }),
+    row(BOB, failed({ from: "auth", reason: "unknown-environment" })),
   ]),
-  "error-not-yours": named([
-    row(BOB, { phase: "off", problem: { from: "auth", reason: "not-permitted" } }),
-  ]),
+  "error-not-yours": named([row(BOB, failed({ from: "auth", reason: "not-permitted" }))]),
   "error-device-not-approved": named([
-    row(BOB, {
-      phase: "off",
-      problem: { from: "helper", reason: "not_permitted", httpStatus: 403 },
-    }),
+    row(BOB, failed({ from: "helper", reason: "not_permitted", httpStatus: 403 })),
   ]),
   worst: named(
     [
@@ -89,14 +105,12 @@ const AGENT_DESKTOP_FIXTURES: Readonly<Record<string, DeviceStatus>> = {
         { phase: "channel" },
         { state: "working", tool: "type_text", application: "Microsoft Excel" },
       ),
-      row(LONG_B, {
-        phase: "off",
-        problem: { from: "helper", reason: "upgrade_refused", httpStatus: 400 },
-      }),
+      // Yesterday: the time comes with the date.
+      row(LONG_B, failed({ from: "helper", reason: "upgrade_refused", httpStatus: 400 }, 26 * 60)),
       row(LONG_C, OFF),
     ],
     {
-      agent: { environmentId: LONG_A, label: "Financni" },
+      agent: { environmentId: LONG_A, label: NAMES[LONG_A]?.name ?? "" },
       accountName: "Bartoloměj Nejneobhospodařovávatelnější-Dlouhý",
       addable: BOB,
     },
@@ -114,10 +128,15 @@ const inert: AgentDesktopActions = {
 export function AgentDesktopFixtures() {
   const query = new URLSearchParams(location.search);
   const fixture = AGENT_DESKTOP_FIXTURES[query.get("state") ?? ""] ?? null;
-  const text = messages[localeOf(query.get("lang") ?? navigator.language)].device;
+  const locale = localeOf(query.get("lang") ?? navigator.language);
   return (
     <main className="device-window" data-view="agent-desktop-fixtures">
-      <AgentDesktopView status={fixture} text={text} actions={inert} />
+      <AgentDesktopView
+        status={fixture}
+        text={messages[locale].device}
+        locale={locale}
+        actions={inert}
+      />
     </main>
   );
 }

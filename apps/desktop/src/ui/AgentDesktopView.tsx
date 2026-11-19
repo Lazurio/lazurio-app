@@ -1,9 +1,20 @@
-import { useRef, useState } from "react";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Schedule from "effect/Schedule";
+import { useEffect, useRef, useState } from "react";
 
 import type { DeviceStatus, DeviceSwitchStatus } from "../shared/bridge.ts";
-import { environmentName } from "../shared/environmentName.ts";
-import { problemCode, problemKey, problemRetries, rowState, rowStateWord } from "./deviceLabel.ts";
-import type { DeviceText } from "./messages.ts";
+import { environmentName, namedEnvironment } from "../shared/environmentName.ts";
+import {
+  problemCode,
+  problemKey,
+  problemRetries,
+  problemTime,
+  rowState,
+  rowStateWord,
+} from "./deviceLabel.ts";
+import type { DeviceText, Locale } from "./messages.ts";
 
 // Agent Desktop's panel "This computer" (docs/adr/0006, the approved GEN4 prototype): the agent at
 // work with Stop, the Environments with their switches, and the account at the foot. On the
@@ -63,23 +74,51 @@ function Copyable({ text, value }: { readonly text: DeviceText; readonly value: 
   );
 }
 
+// The time now, again every minute: whether a problem's time needs its date changes at midnight.
+const nowMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe());
+function useMinuteClock(): number {
+  const [now, setNow] = useState(nowMillis);
+  useEffect(() => {
+    const ticking = Effect.runFork(
+      Effect.sync(() => setNow(nowMillis())).pipe(Effect.repeat(Schedule.spaced("1 minute"))),
+    );
+    return () => {
+      Effect.runFork(Fiber.interrupt(ticking));
+    };
+  }, []);
+  return now;
+}
+
 function Problem({
   entry,
   text,
+  locale,
+  now,
   onRetry,
 }: {
   readonly entry: DeviceSwitchStatus;
   readonly text: DeviceText;
+  readonly locale: Locale;
+  readonly now: number;
   readonly onRetry: () => void;
 }) {
   if (entry.switch.phase !== "off" || entry.switch.problem === null) return null;
   const problem = entry.switch.problem;
+  const at = entry.switch.at;
   const key = problemKey(problem);
   const code = problemCode(problem);
   const paired = key === "agentDesktopPaired";
   return (
     <div className="ad__problem" role="alert" data-switch-problem={code}>
       <p className="ad__problem-text">{text.problems[key]}</p>
+      {/* The outcome of the last attempt: its cause may be gone since, until the next one. */}
+      {at === undefined ? null : (
+        <p className="ad__problem-when" data-switch-problem-at={at}>
+          <time dateTime={DateTime.formatIso(DateTime.makeUnsafe(at))}>
+            {text.asOf.replace("{time}", problemTime(at, now, locale))}
+          </time>
+        </p>
+      )}
       {paired ? (
         <details className="ad__fix" data-switch-fix="">
           <summary>{text.howToFix}</summary>
@@ -108,16 +147,20 @@ function Problem({
 function EnvironmentRow({
   entry,
   text,
+  locale,
+  now,
   actions,
   onFailure,
 }: {
   readonly entry: DeviceSwitchStatus;
   readonly text: DeviceText;
+  readonly locale: Locale;
+  readonly now: number;
   readonly actions: AgentDesktopActions;
   readonly onFailure: () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const { name, organization } = environmentName(entry.origin);
+  const { name, organization } = namedEnvironment(entry.origin, entry);
   const state = rowState(entry);
   // On in every phase but Off; while it stops, or when nobody knows, it takes no click.
   const on = entry.switch.phase !== "off";
@@ -141,10 +184,13 @@ function EnvironmentRow({
           <strong>{name}</strong>
           {organization === null ? null : <small>{organization}</small>}
         </span>
-        <span className="ad__state" data-row-state={state}>
-          <span className="ad__dot" data-state={state} aria-hidden="true" />
-          {rowStateWord(state, text)}
-        </span>
+        {/* An agent at work says so in the bar above, with Stop; the row repeats nothing. */}
+        {state === "working" ? null : (
+          <span className="ad__state" data-row-state={state}>
+            <span className="ad__dot" data-state={state} aria-hidden="true" />
+            {rowStateWord(state, text)}
+          </span>
+        )}
         <button
           type="button"
           role="switch"
@@ -159,6 +205,8 @@ function EnvironmentRow({
       <Problem
         entry={entry}
         text={text}
+        locale={locale}
+        now={now}
         onRetry={() => act(() => actions.setSwitch(entry.origin, true))}
       />
       <details className="ad__more">
@@ -213,15 +261,18 @@ function Notice({
 export function AgentDesktopView({
   status,
   text,
+  locale,
   actions,
 }: {
   readonly status: DeviceStatus | null;
   readonly text: DeviceText;
+  readonly locale: Locale;
   readonly actions: AgentDesktopActions;
 }) {
   const [stopping, setStopping] = useState(false);
   const [stopFailed, setStopFailed] = useState(false);
   const [actionFailed, setActionFailed] = useState(false);
+  const now = useMinuteClock();
   if (status === null || status.state === "absent") return null;
   const failed = () => setActionFailed(true);
   const run = (call: () => Promise<void>) => {
@@ -242,7 +293,13 @@ export function AgentDesktopView({
       ? undefined
       : status.switches.find((entry) => entry.origin === agent.environmentId);
   const agentChannel = agentEntry?.channel;
-  const agentName = agent === null ? "" : environmentName(agent.environmentId).name;
+  // The Environment's own name where the app read it, else the name from its address.
+  const agentName =
+    agent === null
+      ? ""
+      : agentEntry === undefined
+        ? environmentName(agent.environmentId).name
+        : namedEnvironment(agentEntry.origin, agentEntry).name;
   return (
     <section aria-label={text.title} className="ad" data-device-state={status.state}>
       <div className="ad__body">
@@ -309,6 +366,8 @@ export function AgentDesktopView({
                 key={entry.origin}
                 entry={entry}
                 text={text}
+                locale={locale}
+                now={now}
                 actions={actions}
                 onFailure={failed}
               />

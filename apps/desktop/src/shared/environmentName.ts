@@ -1,7 +1,7 @@
-// An Environment's name for people, from the origin of its Lazurio, which is all the app knows of
-// it: `https://launchpad.<environment>.<organization>.lazurio.io`. The Environment's label loses
-// the Organization's prefix it repeats ("lazurio-bob" of "lazurioexampleorganization" is "Bob"),
-// hyphens become spaces and the first letter is upper case. Anything else keeps its host.
+// An Environment's name for people: its own and its Organization's from its Lazurio (shell.json,
+// main/ShellNames.ts) when read, else from its origin `https://launchpad.<environment>.<org>
+// .lazurio.io`, without the Organization's repeated prefix ("lazurio-bob" of
+// "lazurioexampleorganization" is "Bob"), hyphens as spaces, capitalised. Else its host.
 
 const capitalised = (label: string): string => {
   const words = label.replaceAll("-", " ").trim();
@@ -38,5 +38,20 @@ export const environmentName = (origin: string): EnvironmentName => {
   return {
     name: capitalised(withoutPrefix(environment, organization)),
     organization: capitalised(organization),
+  };
+};
+
+// The names an Environment's Lazurio gave, kept with the Environment; either may be missing.
+export interface EnvironmentNames {
+  readonly name?: string;
+  readonly organization?: string;
+}
+
+// The Environment's own names where it gave them, else each from its address.
+export const namedEnvironment = (origin: string, names: EnvironmentNames): EnvironmentName => {
+  const fallback = environmentName(origin);
+  return {
+    name: names.name ?? fallback.name,
+    organization: names.organization ?? fallback.organization,
   };
 };

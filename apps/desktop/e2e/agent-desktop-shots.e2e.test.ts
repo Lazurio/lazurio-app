@@ -102,10 +102,70 @@ describe("Agent Desktop's panel in its sample states", () => {
     await show("off", "en", "light");
     const row = page.locator("[data-device-switch]");
     assert.strictEqual(await row.locator(".ad__env-name strong").innerText(), "Bob");
+    assert.strictEqual(await row.locator(".ad__env-name small").innerText(), "Ukázková Organizace");
     assert.notInclude(await row.locator(".ad__env-row").innerText(), "launchpad.");
     await row.locator('[data-action="device-more"]').click();
     assert.include(await row.locator(".ad__menu code").innerText(), "launchpad.lazurio-bob");
     assert.strictEqual(await row.locator('[role="switch"]').getAttribute("aria-checked"), "false");
+  });
+
+  it("takes the names its Lazurio gave, else the address's, and leaves the working row unlabelled", async () => {
+    const page = await localPage(app, "view=agent-desktop");
+    await show("worst", "cs", "light");
+    const rows = page.locator("[data-device-switch]");
+    assert.deepStrictEqual(await rows.locator(".ad__env-name strong").allInnerTexts(), [
+      "Bartoloměj Nejneobhospodařovávatelnější-Dlouhý, finanční oddělení a čtvrtletní reporting",
+      "Zákaznická podpora – Žluťoučký kůň úpěl ďábelské ódy",
+      // No names from its Lazurio: the name from its address.
+      "X",
+    ]);
+    assert.deepStrictEqual(await rows.locator(".ad__env-name small").allInnerTexts(), [
+      "Ukázková Organizace pro zkoušku nejdelších názvů, s. r. o., odštěpný závod Morava",
+      "Nejneobhospodarovavatelnejsimi",
+      "Organizace s velmi dlouhym nazvem pro zkousku",
+    ]);
+    // The agent's work is in the head with Stop; the other rows keep their state.
+    assert.strictEqual(await rows.nth(0).locator("[data-row-state]").count(), 0);
+    assert.strictEqual(
+      await rows.nth(1).locator("[data-row-state]").getAttribute("data-row-state"),
+      "error",
+    );
+    assert.strictEqual(
+      await rows.nth(2).locator("[data-row-state]").getAttribute("data-row-state"),
+      "off",
+    );
+    assert.include(
+      await page.locator(".ad__working small").innerText(),
+      "Bartoloměj Nejneobhospodařovávatelnější",
+    );
+    // A problem of another day says its date with the time.
+    assert.match(
+      await rows.nth(1).locator("[data-switch-problem-at]").innerText(),
+      /^Stav z \d{1,2}\. \d{1,2}\.( \d{4})? \d{1,2}:\d{2}$/u,
+    );
+    // Nothing runs out of the window sideways.
+    assert.isTrue(
+      await page.evaluate(
+        () => (document.scrollingElement?.scrollWidth ?? 0) <= document.documentElement.clientWidth,
+      ),
+    );
+  });
+
+  it("says from when a problem is, in each language", async () => {
+    const page = await localPage(app, "view=agent-desktop");
+    await show("error-paired", "cs", "light");
+    assert.match(
+      await page.locator("[data-switch-problem-at]").innerText(),
+      /^Stav z \d{1,2}:\d{2}$/u,
+    );
+    await show("error-paired", "en", "dark");
+    assert.match(
+      await page.locator("[data-switch-problem-at]").innerText(),
+      /^As of \d{1,2}:\d{2}/u,
+    );
+    // Only a problem has a time.
+    await show("off", "en", "light");
+    assert.strictEqual(await page.locator("[data-switch-problem-at]").count(), 0);
   });
 
   // The window has no menu of its own (DevicePanel.removeMenu): Chromium's editing keys still copy.
