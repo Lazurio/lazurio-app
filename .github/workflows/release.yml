@@ -190,6 +190,12 @@ jobs:
               mv "$manifest" "${manifest%.yml}-x64.yml"
             done
           fi
+          # The same installer under a name without its version, for a download address that never
+          # goes stale: releases/latest/download/Lazurio-App-Setup.exe, the latest stable. Updates
+          # read latest.yml, which names the versioned file only.
+          if [[ "${{ matrix.name }}" == "win-x64" ]]; then
+            cp "Lazurio-App-Setup-$VERSION.exe" ../release-files/Lazurio-App-Setup.exe
+          fi
           ls -la ../release-files
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

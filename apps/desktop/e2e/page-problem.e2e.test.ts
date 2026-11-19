@@ -17,9 +17,16 @@ let app: ElectronApplication;
 // What the page's server does: send the first load elsewhere, outside Lazurio; then close the
 // connection without an answer; then answer.
 let serves: "elsewhere" | "nothing" | "page" = "elsewhere";
+// The window's first page, the Overview of this test.
+let firstAddress: string;
 
 beforeAll(async () => {
   server = NodeHttp.createServer((request, response) => {
+    // An Environment that never answers, for Back to the Overview.
+    if (request.url === "/down") {
+      request.socket.destroy();
+      return;
+    }
     if (serves === "elsewhere") {
       response.writeHead(302, { location: "https://example.com/elsewhere" });
       response.end();
@@ -36,6 +43,7 @@ beforeAll(async () => {
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("no server address");
   const remoteUrl = `http://127.0.0.1:${address.port}/`;
+  firstAddress = remoteUrl;
   userData = temporaryUserData();
   app = await _electron.launch({
     args: [NodePath.resolve(import.meta.dirname, "..")],
@@ -169,5 +177,36 @@ describe("Lazurio App GEN4 when the window's page does not show", () => {
     await cover.locator('[data-action="page-retry"]').click();
     const shown = await viewsOnceShowing("page");
     assert.isTrue(shown.remoteVisible);
+  });
+
+  it("leaves a failed Environment for the Overview with Back", async () => {
+    serves = "page";
+    const failed = app.evaluate(({ BaseWindow }, address) => {
+      const remote = BaseWindow.getAllWindows()[0]?.contentView.children[1] as
+        | Electron.WebContentsView
+        | undefined;
+      const result = new Promise<void>((resolve) => {
+        remote?.webContents.once("did-fail-load", () => resolve());
+      });
+      void remote?.webContents.loadURL(`${address}down`).catch(() => undefined);
+      return result;
+    }, firstAddress);
+    await failed;
+    const cover = coverPage();
+    await cover.locator('main[data-problem="failed"]').waitFor();
+    await viewsOnceShowing("cover");
+
+    const shown = app.evaluate(({ BaseWindow }) => {
+      const remote = BaseWindow.getAllWindows()[0]?.contentView.children[1] as
+        | Electron.WebContentsView
+        | undefined;
+      return new Promise<string>((resolve) => {
+        remote?.webContents.once("did-navigate", (_event, url) => setImmediate(() => resolve(url)));
+      });
+    });
+    await cover.locator('[data-action="page-first"]').click();
+    assert.strictEqual(await shown, firstAddress);
+    const after = await viewsOnceShowing("page");
+    assert.isTrue(after.remoteVisible);
   });
 });

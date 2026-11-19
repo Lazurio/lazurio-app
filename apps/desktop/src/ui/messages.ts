@@ -50,6 +50,8 @@ export interface Text {
 interface PageText {
   readonly retry: string;
   readonly retrying: string;
+  // To the window's first page, the Overview (#68).
+  readonly back: string;
   readonly failedTitle: string;
   readonly reasons: Readonly<Record<FailureReason, string>>;
   readonly code: string;
@@ -249,6 +251,7 @@ const cs: Text = {
   page: {
     retry: "Zkusit znovu",
     retrying: "Zkouším znovu…",
+    back: "Zpět na Přehled",
     failedTitle: "Prostředí se nenačetlo",
     reasons: {
       certificate: "Zabezpečené spojení s {host} se nepodařilo ověřit.",
@@ -447,6 +450,7 @@ const en: Text = {
   page: {
     retry: "Try again",
     retrying: "Trying again…",
+    back: "Back to the Overview",
     failedTitle: "The Environment did not load",
     reasons: {
       certificate: "The secure connection to {host} could not be verified.",

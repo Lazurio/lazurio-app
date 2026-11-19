@@ -42,6 +42,7 @@ import * as DeviceService from "./DeviceService.ts";
 import * as DeviceSwitches from "./DeviceSwitches.ts";
 import * as ElectronUpdater from "./ElectronUpdater.ts";
 import * as Hardening from "./Hardening.ts";
+import { withAppToken } from "./UserAgent.ts";
 import * as KeystoreCheck from "./KeystoreCheck.ts";
 import * as Helpers from "./Helpers.ts";
 import * as AppMenu from "./AppMenu.ts";
@@ -448,6 +449,11 @@ const program = Effect.gen(function* () {
   }
   const appPath = Electron.app.getAppPath();
 
+  // Before any session or page exists, so every request carries it (UserAgent.ts).
+  Electron.app.userAgentFallback = withAppToken(
+    Electron.app.userAgentFallback,
+    Electron.app.getVersion(),
+  );
   yield* Hardening.guardAllWebContents(hooks.observer);
   yield* Hardening.hardenSession(Electron.session.defaultSession);
   yield* LocalScheme.serve(path.join(appPath, "dist-ui"));
@@ -770,6 +776,9 @@ const program = Effect.gen(function* () {
     ),
     retryPage: Effect.promise(() =>
       Option.isSome(windowControls) ? windowControls.value.retryPage() : Promise.resolve(),
+    ),
+    firstPage: Effect.promise(() =>
+      Option.isSome(windowControls) ? windowControls.value.firstPage() : Promise.resolve(),
     ),
   });
   // While an agent holds the computer, or the helper was lost and nothing confirmed that its work

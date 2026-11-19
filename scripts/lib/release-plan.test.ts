@@ -88,10 +88,11 @@ describe("planStable", () => {
   ];
   const commitOf = (tag: string) => Effect.succeed(`commit of ${tag}`);
   const runSha = "commit of v0.1.0-nightly.20261116.41";
+  const hasNotes = () => Effect.succeed(true);
 
   it.effect("promotes the latest nightly's commit under its version", () =>
     Effect.gen(function* () {
-      assert.deepStrictEqual(yield* planStable({ releases, commitOf, runSha }), {
+      assert.deepStrictEqual(yield* planStable({ releases, commitOf, runSha, hasNotes }), {
         release: true,
         channel: "stable",
         version: "0.1.0",
@@ -103,18 +104,43 @@ describe("planStable", () => {
   // main ahead of the nightly: a run from main would test and attest another commit.
   it.effect("refuses to run anywhere but on the latest nightly's commit", () =>
     Effect.gen(function* () {
-      const fromMain = planStable({ releases, commitOf, runSha: "commit of main, ahead" });
+      const fromMain = planStable({
+        releases,
+        commitOf,
+        runSha: "commit of main, ahead",
+        hasNotes,
+      });
       assert.isTrue(Exit.isFailure(yield* fromMain.pipe(Effect.exit)));
     }),
   );
 
   it.effect("refuses without a nightly, or when that version is already stable", () =>
     Effect.gen(function* () {
-      const none = yield* planStable({ releases: [], commitOf, runSha }).pipe(Effect.exit);
+      const none = yield* planStable({ releases: [], commitOf, runSha, hasNotes }).pipe(
+        Effect.exit,
+      );
       assert.isTrue(Exit.isFailure(none));
       const done = [...releases, { tag: "v0.1.0", publishedAt: hoursAgo(1) }];
-      const again = yield* planStable({ releases: done, commitOf, runSha }).pipe(Effect.exit);
+      const again = yield* planStable({ releases: done, commitOf, runSha, hasNotes }).pipe(
+        Effect.exit,
+      );
       assert.isTrue(Exit.isFailure(again));
+    }),
+  );
+
+  // A published release is never edited: v0.1.1 went out without its notes.
+  it.effect("refuses a commit without the release's own notes", () =>
+    Effect.gen(function* () {
+      const asked: Array<string> = [];
+      const without = (version: string) => {
+        asked.push(version);
+        return Effect.succeed(false);
+      };
+      const exit = yield* planStable({ releases, commitOf, runSha, hasNotes: without }).pipe(
+        Effect.exit,
+      );
+      assert.isTrue(Exit.isFailure(exit));
+      assert.deepStrictEqual(asked, ["0.1.0"]);
     }),
   );
 });
