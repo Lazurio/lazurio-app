@@ -443,7 +443,8 @@ describe("Agent Desktop's switch", () => {
     await column.evaluate(() => window.lazurio.setStatusPanel(true));
     await column.evaluate(() => window.lazurio.status());
     assert.isTrue(await columnShown());
-    assert.isTrue(await column.locator('[data-action="status-hide"]').isDisabled());
+    // The column's page learns the agent's work by its own message, a moment after the main process.
+    await column.locator('[data-action="status-hide"][disabled]').waitFor({ state: "attached" });
     await column.evaluate(() => window.lazurio.setStatusPanel(false));
     assert.isTrue(await columnShown());
     await app.evaluate(({ Menu }) => {
