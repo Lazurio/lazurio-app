@@ -75,7 +75,7 @@ export const make = Effect.fn("DevicePanel.make")(function* (options: DevicePane
       current = Option.none();
     });
     current = Option.some(window);
-    run(keepPainted(window, () => [{ name: "agent-desktop", view, reloadable: true }]));
+    run(keepPainted(window, () => [{ name: "agent-desktop", view }]));
     view.webContents.once("did-finish-load", () => {
       if (window.isDestroyed()) return;
       window.show();

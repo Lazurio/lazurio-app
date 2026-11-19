@@ -3,37 +3,29 @@ import * as Effect from "effect/Effect";
 
 import * as Electron from "electron";
 
-// A window that shows while its pages count themselves hidden stays blank: after a start with the
-// display off and after the display woke (#36, 2026-11-19). Only on Windows, and only for the
-// window in front (shown, unminimized, focused), checked again after every wait: a covered
-// window's page is rightly hidden and keeps its state, and a Mac's windows are left as they are.
+// A shown window whose pages say hidden stays blank (#36: the display was off). On Windows, for the
+// window in front only, its views are attached again, which keeps their state; nothing loads
+// again, since even a focused window may be covered by one on top (review of #77). A person
+// reloads with View > Reload page.
 
 export interface WatchedView {
   // For the log only: column, page, waiting, bar, agent-desktop.
   readonly name: string;
   readonly view: Electron.WebContentsView;
-  // Only the app's own pages load again; a page of the web Lazurio may hold unsaved work.
-  readonly reloadable: boolean;
 }
 
 // What the check needs from Electron, so that its decisions are unit-tested (Repaint.test.ts).
 export interface RepaintPort<View> {
-  // Whether the window is in front: shown, not minimized and focused. Only then is a hidden page
-  // wrong; a covered window's pages are rightly hidden and keep their state (review of #77).
+  // Whether the window is in front: shown, not minimized and focused.
   readonly windowInFront: () => boolean;
   // The views the window means to show now, read again after every wait.
-  readonly views: () => ReadonlyArray<{
-    readonly name: string;
-    readonly view: View;
-    readonly reloadable: boolean;
-  }>;
+  readonly views: () => ReadonlyArray<{ readonly name: string; readonly view: View }>;
   readonly usable: (view: View) => boolean;
   readonly visibilityOf: (view: View) => Promise<string>;
   readonly reattach: (view: View) => void;
-  readonly reload: (view: View) => void;
-  // A view loads again at most once until it is seen visible: where a shown window's pages stay
-  // hidden for good (a computer without a display), the app's pages must not reload every check.
-  readonly reloaded: Set<View>;
+  // A view is attached again at most once until it is seen visible: a window whose pages stay
+  // hidden for good (covered, or a computer without a display) is not touched every check.
+  readonly attached: Set<View>;
   readonly log: (fields: Readonly<Record<string, string>>) => void;
 }
 
@@ -44,24 +36,15 @@ const stillShown = <View>(port: RepaintPort<View>, name: string, view: View): bo
   port.views().some((entry) => entry.name === name && entry.view === view);
 
 export const checkViews = async <View>(port: RepaintPort<View>, reason: string): Promise<void> => {
-  for (const { name, view, reloadable } of port.views()) {
+  for (const { name, view } of port.views()) {
     if (!stillShown(port, name, view)) continue;
     const before = await port.visibilityOf(view);
-    if (before === "visible") port.reloaded.delete(view);
-    if (before !== "hidden" || !stillShown(port, name, view)) continue;
+    if (before === "visible") port.attached.delete(view);
+    if (before !== "hidden" || port.attached.has(view) || !stillShown(port, name, view)) continue;
+    port.attached.add(view);
     port.reattach(view);
-    let after = await port.visibilityOf(view);
-    if (after === "visible") port.reloaded.delete(view);
-    if (
-      after === "hidden" &&
-      reloadable &&
-      !port.reloaded.has(view) &&
-      stillShown(port, name, view)
-    ) {
-      port.reloaded.add(view);
-      port.reload(view);
-      after = "reloaded";
-    }
+    const after = await port.visibilityOf(view);
+    if (after === "visible") port.attached.delete(view);
     port.log({ view: name, reason, before, after });
   }
 };
@@ -110,8 +93,7 @@ export const keepPainted = Effect.fn("Repaint.keepPainted")(function* (
       view.setVisible(true);
       view.webContents.invalidate();
     },
-    reload: (view) => view.webContents.reload(),
-    reloaded: new Set(),
+    attached: new Set(),
     log: (fields) => run(Effect.logWarning("view shown again", fields)),
   };
   let checking = false;

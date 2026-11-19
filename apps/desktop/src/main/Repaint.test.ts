@@ -5,24 +5,18 @@ import { checkViews, type RepaintPort } from "./Repaint.ts";
 // A window with views by name, whose answers to visibility a test scripts, and which may change
 // while an answer is awaited.
 const fakeWindow = (options: {
-  readonly views: ReadonlyArray<{ readonly name: string; readonly reloadable: boolean }>;
+  readonly views: ReadonlyArray<string>;
   // The answers, in order, and what happens while each one is awaited.
   readonly answers: ReadonlyArray<{ readonly visibility: string; readonly meanwhile?: () => void }>;
 }) => {
-  const state = {
-    showing: true,
-    focused: true,
-    shown: new Set(options.views.map((view) => view.name)),
-  };
+  const state = { showing: true, focused: true, shown: new Set(options.views) };
   const done: Array<string> = [];
   const logged: Array<Readonly<Record<string, string>>> = [];
   const answers = [...options.answers];
   const port: RepaintPort<string> = {
     windowInFront: () => state.showing && state.focused,
     views: () =>
-      options.views
-        .filter((view) => state.shown.has(view.name))
-        .map((view) => ({ name: view.name, view: view.name, reloadable: view.reloadable })),
+      options.views.filter((name) => state.shown.has(name)).map((name) => ({ name, view: name })),
     usable: () => true,
     visibilityOf: async () => {
       const answer = answers.shift();
@@ -31,8 +25,7 @@ const fakeWindow = (options: {
       return answer.visibility;
     },
     reattach: (view) => done.push(`reattach ${view}`),
-    reloaded: new Set(),
-    reload: (view) => done.push(`reload ${view}`),
+    attached: new Set(),
     log: (fields) => logged.push(fields),
   };
   return { state, done, logged, port };
@@ -40,18 +33,15 @@ const fakeWindow = (options: {
 
 describe("Repaint.checkViews", () => {
   it("leaves a visible view as it is", async () => {
-    const window = fakeWindow({
-      views: [{ name: "page", reloadable: false }],
-      answers: [{ visibility: "visible" }],
-    });
+    const window = fakeWindow({ views: ["page"], answers: [{ visibility: "visible" }] });
     await checkViews(window.port, "show");
     assert.deepStrictEqual(window.done, []);
     assert.deepStrictEqual(window.logged, []);
   });
 
-  it("attaches a hidden view again, and stops once it is visible", async () => {
+  it("attaches a hidden view again, and logs that it became visible", async () => {
     const window = fakeWindow({
-      views: [{ name: "page", reloadable: false }],
+      views: ["page"],
       answers: [{ visibility: "hidden" }, { visibility: "visible" }],
     });
     await checkViews(window.port, "show");
@@ -61,12 +51,11 @@ describe("Repaint.checkViews", () => {
     ]);
   });
 
-  it("loads only the app's own page again, never a page of the web Lazurio", async () => {
+  // A focused window that a window on top covers: its pages are rightly hidden. The check never
+  // loads anything again, and touches such a view only once until it is seen visible.
+  it("only attaches a focused but covered window's view again, once, and never loads it again", async () => {
     const window = fakeWindow({
-      views: [
-        { name: "column", reloadable: true },
-        { name: "page", reloadable: false },
-      ],
+      views: ["column"],
       answers: [
         { visibility: "hidden" },
         { visibility: "hidden" },
@@ -74,17 +63,46 @@ describe("Repaint.checkViews", () => {
         { visibility: "hidden" },
       ],
     });
+    await checkViews(window.port, "resume");
     await checkViews(window.port, "active");
-    assert.deepStrictEqual(window.done, ["reattach column", "reload column", "reattach page"]);
-    assert.deepStrictEqual(
-      window.logged.map((fields) => fields["after"]),
-      ["reloaded", "hidden"],
-    );
+    await checkViews(window.port, "unlock-screen");
+    assert.deepStrictEqual(window.done, ["reattach column"]);
+    assert.deepStrictEqual(window.logged, [
+      { view: "column", reason: "resume", before: "hidden", after: "hidden" },
+    ]);
+  });
+
+  it("attaches again after the view was seen visible in between", async () => {
+    const window = fakeWindow({
+      views: ["column"],
+      answers: [
+        { visibility: "hidden" },
+        { visibility: "hidden" },
+        { visibility: "visible" },
+        { visibility: "hidden" },
+        { visibility: "visible" },
+      ],
+    });
+    await checkViews(window.port, "resume");
+    await checkViews(window.port, "show");
+    await checkViews(window.port, "active");
+    assert.deepStrictEqual(window.done, ["reattach column", "reattach column"]);
+  });
+
+  it("leaves a window that is not in front alone on resume or unlock", async () => {
+    const window = fakeWindow({
+      views: ["agent-desktop"],
+      answers: [{ visibility: "hidden" }, { visibility: "hidden" }],
+    });
+    window.state.focused = false;
+    await checkViews(window.port, "resume");
+    await checkViews(window.port, "unlock-screen");
+    assert.deepStrictEqual(window.done, []);
   });
 
   it("changes nothing when the window hides while the visibility is awaited", async () => {
     const window = fakeWindow({
-      views: [{ name: "column", reloadable: true }],
+      views: ["column"],
       answers: [
         {
           visibility: "hidden",
@@ -101,7 +119,7 @@ describe("Repaint.checkViews", () => {
   // watchPage hid the page and showed the reason in its place meanwhile.
   it("changes nothing when the view stops being shown while the visibility is awaited", async () => {
     const window = fakeWindow({
-      views: [{ name: "page", reloadable: false }],
+      views: ["page"],
       answers: [
         {
           visibility: "hidden",
@@ -113,78 +131,5 @@ describe("Repaint.checkViews", () => {
     });
     await checkViews(window.port, "focus");
     assert.deepStrictEqual(window.done, []);
-  });
-
-  it("does not load again when the window hides after the view was attached again", async () => {
-    const window = fakeWindow({
-      views: [{ name: "column", reloadable: true }],
-      answers: [
-        { visibility: "hidden" },
-        {
-          visibility: "hidden",
-          meanwhile: () => {
-            window.state.showing = false;
-          },
-        },
-      ],
-    });
-    await checkViews(window.port, "show");
-    assert.deepStrictEqual(window.done, ["reattach column"]);
-  });
-
-  // A computer without a display, where a shown window's pages stay hidden: no reload every check.
-  it("loads the app's own page again only once until it is seen visible", async () => {
-    const window = fakeWindow({
-      views: [{ name: "column", reloadable: true }],
-      answers: [
-        { visibility: "hidden" },
-        { visibility: "hidden" },
-        { visibility: "hidden" },
-        { visibility: "hidden" },
-        { visibility: "visible" },
-        { visibility: "hidden" },
-        { visibility: "hidden" },
-      ],
-    });
-    await checkViews(window.port, "active");
-    await checkViews(window.port, "active");
-    await checkViews(window.port, "show");
-    await checkViews(window.port, "active");
-    assert.deepStrictEqual(window.done, [
-      "reattach column",
-      "reload column",
-      "reattach column",
-      "reattach column",
-      "reload column",
-    ]);
-  });
-
-  // A covered window has rightly hidden pages: resume and unlock leave it and its state alone.
-  it("leaves a window that is not in front alone on resume or unlock", async () => {
-    const window = fakeWindow({
-      views: [{ name: "agent-desktop", reloadable: true }],
-      answers: [{ visibility: "hidden" }, { visibility: "hidden" }],
-    });
-    window.state.focused = false;
-    await checkViews(window.port, "resume");
-    await checkViews(window.port, "unlock-screen");
-    assert.deepStrictEqual(window.done, []);
-  });
-
-  it("stops when the window loses the front while an answer is awaited", async () => {
-    const window = fakeWindow({
-      views: [{ name: "column", reloadable: true }],
-      answers: [
-        { visibility: "hidden" },
-        {
-          visibility: "hidden",
-          meanwhile: () => {
-            window.state.focused = false;
-          },
-        },
-      ],
-    });
-    await checkViews(window.port, "resume");
-    assert.deepStrictEqual(window.done, ["reattach column"]);
   });
 });

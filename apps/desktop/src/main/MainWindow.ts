@@ -406,12 +406,10 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   // Only the views the window shows now: a hidden page view stays hidden, its cover shows.
   yield* keepPainted(window, () =>
     [
-      { name: "column", view: local, reloadable: true },
-      ...(remote === undefined ? [] : [{ name: "page", view: remote, reloadable: false }]),
-      ...(waiting === undefined ? [] : [{ name: "waiting", view: waiting, reloadable: true }]),
-      ...(options.topBar === undefined
-        ? []
-        : [{ name: "bar", view: options.topBar.view, reloadable: true }]),
+      { name: "column", view: local },
+      ...(remote === undefined ? [] : [{ name: "page", view: remote }]),
+      ...(waiting === undefined ? [] : [{ name: "waiting", view: waiting }]),
+      ...(options.topBar === undefined ? [] : [{ name: "bar", view: options.topBar.view }]),
     ].filter((entry) => entry.view.getVisible()),
   );
   // A BaseWindow does not close its views' pages; they close here or with the scope.
