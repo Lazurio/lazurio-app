@@ -17,6 +17,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
+import { columnPage } from "./local-page.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const ENVIRONMENT = "https://launchpad.e2e.lazurio.io/";
@@ -209,8 +210,7 @@ describe("Lazurio App GEN4 opening an Environment from the Overview", () => {
       };
     });
     assert.deepStrictEqual(after, { remoteVisible: true, coverVisible: false, url: ENVIRONMENT });
-    const shell = app.windows().find((window) => !window.url().includes("#waiting"));
-    if (shell === undefined) throw new Error("no local page");
+    const shell = await columnPage(app);
     assert.deepStrictEqual((await shell.evaluate(() => window.lazurio.status())).page, {
       outcome: "refused",
       inBrowser: true,
