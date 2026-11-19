@@ -6,7 +6,6 @@ import * as Electron from "electron";
 import { registerView } from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
 import { localViewOptions } from "./MainWindow.ts";
-import { keepPainted } from "./Repaint.ts";
 
 // The Agent Desktop window (docs/adr/0006, point 5): a small native window of the app's own page
 // `?view=agent-desktop`, with the Environments, their switches, the account and Stop. One at a time;
@@ -38,7 +37,6 @@ export const make = Effect.fn("DevicePanel.make")(function* (options: DevicePane
   };
   yield* Effect.addFinalizer(() => Effect.sync(close));
 
-  const run = Effect.runForkWith(yield* Effect.context<never>());
   const open: DevicePanel["open"] = (anchor) => {
     if (Option.isSome(current) && !current.value.isDestroyed()) {
       const window = current.value;
@@ -75,7 +73,6 @@ export const make = Effect.fn("DevicePanel.make")(function* (options: DevicePane
       current = Option.none();
     });
     current = Option.some(window);
-    run(keepPainted(window, () => [{ name: "agent-desktop", view }]));
     view.webContents.once("did-finish-load", () => {
       if (window.isDestroyed()) return;
       window.show();
