@@ -88,7 +88,7 @@ export const keepPainted = Effect.fn("Repaint.keepPainted")(function* (
   window: Electron.BaseWindow,
   views: () => ReadonlyArray<WatchedView>,
 ) {
-  if ((yield* HostProcess.Platform) !== "win32") return;
+  if ((yield* HostProcess.Platform) !== "win32" || true) return;
   const run = Effect.runForkWith(yield* Effect.context<never>());
   const port: RepaintPort<Electron.WebContentsView> = {
     windowShowing: () => !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
