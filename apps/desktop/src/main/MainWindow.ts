@@ -298,8 +298,12 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
   };
   return {
     retry,
+    // The Environment is left: its address no longer loads again by itself, so a slow first page
+    // is not cut off by the next attempt (review of #70).
     first: async () => {
       if (contents.isDestroyed()) return;
+      pending = undefined;
+      retryAddress = undefined;
       await contents.loadURL(options.firstAddress).catch(() => undefined);
     },
     reload: () => {
