@@ -37,7 +37,9 @@ let control: NodeHttp.Server;
 let userData: string;
 let app: ElectronApplication;
 let overviewUrl: string;
-let launch: () => Promise<ElectronApplication>;
+let launch: (challengeDelayMs?: number) => Promise<ElectronApplication>;
+// Called once the fake proxy got a plain request with its credentials.
+let answered: (() => void) | undefined;
 
 const listen = async (server: NodeHttp.Server | NodeHttps.Server): Promise<number> => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -75,11 +77,14 @@ beforeAll(async () => {
   });
   overviewUrl = `http://127.0.0.1:${await listen(overview)}/`;
   // The node runs at once.
-  control = NodeHttp.createServer((_request, response) => response.end());
+  control = NodeHttp.createServer((request, response) => {
+    if (request.url === "/answered") answered?.();
+    response.end();
+  });
   const controlPort = await listen(control);
 
   userData = temporaryUserData();
-  launch = () =>
+  launch = (challengeDelayMs = 3000) =>
     _electron.launch({
       args: [NodePath.resolve(import.meta.dirname, ".."), "--ignore-certificate-errors"],
       chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
@@ -96,7 +101,8 @@ beforeAll(async () => {
         LAZURIO_FAKE_RUNNING_URL: `http://127.0.0.1:${controlPort}/running`,
         LAZURIO_FAKE_UPSTREAM: `127.0.0.1:${environmentPort}`,
         // Later than the window's first page: the app must not navigate before it has the answer.
-        LAZURIO_FAKE_SLOW_PLAIN_CHALLENGE_MS: "3000",
+        LAZURIO_FAKE_SLOW_PLAIN_CHALLENGE_MS: String(challengeDelayMs),
+        LAZURIO_FAKE_ANSWERED_URL: `http://127.0.0.1:${controlPort}/answered`,
         LAZURIO_APP_DEV_TAILNETS: JSON.stringify([
           {
             tailnet: "e2e",
@@ -209,5 +215,39 @@ describe("Lazurio App GEN4 opening an Environment from the Overview", () => {
       outcome: "refused",
       inBrowser: true,
     });
+  });
+
+  // Later than the start waits for it (Tailnet.ts, PRIME_WITHIN): the window opens first.
+  it("says why when the proxy answered too late, and Try again shows the Environment once it has", async () => {
+    await app.close();
+    const credentialsIn = new Promise<void>((resolve) => {
+      answered = resolve;
+    });
+    app = await launch(7000);
+    await app.firstWindow();
+    assert.deepStrictEqual(await openEnvironmentFromOverview(overviewUrl), {
+      url: ENVIRONMENT,
+      code: 407,
+      text: "",
+    });
+    const cover = app.windows().find((window) => window.url().includes("problem=proxy"));
+    if (cover === undefined) throw new Error("no cover page");
+    await cover.locator('main[data-problem="proxy"]').waitFor();
+
+    await credentialsIn;
+    const shown = app.evaluate(async ({ BaseWindow }) => {
+      const views = BaseWindow.getAllWindows()[0]?.contentView.children ?? [];
+      const remote = views[1] as Electron.WebContentsView | undefined;
+      const coverView = views[2] as Electron.WebContentsView | undefined;
+      if (remote === undefined || coverView === undefined) throw new Error("no views");
+      const code = await new Promise<number>((resolve) => {
+        remote.webContents.once("did-navigate", (_event, _url, responseCode) =>
+          setImmediate(() => resolve(responseCode)),
+        );
+      });
+      return { code, remoteVisible: remote.getVisible(), coverVisible: coverView.getVisible() };
+    });
+    await cover.locator('[data-action="page-retry"]').click();
+    assert.deepStrictEqual(await shown, { code: 200, remoteVisible: true, coverVisible: false });
   });
 });
