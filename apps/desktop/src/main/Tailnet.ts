@@ -161,6 +161,9 @@ export const isSafeLoginUrl = (loginUrl: string, controlUrl: string): boolean =>
   }
 };
 
+const isHelperProxy = (authInfo: Electron.AuthInfo, proxy: ProxyEndpoint): boolean =>
+  authInfo.isProxy && authInfo.host === proxy.host && authInfo.port === proxy.port;
+
 // Answers the proxy's challenge with its credentials, and no other proxy's, for the scope's life.
 const answerProxyChallenge = (proxy: ProxyEndpoint) =>
   Effect.acquireRelease(
@@ -172,9 +175,7 @@ const answerProxyChallenge = (proxy: ProxyEndpoint) =>
         authInfo: Electron.AuthInfo,
         callback: (username?: string, password?: string) => void,
       ) => {
-        if (!authInfo.isProxy || authInfo.host !== proxy.host || authInfo.port !== proxy.port) {
-          return;
-        }
+        if (!isHelperProxy(authInfo, proxy)) return;
         event.preventDefault();
         callback(proxy.username, proxy.password);
       };
@@ -182,6 +183,45 @@ const answerProxyChallenge = (proxy: ProxyEndpoint) =>
       return listener;
     }),
     (listener) => Effect.sync(() => Electron.app.off("login", listener)),
+  );
+
+// A service worker's navigation preload cannot answer the proxy's challenge, and the window then
+// shows the proxy's empty 407 (Lazurio/lazurio-app#36). One answered request of the app's own puts
+// the credentials in the session, which sends them at once from then on; plain HTTP ends at the
+// proxy (it tunnels only CONNECT), so nothing reaches a tailnet.
+const primeProxyCredentials = (session: Electron.Session, proxy: ProxyEndpoint, domain: string) =>
+  Effect.callback<boolean>((resume) => {
+    let answered = false;
+    const request = Electron.net.request({
+      url: `http://${domain}/`,
+      session,
+      redirect: "manual",
+      useSessionCookies: false,
+    });
+    request.on("login", (authInfo, callback) => {
+      if (!isHelperProxy(authInfo, proxy)) return callback();
+      answered = true;
+      callback(proxy.username, proxy.password);
+    });
+    request.on("response", (response) => {
+      response.on("data", () => {});
+      response.on("end", () => resume(Effect.succeed(answered)));
+      response.on("error", () => resume(Effect.succeed(answered)));
+    });
+    request.on("redirect", () => {
+      request.abort();
+      resume(Effect.succeed(answered));
+    });
+    request.on("error", () => resume(Effect.succeed(answered)));
+    request.end();
+    return Effect.sync(() => request.abort());
+  }).pipe(
+    Effect.timeoutOption("10 seconds"),
+    Effect.flatMap((answered) =>
+      Effect.logInfo("tailnet proxy credentials", {
+        answered: Option.getOrElse(answered, () => false),
+      }),
+    ),
   );
 
 export interface TailnetOptions {
@@ -242,6 +282,12 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
       options.session.resolveProxy(`https://${normalizeDomain(domain)}/`),
     );
     yield* Effect.logInfo("tailnet proxy", { domain, chosen });
+  }
+  const firstDomain = domains.map(normalizeDomain).find((domain) => domain !== "");
+  // Beside the start: the challenge comes at once, and the session keeps the credentials from the
+  // answer on, even while a tunnel the request may end in still waits for its node.
+  if (firstDomain !== undefined) {
+    yield* Effect.forkScoped(primeProxyCredentials(options.session, proxy, firstDomain));
   }
 
   let board = startingBoard(options.tailnets.map((tailnet) => tailnet.tailnet));

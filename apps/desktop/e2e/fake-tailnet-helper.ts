@@ -24,7 +24,13 @@ const CREDENTIALS = `Basic ${btoa("e2e:e2e")}`;
 // The proxy asks for its credentials as the real one does, then tunnels to the upstream.
 const startProxy = async (target: string): Promise<number> => {
   const [host = "", port = ""] = target.split(":");
-  const proxy = NodeHttp.createServer((_request, response) => {
+  // As the real proxy: the challenge first, for every request, and only CONNECT after it.
+  const proxy = NodeHttp.createServer((request, response) => {
+    if (request.headers["proxy-authorization"] !== CREDENTIALS) {
+      response.writeHead(407, { "proxy-authenticate": 'Basic realm="Lazurio App"' });
+      response.end();
+      return;
+    }
     response.writeHead(405);
     response.end();
   });
