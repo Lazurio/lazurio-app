@@ -5,8 +5,9 @@ import * as Schema from "effect/Schema";
 import * as Electron from "electron";
 
 import { APP_NAME } from "../shared/appName.ts";
-import { STATUS_CHANNEL, type AppStatus } from "../shared/bridge.ts";
-import { hardenSession, registerView } from "./Hardening.ts";
+import { STATUS_CHANNEL, type AppStatus, type PageOutcome } from "../shared/bridge.ts";
+import { problemQuery, type PageProblem } from "../shared/pageProblem.ts";
+import { hardenSession, hostOf, onMainFrameRefused, registerView } from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
 import { destinationOf } from "./Navigation.ts";
 
@@ -30,6 +31,8 @@ export interface MainWindowOptions {
   // Learns each page the remote view's main frame shows (Agent Desktop offers to add its
   // Environment).
   readonly pageShown: (url: string) => void;
+  // How each navigation of the page ended, for Copy status.
+  readonly pageOutcome: (outcome: PageOutcome) => void;
   // Whether a tailnet serves the address (Tailnet.Tailnets.proxyFor): only such a page waits for
   // its Environment to become reachable, for example for the Organization to approve the Device.
   readonly servedByTailnet: (address: string) => boolean;
@@ -55,6 +58,9 @@ export interface MainWindowControls {
   // Lays the views out again, after the status column or the top bar showed or hid.
   readonly relayout: () => void;
   readonly reloadPage: () => void;
+  // Loads the page again from the app's page that says why it did not show; settles once the
+  // attempt has shown or failed.
+  readonly retryPage: () => Promise<void>;
 }
 
 // The first remote page loads again after these failures, which a network that changed or a
@@ -163,27 +169,106 @@ const UNREACHABLE: ReadonlySet<number> = new Set([-21, -102, -105, -109, -111, -
 // How often a waiting page tries its address again.
 const RETRY_EVERY = "5 seconds";
 
-// While a tailnet's page cannot be reached, the waiting view takes the remote view's place instead
-// of a blank page and the address loads again every few seconds, until it shows (plan task 648).
-const waitForReachable = Effect.fn("MainWindow.waitForReachable")(function* (
-  remote: Electron.WebContentsView,
-  waiting: Electron.WebContentsView,
-  servedByTailnet: (address: string) => boolean,
-) {
+interface PageWatch {
+  readonly retry: () => Promise<void>;
+  readonly reload: () => void;
+}
+
+// The page never stays blank (#36): an unreachable tailnet's page waits and loads again every few
+// seconds (task 648); any other failed load, refused redirect, proxy 407 or gone renderer shows
+// the reason and Retry. Each outcome is logged (host and code) and kept for Copy status (code).
+const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
+  readonly remote: Electron.WebContentsView;
+  readonly cover: Electron.WebContentsView;
+  readonly firstAddress: string;
+  readonly servedByTailnet: (address: string) => boolean;
+  readonly outcome: (outcome: PageOutcome) => void;
+}) {
+  const { remote, cover } = options;
+  const contents = remote.webContents;
+  const log = Effect.runForkWith(yield* Effect.context<never>());
+  // A tailnet's address that waits to become reachable.
   let pending: string | undefined;
-  const showWaiting = (shown: boolean) => {
-    waiting.setVisible(shown);
-    remote.setVisible(!shown);
+  // The address Retry loads, while the app's page shows instead of the page.
+  let retryAddress: string | undefined;
+  // The address of the app's page in the page's place, while it shows or loads.
+  let covered: string | undefined;
+  let lastShown: string | undefined;
+
+  const uncover = () => {
+    covered = undefined;
+    cover.setVisible(false);
+    remote.setVisible(true);
   };
-  remote.webContents.on("did-fail-load", (_event, code, _description, address, isMainFrame) => {
-    if (!isMainFrame || !UNREACHABLE.has(code) || !servedByTailnet(address)) return;
-    pending = address;
-    showWaiting(true);
-  });
-  remote.webContents.on("did-navigate", (_event, _address, responseCode) => {
-    if (pending === undefined || responseCode <= 0) return;
+  // It shows once its page has loaded, so a previous reason never flashes, unless the page
+  // showed meanwhile.
+  const showCover = (address: string) => {
+    covered = address;
+    const show = () => {
+      if (covered !== address) return;
+      cover.setVisible(true);
+      remote.setVisible(false);
+    };
+    if (cover.webContents.getURL() === address) show();
+    else void cover.webContents.loadURL(address).then(show, show);
+  };
+  const showProblem = (problem: PageProblem, outcome: PageOutcome, retry: string) => {
     pending = undefined;
-    showWaiting(false);
+    retryAddress = retry;
+    showCover(`${LOCAL_ENTRY}${problemQuery(problem)}#waiting`);
+    options.outcome(outcome);
+  };
+  // A refused navigation ends without any failure, and a page that shows stays as it is; only a
+  // view that has shown nothing yet would stay blank.
+  onMainFrameRefused(contents, (refused) => {
+    const inBrowser = destinationOf(refused.address)._tag === "SystemBrowser";
+    if (lastShown !== undefined) return options.outcome({ outcome: "refused", inBrowser });
+    showProblem(
+      { kind: inBrowser ? "browser" : "refused", host: hostOf(refused.address) },
+      { outcome: "refused", inBrowser },
+      options.firstAddress,
+    );
+  });
+  contents.on("did-navigate", (_event, address, responseCode) => {
+    const host = hostOf(address);
+    // The tailnet helper's proxy answered instead of the page: never an Environment's own page.
+    if (responseCode === 407) {
+      log(Effect.logWarning("page refused by the proxy", { host }));
+      showProblem({ kind: "proxy", host }, { outcome: "proxy-refused" }, address);
+      return;
+    }
+    if (responseCode <= 0) return;
+    lastShown = address;
+    pending = undefined;
+    retryAddress = undefined;
+    log(Effect.logInfo("page shown", { host, responseCode }));
+    options.outcome({ outcome: "shown", responseCode });
+    if (covered !== undefined) uncover();
+  });
+  contents.on("did-fail-load", (_event, code, description, address, isMainFrame) => {
+    if (!isMainFrame) return;
+    // An abort follows a newer navigation, a page's stop or a download, or the proxy's 407 above.
+    if (code === -3) return;
+    const host = hostOf(address);
+    if (UNREACHABLE.has(code) && options.servedByTailnet(address)) {
+      log(Effect.logWarning("page waits for its tailnet", { host, code }));
+      pending = address;
+      retryAddress = address;
+      showCover(`${LOCAL_ENTRY}${problemQuery({ kind: "waiting", code, host })}#waiting`);
+      options.outcome({ outcome: "waiting", code });
+      return;
+    }
+    log(Effect.logWarning("page failed", { host, code, description }));
+    showProblem({ kind: "failed", code, host }, { outcome: "failed", code }, address);
+  });
+  contents.on("render-process-gone", (_event, details) => {
+    if (details.reason === "clean-exit") return;
+    log(Effect.logError("page renderer gone", { reason: details.reason }));
+    showProblem(
+      { kind: "crashed" },
+      { outcome: "crashed", reason: details.reason },
+      lastShown ?? options.firstAddress,
+    );
   });
   // One attempt at a time: the next waits until the previous load has finished or failed, so a
   // reachable Environment that answers slowly is not cancelled by the next attempt.
@@ -191,9 +276,9 @@ const waitForReachable = Effect.fn("MainWindow.waitForReachable")(function* (
     Effect.andThen(
       Effect.suspend(() => {
         const address = pending;
-        if (address === undefined || remote.webContents.isDestroyed()) return Effect.void;
+        if (address === undefined || contents.isDestroyed()) return Effect.void;
         return Effect.tryPromise({
-          try: () => remote.webContents.loadURL(address),
+          try: () => contents.loadURL(address),
           catch: (failure) => new RemoteLoadError({ code: codeOf(failure) }),
         }).pipe(Effect.ignore);
       }),
@@ -201,6 +286,19 @@ const waitForReachable = Effect.fn("MainWindow.waitForReachable")(function* (
     Effect.forever,
     Effect.forkScoped,
   );
+  const retry = async () => {
+    if (contents.isDestroyed()) return;
+    const address = retryAddress ?? (contents.getURL() || options.firstAddress);
+    await contents.loadURL(address).catch(() => undefined);
+  };
+  return {
+    retry,
+    reload: () => {
+      if (contents.isDestroyed()) return;
+      if (covered !== undefined) void retry();
+      else contents.reload();
+    },
+  } satisfies PageWatch;
 });
 
 export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowOptions) {
@@ -275,16 +373,22 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   layout();
   // The content view changes size with the window and, on Linux, when the menu bar appears.
   window.contentView.on("bounds-changed", layout);
+  const watch =
+    remote !== undefined && waiting !== undefined && Option.isSome(options.remoteUrl)
+      ? yield* watchPage({
+          remote,
+          cover: waiting,
+          firstAddress: options.remoteUrl.value,
+          servedByTailnet: options.servedByTailnet,
+          outcome: options.pageOutcome,
+        })
+      : undefined;
   options.controls({
     relayout: layout,
-    reloadPage: () => {
-      if (remote !== undefined && !remote.webContents.isDestroyed()) remote.webContents.reload();
-    },
+    reloadPage: () => watch?.reload(),
+    retryPage: () => watch?.retry() ?? Promise.resolve(),
   });
-  // A BaseWindow does not close its views' pages; they close with the scope that ends here.
-  if (remote !== undefined && waiting !== undefined) {
-    yield* waitForReachable(remote, waiting, options.servedByTailnet);
-  }
+  // A BaseWindow does not close its views' pages; they close here or with the scope.
   window.on("closed", () => {
     for (const view of [local, remote, waiting]) {
       if (view !== undefined && !view.webContents.isDestroyed()) view.webContents.close();

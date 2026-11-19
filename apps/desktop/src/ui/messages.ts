@@ -2,6 +2,7 @@
 // carry text of their own.
 
 import { APP_NAME } from "../shared/appName.ts";
+import type { FailureReason } from "../shared/pageProblem.ts";
 
 // What to do about a node that did not start (ADR 0003): the lead before the files it names, and
 // what follows.
@@ -35,12 +36,31 @@ export interface Text {
   readonly device: DeviceText;
   // The remote page's place while a tailnet's page cannot be reached yet (Waiting.tsx).
   readonly waiting: { readonly title: string; readonly lead: string; readonly showStatus: string };
+  // The remote page's place when its load failed, with the reason and Retry (Waiting.tsx).
+  readonly page: PageText;
   readonly tray: TrayText;
   // The app's status column, hidden by default, and its actions.
   readonly status: StatusText;
   readonly menu: MenuText;
   // The system could not open an address in the browser.
   readonly browser: { readonly failed: string; readonly copy: string; readonly close: string };
+}
+
+// {host} is the page's host, {code} Chromium's network error.
+interface PageText {
+  readonly retry: string;
+  readonly retrying: string;
+  readonly failedTitle: string;
+  readonly reasons: Readonly<Record<FailureReason, string>>;
+  readonly code: string;
+  readonly proxyLead: string;
+  readonly refusedTitle: string;
+  readonly refusedLead: string;
+  readonly browserTitle: string;
+  readonly browserLead: string;
+  readonly crashedTitle: string;
+  readonly crashedLead: string;
+  readonly persists: string;
 }
 
 interface StatusText {
@@ -226,6 +246,28 @@ const cs: Text = {
     lead: `Toto zařízení nejspíš čeká na schválení v Organizaci, nebo se síť ještě nepřipojila. Jakmile bude Prostředí dostupné, ${APP_NAME} ho načte sama.`,
     showStatus: "Zobrazit stav aplikace",
   },
+  page: {
+    retry: "Zkusit znovu",
+    retrying: "Zkouším znovu…",
+    failedTitle: "Prostředí se nenačetlo",
+    reasons: {
+      certificate: "Zabezpečené spojení s {host} se nepodařilo ověřit.",
+      connection: "Spojení s {host} se přerušilo nebo nevzniklo.",
+      redirects: "Stránka na {host} se pořád přesměrovává jinam.",
+      "not-found": "Adresu {host} se nepodařilo najít.",
+      timeout: "Adresa {host} neodpověděla včas.",
+      other: "Stránku na {host} se nepodařilo načíst.",
+    },
+    code: "Kód chyby: {code}",
+    proxyLead: `Síť aplikace ${APP_NAME} nepustila spojení s {host}, protože se nepodařilo ověřit.`,
+    refusedTitle: "Tato adresa se v aplikaci neotevře",
+    refusedLead: `Stránka chtěla přejít na {host}. ${APP_NAME} otevírá jen adresy Lazuria.`,
+    browserTitle: "Stránka pokračuje v prohlížeči",
+    browserLead: `${APP_NAME} otevřela {host} ve vašem prohlížeči. Až tam budete hotovi, zkuste to tady znovu.`,
+    crashedTitle: "Stránka Prostředí přestala fungovat",
+    crashedLead: "Načtěte ji prosím znovu.",
+    persists: "Když se to opakuje, otevřete stav aplikace, zkopírujte ho a pošlete podpoře.",
+  },
   updates: {
     title: "Aktualizace",
     channel: "Kanál",
@@ -401,6 +443,28 @@ const en: Text = {
     title: "The Environment has not loaded yet",
     lead: `This device most likely waits for its approval in the Organization, or the network has not connected yet. ${APP_NAME} loads the Environment by itself once it can be reached.`,
     showStatus: "Show the app's status",
+  },
+  page: {
+    retry: "Try again",
+    retrying: "Trying again…",
+    failedTitle: "The Environment did not load",
+    reasons: {
+      certificate: "The secure connection to {host} could not be verified.",
+      connection: "The connection to {host} broke or could not be made.",
+      redirects: "The page at {host} keeps redirecting elsewhere.",
+      "not-found": "The address {host} could not be found.",
+      timeout: "{host} did not answer in time.",
+      other: "The page at {host} could not be loaded.",
+    },
+    code: "Error code: {code}",
+    proxyLead: `${APP_NAME}'s network did not let the connection to {host} through, because it could not be verified.`,
+    refusedTitle: "This address does not open in the app",
+    refusedLead: `The page wanted to go to {host}. ${APP_NAME} opens only Lazurio's addresses.`,
+    browserTitle: "The page continues in your browser",
+    browserLead: `${APP_NAME} opened {host} in your browser. When you are done there, try again here.`,
+    crashedTitle: "The Environment's page stopped working",
+    crashedLead: "Please load it again.",
+    persists: "If it keeps happening, open the app's status, copy it and send it to support.",
   },
   updates: {
     title: "Updates",

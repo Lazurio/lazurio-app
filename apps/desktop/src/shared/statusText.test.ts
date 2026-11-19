@@ -21,6 +21,7 @@ const STATUS: AppStatus = {
   ],
   networkMissing: false,
   updates: { channel: "latest", state: { phase: "ready", version: "0.1.1" } },
+  page: { outcome: "failed", code: -111 },
 };
 
 const DEVICE: DeviceStatus = {
@@ -63,6 +64,7 @@ describe("statusText", () => {
         "Helper programs:",
         "  lazurio-tailnet: ready 0.1.0-nightly.20261118.17",
         "  lazurio-device: failed",
+        "Page: failed (-111)",
         "Agent Desktop: ready; account signed-in; agent working",
         "  Environment 1: off (auth: unknown-environment); channel off",
         "",

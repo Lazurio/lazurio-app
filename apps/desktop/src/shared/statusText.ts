@@ -32,6 +32,7 @@ export const statusText = (options: {
         ? `  ${helper.name}: ready ${helper.version}`
         : `  ${helper.name}: failed`,
     ),
+    `Page: ${pageLine(status.page)}`,
     `Agent Desktop: ${device.state}; account ${device.account}; agent ${agentLine(device.agent)}`,
     // Each Environment by its place in the list, never by its host.
     ...device.switches.map(
@@ -59,6 +60,22 @@ const updateLine = (state: AppStatus["updates"]["state"]): string => {
       return `${state.phase} ${state.version}`;
     default:
       return state.phase;
+  }
+};
+
+const pageLine = (page: AppStatus["page"]): string => {
+  switch (page.outcome) {
+    case "shown":
+      return `shown (HTTP ${page.responseCode})`;
+    case "waiting":
+    case "failed":
+      return `${page.outcome} (${page.code})`;
+    case "refused":
+      return page.inBrowser ? "refused, opened in the browser" : "refused";
+    case "crashed":
+      return `crashed (${page.reason})`;
+    default:
+      return page.outcome;
   }
 };
 

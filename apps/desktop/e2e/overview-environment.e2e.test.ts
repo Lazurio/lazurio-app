@@ -26,7 +26,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.registration.navigationPreload.enable().then(() => self.clients.claim()));
 });
 self.addEventListener("fetch", (event) => {
-  if (event.request.mode !== "navigate") return;
+  if (event.request.mode !== "navigate" || new URL(event.request.url).pathname === "/elsewhere") return;
   event.respondWith(event.preloadResponse.then((preloaded) => preloaded ?? fetch(event.request)));
 });
 `;
@@ -51,6 +51,13 @@ beforeAll(async () => {
   // The Environment's page registers a service worker with navigation preload, as Launchpad
   // does: from the next start of the app on, it takes the Environment's navigations.
   environment = NodeHttps.createServer({ cert, key }, (request, response) => {
+    // Elsewhere for the refused redirect: an address outside Lazurio, which the app hands to the
+    // system's browser.
+    if (request.url === "/elsewhere") {
+      response.writeHead(302, { location: "https://example.com/elsewhere" });
+      response.end();
+      return;
+    }
     if (request.url === "/sw.js") {
       response.writeHead(200, { "content-type": "text/javascript" });
       response.end(SERVICE_WORKER);
@@ -175,6 +182,32 @@ describe("Lazurio App GEN4 opening an Environment from the Overview", () => {
       url: ENVIRONMENT,
       code: 200,
       text: "environment",
+    });
+  });
+
+  it("leaves the Environment as it shows when its page is refused a redirect", async () => {
+    const after = await app.evaluate(async ({ BaseWindow }) => {
+      const views = BaseWindow.getAllWindows()[0]?.contentView.children ?? [];
+      const remote = views[1] as Electron.WebContentsView | undefined;
+      const cover = views[2] as Electron.WebContentsView | undefined;
+      if (remote === undefined || cover === undefined) throw new Error("no remote or cover view");
+      const refused = new Promise<void>((resolve) => {
+        remote.webContents.once("will-redirect", () => setImmediate(resolve));
+      });
+      void remote.webContents.executeJavaScript(`location.href = "/elsewhere"`);
+      await refused;
+      return {
+        remoteVisible: remote.getVisible(),
+        coverVisible: cover.getVisible(),
+        url: remote.webContents.getURL(),
+      };
+    });
+    assert.deepStrictEqual(after, { remoteVisible: true, coverVisible: false, url: ENVIRONMENT });
+    const shell = app.windows().find((window) => !window.url().includes("#waiting"));
+    if (shell === undefined) throw new Error("no local page");
+    assert.deepStrictEqual((await shell.evaluate(() => window.lazurio.status())).page, {
+      outcome: "refused",
+      inBrowser: true,
     });
   });
 });

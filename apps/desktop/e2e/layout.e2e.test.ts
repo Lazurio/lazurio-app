@@ -196,6 +196,7 @@ describe("Lazurio App GEN4 with a remote page", () => {
       ],
       networkMissing: false,
       updates: { channel: "nightly", state: { phase: "off", reason: "unpackaged" } },
+      page: { outcome: "none" },
     };
     await app.evaluate(
       ({ webContents }, { channel, status }) => {

@@ -303,6 +303,7 @@ describe("Lazurio App GEN4", () => {
       tailnets: [{ tailnet: "e2e", state: "running", addresses: ["100.64.0.1"] }],
       networkMissing: false,
       updates: { channel: "latest", state: { phase: "off", reason: "unpackaged" } },
+      page: { outcome: "none" },
     };
     await app.evaluate(
       ({ webContents }, { channel, status }) => {
