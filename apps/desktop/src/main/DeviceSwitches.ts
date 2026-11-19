@@ -22,7 +22,11 @@ import type {
 import type { AuthClientShape, AuthState, HandOver, HandOverError } from "./AuthClient.ts";
 import type { DeviceEnvironments } from "./DeviceEnvironments.ts";
 import type { DeviceRequestError, DeviceService } from "./DeviceService.ts";
-import { namedEnvironment, type EnvironmentNames } from "../shared/environmentName.ts";
+import {
+  environmentName,
+  namedEnvironment,
+  type EnvironmentNames,
+} from "../shared/environmentName.ts";
 import { environmentOriginOf } from "./Navigation.ts";
 
 // Agent Desktop's switches (docs/adr/0006, contract v3 in the app): off after every start, on only
@@ -257,7 +261,9 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       return device
         .startChannel({
           environmentId: origin,
-          environmentLabel: namedEnvironment(origin, environments.names(origin)).name,
+          // The helper's label never carries the Environment's own name (DeviceService.ChannelStart).
+          environmentLabel: environmentName(origin).name,
+          displayLabel: namedEnvironment(origin, environments.names(origin)).name,
           attachUrl: `wss://${host}/.lazurio/computers/attach`,
           handOver: bytes,
         })

@@ -583,7 +583,9 @@ describe("DeviceSwitches", () => {
       assert.strictEqual(switchOf(named)?.organization, "Ukázková Organizace");
       yield* switches.setSwitch(ORIGIN, true);
       yield* stateWhere(switches, phaseIs("channel"));
-      assert.strictEqual(startsOf(helper)[0]?.environmentLabel, "Bob Dvořák");
+      // The window shows the name; the helper's label, which another Environment's agent may
+      // read in a tool error, stays the one from the address.
+      assert.strictEqual(startsOf(helper)[0]?.environmentLabel, "Bob");
     }).pipe(Effect.scoped),
   );
 
