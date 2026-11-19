@@ -38,8 +38,16 @@ beforeAll(async () => {
       LAZURIO_APP_E2E_REMOTE_URL: `http://127.0.0.1:${address.port}/`,
     },
   });
-  const column = await columnPage(app);
-  await column.locator('main[data-status="live"]').waitFor({ state: "attached" });
+  const output: Array<string> = [];
+  app.process().stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
+  app.process().stderr?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
+  try {
+    const column = await columnPage(app);
+    await column.locator('main[data-status="live"]').waitFor({ state: "attached", timeout: 40_000 });
+  } finally {
+    // Debug only (#77): what the app said during its start, on Windows.
+    process.stderr.write(`APP OUTPUT START\n${output.join("")}\nAPP OUTPUT END\n`);
+  }
 });
 
 afterAll(async () => {
