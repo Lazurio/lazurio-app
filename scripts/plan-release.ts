@@ -96,6 +96,13 @@ const program = Effect.gen(function* () {
       : yield* planStable({
           releases,
           runSha: sha,
+          // A file it cannot read counts as missing: the stable is refused.
+          hasNotes: (version) =>
+            fileSystem
+              .exists(
+                path.join(import.meta.dirname, "..", "docs", "release-notes", `v${version}.md`),
+              )
+              .pipe(Effect.orElseSucceed(() => false)),
           commitOf: (tag) =>
             get(`/commits/${tag}`).pipe(
               Effect.flatMap(decodeCommit),

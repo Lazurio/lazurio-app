@@ -94,6 +94,9 @@ export const planStable = Effect.fn("ReleasePlan.planStable")(function* <E>(inpu
   // The run's own commit. Stable runs on the latest nightly's tag, so that the update test, the
   // builds and their provenance all name the commit the release ships.
   readonly runSha: string;
+  // Whether the run's commit has the release's own notes (docs/release-notes/v<version>.md): a
+  // published release is never edited, so a stable without them would stay without (v0.1.1).
+  readonly hasNotes: (version: string) => Effect.Effect<boolean, E>;
 }): Effect.fn.Return<ReleasePlan, ReleasePlanError | E> {
   const latest = latestNightly(input.releases);
   if (latest === undefined) {
@@ -108,6 +111,11 @@ export const planStable = Effect.fn("ReleasePlan.planStable")(function* <E>(inpu
   if (ref !== input.runSha) {
     return yield* refuse(
       `stable runs on the latest nightly's tag: gh workflow run release.yml --ref ${latest.tag} -f channel=stable`,
+    );
+  }
+  if (!(yield* input.hasNotes(version))) {
+    return yield* refuse(
+      `v${version} has no notes in its commit: add docs/release-notes/v${version}.md, then release a nightly`,
     );
   }
   return { release: true, channel: "stable", version, ref } as const;

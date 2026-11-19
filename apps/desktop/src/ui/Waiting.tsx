@@ -14,6 +14,10 @@ export function Waiting() {
     setRetrying(true);
     void window.lazurio.retryPage().finally(() => setRetrying(false));
   };
+  const back = () => {
+    setRetrying(true);
+    void window.lazurio.firstPage().finally(() => setRetrying(false));
+  };
   const words = wordsOf(problem, text);
   return (
     <main className="waiting" data-problem={problem?.kind ?? "waiting"}>
@@ -26,6 +30,15 @@ export function Waiting() {
       <div className="waiting__actions">
         <button type="button" data-action="page-retry" disabled={retrying} onClick={retry}>
           {retrying ? text.page.retrying : text.page.retry}
+        </button>
+        <button
+          type="button"
+          className="waiting__secondary"
+          data-action="page-first"
+          disabled={retrying}
+          onClick={back}
+        >
+          {text.page.back}
         </button>
         <button
           type="button"

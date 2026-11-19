@@ -61,6 +61,8 @@ export interface MainWindowControls {
   // Loads the page again from the app's page that says why it did not show; settles once the
   // attempt has shown or failed.
   readonly retryPage: () => Promise<void>;
+  // Loads the window's first page, the Overview, instead (#68); settles like retryPage.
+  readonly firstPage: () => Promise<void>;
 }
 
 // The first remote page loads again after these failures, which a network that changed or a
@@ -171,6 +173,7 @@ const RETRY_EVERY = "5 seconds";
 
 interface PageWatch {
   readonly retry: () => Promise<void>;
+  readonly first: () => Promise<void>;
   readonly reload: () => void;
 }
 
@@ -295,6 +298,10 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
   };
   return {
     retry,
+    first: async () => {
+      if (contents.isDestroyed()) return;
+      await contents.loadURL(options.firstAddress).catch(() => undefined);
+    },
     reload: () => {
       if (contents.isDestroyed()) return;
       if (covered !== undefined) void retry();
@@ -389,6 +396,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     relayout: layout,
     reloadPage: () => watch?.reload(),
     retryPage: () => watch?.retry() ?? Promise.resolve(),
+    firstPage: () => watch?.first() ?? Promise.resolve(),
   });
   // A BaseWindow does not close its views' pages; they close here or with the scope.
   window.on("closed", () => {

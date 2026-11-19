@@ -21,6 +21,8 @@ export const STATUS_PANEL_CHANNEL = "lazurio:status-panel";
 export const COPY_STATUS_CHANNEL = "lazurio:copy-status";
 // Loads the Environment's page again from the page that says why it did not show.
 export const RETRY_PAGE_CHANNEL = "lazurio:retry-page";
+// Leaves that page for the window's first page, the Overview (#68).
+export const FIRST_PAGE_CHANNEL = "lazurio:first-page";
 // Opens the Agent Desktop window (DevicePanel.ts), from the bar that says an agent works.
 export const DEVICE_OPEN_WINDOW_CHANNEL = "lazurio:device-open-window";
 
@@ -201,6 +203,8 @@ export interface LazurioBridge {
   readonly copyStatus: () => Promise<void>;
   // Loads the Environment's page again; settles once the attempt has shown or failed.
   readonly retryPage: () => Promise<void>;
+  // Loads the window's first page, the Overview, instead; settles like retryPage.
+  readonly firstPage: () => Promise<void>;
   // Agent Desktop. Only the app's local windows have it, never a remote page.
   readonly device: DeviceBridge;
 }

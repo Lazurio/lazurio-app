@@ -78,8 +78,8 @@ What the person does:
 
 1. Save the file, for example to Downloads.
 2. Double-click it. A file from the internet may first bring a warning from Windows (Open File – Security Warning, or SmartScreen): choose **Run** (or **More info → Run anyway**). No administrator's password is needed. If Windows asks for one, choose **No**: the file is not meant to run as an administrator.
-3. A window says that the operation completed and asks for a key: press any key.
-4. Quit Lazurio App (Alpha) (close its window, or choose Quit in the notification area where the app has it) and start it again. The Organization's network then shows in the app's column.
+3. A window says "Done. The network setting is saved for this Windows account." and asks for a key: press any key. If it says "The network setting was not saved." instead, send that sentence to whoever sent the file.
+4. If Lazurio App (Alpha) is not installed yet, install it now: it takes the network at its first start. If it runs already, quit it (Quit in the notification area; closing its window only hides it) and start it again. The Organization's network then shows in the app's status (View → App status).
 
 The same in one PowerShell command, without a file and without an administrator:
 

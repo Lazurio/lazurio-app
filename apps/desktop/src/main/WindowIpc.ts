@@ -3,7 +3,12 @@ import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
-import { COPY_STATUS_CHANNEL, RETRY_PAGE_CHANNEL, STATUS_PANEL_CHANNEL } from "../shared/bridge.ts";
+import {
+  COPY_STATUS_CHANNEL,
+  FIRST_PAGE_CHANNEL,
+  RETRY_PAGE_CHANNEL,
+  STATUS_PANEL_CHANNEL,
+} from "../shared/bridge.ts";
 import { destinationOf } from "./Navigation.ts";
 
 // The local windows' requests about the window itself: show or hide the app's status column, and
@@ -28,6 +33,8 @@ export interface WindowControls {
   readonly statusText: Effect.Effect<string>;
   // Loads the Environment's page again, until the attempt has shown or failed.
   readonly retryPage: Effect.Effect<void>;
+  // Loads the window's first page instead, until the attempt has shown or failed.
+  readonly firstPage: Effect.Effect<void>;
 }
 
 export const serve = Effect.fn("WindowIpc.serve")(function* (controls: WindowControls) {
@@ -53,4 +60,5 @@ export const serve = Effect.fn("WindowIpc.serve")(function* (controls: WindowCon
     ),
   );
   yield* handle(RETRY_PAGE_CHANNEL, () => controls.retryPage);
+  yield* handle(FIRST_PAGE_CHANNEL, () => controls.firstPage);
 });
