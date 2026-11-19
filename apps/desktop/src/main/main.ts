@@ -437,12 +437,6 @@ const program = Effect.gen(function* () {
         Electron.app.off("activate", showWindow);
       }),
   );
-  // Chromium on Windows counts a window on a display that is off, or behind others, as hidden,
-  // and its pages may stay hidden after the display wakes: the window then stays blank (#36,
-  // 2026-11-19). Repaint.ts covers the rest.
-  if ((yield* HostProcess.Platform) === "win32") {
-    Electron.app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
-  }
   yield* Effect.promise(() => Electron.app.whenReady());
   // A packaged app on Windows starts, hidden, when the person signs in (Lifecycle.loginItem).
   const loginItem = Lifecycle.loginItem({ platform, packaged: Electron.app.isPackaged });

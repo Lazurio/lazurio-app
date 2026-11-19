@@ -4,9 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Electron from "electron";
 
 // A window that shows while its pages count themselves hidden stays blank: after a start with the
-// display off and after the display woke (#36, 2026-11-19). Only on Windows, where the app turns
-// off Chromium's native occlusion (main.ts): there a page of a shown, unminimized window is never
-// rightly hidden. On a Mac a covered window's page is hidden by design and stays as it is.
+// display off and after the display woke (#36, 2026-11-19). Only on Windows, and only when the
+// window shows, is restored, focused, the system resumes or unlocks, or it has the focus: a
+// covered window's page is rightly hidden, and a Mac's covered windows are left as they are.
 
 export interface WatchedView {
   // For the log only: column, page, waiting, bar, agent-desktop.
@@ -126,12 +126,18 @@ export const keepPainted = Effect.fn("Repaint.keepPainted")(function* (
   window.on("focus", check("focus"));
   Electron.powerMonitor.on("resume", resumed);
   Electron.powerMonitor.on("unlock-screen", unlocked);
-  // The display wakes without any event: while the person uses the computer, a shown window
-  // whose page says hidden is wrong.
+  // The display wakes without any event: while the person uses the computer, the window in front,
+  // which nothing covers, is wrong to have a hidden page.
   const active = check("active");
   // @effect-diagnostics-next-line globalTimersInEffect:off - It lives as long as the window, past any scope.
   const timer = setInterval(() => {
-    if (Electron.powerMonitor.getSystemIdleTime() <= ACTIVE_WITHIN_SECONDS) active();
+    if (
+      !window.isDestroyed() &&
+      window.isFocused() &&
+      Electron.powerMonitor.getSystemIdleTime() <= ACTIVE_WITHIN_SECONDS
+    ) {
+      active();
+    }
   }, CHECK_EVERY_MS);
   window.once("closed", () => {
     clearInterval(timer);
