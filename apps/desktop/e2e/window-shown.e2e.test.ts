@@ -62,33 +62,50 @@ const openFromShortcut = () =>
     return shown;
   });
 
-// Each view the window shows once its pages count themselves visible: whether the page says so,
-// and whether a capture of it has pixels.
+// The column (first view) and the page (second) once the window shows: whether each page counts
+// itself visible, and what it painted. The page's middle has its background, #2a6, in a capture
+// (a bitmap's channels are BGRA or RGBA); the column has painted more than one colour, its text.
 const shownViews = () =>
   app.evaluate(async ({ BaseWindow }) => {
     const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
     if (window === undefined) throw new Error("no main window");
     const views = window.contentView.children.slice(0, 2) as Array<Electron.WebContentsView>;
-    return Promise.all(
-      views.map(async (view) => {
-        const visibility = await view.webContents.executeJavaScript(
-          `new Promise((resolve) => document.visibilityState === "visible"
-            ? resolve("visible")
-            : document.addEventListener("visibilitychange", () => resolve(document.visibilityState), { once: true }))`,
-        );
-        const image = await view.webContents.capturePage();
-        return {
-          visibility: String(visibility),
-          painted: !image.isEmpty() && image.getSize().width > 0,
-        };
-      }),
-    );
+    const visibilityOf = (view: Electron.WebContentsView) =>
+      view.webContents.executeJavaScript(
+        `new Promise((resolve) => document.visibilityState === "visible"
+          ? resolve("visible")
+          : document.addEventListener("visibilitychange", () => resolve(document.visibilityState), { once: true }))`,
+      ) as Promise<string>;
+    const pixels = async (view: Electron.WebContentsView) => {
+      const image = await view.webContents.capturePage();
+      const { width, height } = image.getSize();
+      return { bitmap: image.toBitmap(), width, height };
+    };
+    const near = (a: number, b: number) => Math.abs(a - b) <= 8;
+    const [column, page] = views;
+    if (column === undefined || page === undefined) throw new Error("no column or page");
+    const columnPixels = await pixels(column);
+    const colours = new Set<number>();
+    for (let index = 0; index + 3 < columnPixels.bitmap.length; index += 4 * 97) {
+      colours.add(columnPixels.bitmap.readUInt32LE(index));
+    }
+    const pagePixels = await pixels(page);
+    const middle =
+      4 * (Math.floor(pagePixels.height / 2) * pagePixels.width + Math.floor(pagePixels.width / 2));
+    const [first = 0, second = 0, third = 0] = pagePixels.bitmap.subarray(middle, middle + 3);
+    const green =
+      near(second, 0xaa) &&
+      ((near(first, 0x22) && near(third, 0x66)) || (near(first, 0x66) && near(third, 0x22)));
+    return {
+      column: { visibility: await visibilityOf(column), painted: colours.size > 1 },
+      page: { visibility: await visibilityOf(page), painted: green },
+    };
   });
 
-const SHOWN = [
-  { visibility: "visible", painted: true },
-  { visibility: "visible", painted: true },
-];
+const SHOWN = {
+  column: { visibility: "visible", painted: true },
+  page: { visibility: "visible", painted: true },
+};
 
 describe("Lazurio App GEN4's window shown after a start with --hidden", () => {
   it("shows no window at first", async () => {
