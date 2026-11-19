@@ -105,7 +105,9 @@ describe.each([
     });
     app.process().stderr?.on("data", (chunk: Buffer) => stderr.push(chunk.toString("utf8")));
     shell = await columnPage(app);
-    await shell.locator('main[data-status="live"]').waitFor();
+    // The status column is hidden by default (#61), and on Windows a hidden view's elements are
+    // not visible: its page is waited for as live, not as visible.
+    await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
   });
 
   afterAll(async () => {
