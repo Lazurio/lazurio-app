@@ -148,7 +148,9 @@ const remoteShows = (url: string, title: string): Promise<string> =>
 
 describe("Lazurio App GEN4 first page", () => {
   it("waits for the tailnet that serves its first page", async () => {
-    await shell.locator('main[data-status="live"]').waitFor();
+    // The column's page is ready once live (#71): on a Windows runner its view may not count as
+    // visible yet, and a later step that needs it visible waits for that itself.
+    await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
     await shell.locator('[data-tailnet="e2e"][data-state="needs-login"]').waitFor();
     await remoteViewExists();
     assert.deepStrictEqual(await remoteViewState(), { url: "", loading: false });

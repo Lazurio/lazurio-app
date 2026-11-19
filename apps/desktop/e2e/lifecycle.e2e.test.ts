@@ -45,7 +45,9 @@ const launch = async (userData: string, args: ReadonlyArray<string> = []): Promi
   const child = app.process();
   child.stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
   const shell = await columnPage(app);
-  await shell.locator('main[data-status="live"]').waitFor();
+  // The column's page is ready once live (#71): on a Windows runner its view may not count as
+  // visible yet, and a later step that needs it visible waits for that itself.
+  await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
   await shell
     .locator('[data-helper="lazurio-tailnet"][data-state="ready"]')
     .waitFor({ state: "attached" });

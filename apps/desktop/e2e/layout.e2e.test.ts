@@ -43,7 +43,9 @@ beforeAll(async () => {
     },
   });
   shell = await columnPage(app);
-  await shell.locator('main[data-status="live"]').waitFor();
+  // The column's page is ready once live (#71): on a Windows runner its view may not count as
+  // visible yet, and a later step that needs it visible waits for that itself.
+  await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
   // The helper programs are folded under the technical details; this test measures their rows.
   await shell.locator("[data-details] summary").click();
 });
