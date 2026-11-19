@@ -10,6 +10,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 const UNREADABLE_KEY = new TextEncoder().encode("not a key any keystore sealed");
 
@@ -50,7 +51,7 @@ beforeAll(async () => {
       ]),
     },
   });
-  shell = await app.firstWindow();
+  shell = await columnPage(app);
 });
 
 afterAll(async () => {

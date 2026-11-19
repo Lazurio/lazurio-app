@@ -10,6 +10,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication } from "playwright-core";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 let server: NodeHttp.Server;
 let userData: string;
@@ -34,7 +35,7 @@ beforeAll(async () => {
       LAZURIO_APP_E2E_REMOTE_URL: `http://127.0.0.1:${address.port}/`,
     },
   });
-  await app.firstWindow();
+  await columnPage(app);
 });
 
 afterAll(async () => {

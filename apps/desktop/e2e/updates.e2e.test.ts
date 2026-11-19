@@ -11,6 +11,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 let userData: string;
 let app: ElectronApplication;
@@ -23,7 +24,7 @@ beforeAll(async () => {
     chromiumSandbox: process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true",
     env: { ...process.env, LAZURIO_APP_E2E: "true", LAZURIO_APP_E2E_USER_DATA: userData },
   });
-  shell = await app.firstWindow();
+  shell = await columnPage(app);
   await shell.locator('main[data-status="live"]').waitFor();
 });
 

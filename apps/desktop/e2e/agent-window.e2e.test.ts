@@ -11,7 +11,7 @@ import * as NodePath from "node:path";
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
-import { localPage } from "./local-page.ts";
+import { columnPage, localPage } from "./local-page.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const ENVIRONMENT = "https://launchpad.bob.e2e.lazurio.io";
@@ -104,7 +104,7 @@ describe.each([
       },
     });
     app.process().stderr?.on("data", (chunk: Buffer) => stderr.push(chunk.toString("utf8")));
-    shell = await app.firstWindow();
+    shell = await columnPage(app);
     await shell.locator('main[data-status="live"]').waitFor();
   });
 

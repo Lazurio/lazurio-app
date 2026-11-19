@@ -17,6 +17,7 @@ import { _electron, type ElectronApplication } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 const PAGE = "https://launchpad.e2e.lazurio.io/";
 // Longer than MainWindow's five seconds between attempts.
@@ -88,7 +89,7 @@ beforeAll(async () => {
       ]),
     },
   });
-  await app.firstWindow();
+  await columnPage(app);
 });
 
 afterAll(async () => {
