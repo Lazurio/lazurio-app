@@ -8,6 +8,7 @@ import { APP_NAME } from "../shared/appName.ts";
 import { STATUS_CHANNEL, type AppStatus, type PageOutcome } from "../shared/bridge.ts";
 import { problemQuery, type PageProblem } from "../shared/pageProblem.ts";
 import { hardenSession, hostOf, onMainFrameRefused, registerView } from "./Hardening.ts";
+import { keepPainted } from "./Repaint.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
 import { destinationOf } from "./Navigation.ts";
 
@@ -402,6 +403,12 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     retryPage: () => watch?.retry() ?? Promise.resolve(),
     firstPage: () => watch?.first() ?? Promise.resolve(),
   });
+  yield* keepPainted(window, () => [
+    { name: "column", view: local },
+    ...(remote === undefined ? [] : [{ name: "page", view: remote }]),
+    ...(waiting === undefined ? [] : [{ name: "waiting", view: waiting }]),
+    ...(options.topBar === undefined ? [] : [{ name: "bar", view: options.topBar.view }]),
+  ]);
   // A BaseWindow does not close its views' pages; they close here or with the scope.
   window.on("closed", () => {
     for (const view of [local, remote, waiting]) {
