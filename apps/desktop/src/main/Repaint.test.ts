@@ -27,6 +27,7 @@ const fakeWindow = (options: {
       return answer.visibility;
     },
     reattach: (view) => done.push(`reattach ${view}`),
+    reloaded: new Set(),
     reload: (view) => done.push(`reload ${view}`),
     log: (fields) => logged.push(fields),
   };
@@ -125,5 +126,32 @@ describe("Repaint.checkViews", () => {
     });
     await checkViews(window.port, "show");
     assert.deepStrictEqual(window.done, ["reattach column"]);
+  });
+
+  // A computer without a display, where a shown window's pages stay hidden: no reload every check.
+  it("loads the app's own page again only once until it is seen visible", async () => {
+    const window = fakeWindow({
+      views: [{ name: "column", reloadable: true }],
+      answers: [
+        { visibility: "hidden" },
+        { visibility: "hidden" },
+        { visibility: "hidden" },
+        { visibility: "hidden" },
+        { visibility: "visible" },
+        { visibility: "hidden" },
+        { visibility: "hidden" },
+      ],
+    });
+    await checkViews(window.port, "active");
+    await checkViews(window.port, "active");
+    await checkViews(window.port, "show");
+    await checkViews(window.port, "active");
+    assert.deepStrictEqual(window.done, [
+      "reattach column",
+      "reload column",
+      "reattach column",
+      "reattach column",
+      "reload column",
+    ]);
   });
 });

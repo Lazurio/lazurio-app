@@ -29,6 +29,9 @@ export interface RepaintPort<View> {
   readonly visibilityOf: (view: View) => Promise<string>;
   readonly reattach: (view: View) => void;
   readonly reload: (view: View) => void;
+  // A view loads again at most once until it is seen visible: where a shown window's pages stay
+  // hidden for good (a computer without a display), the app's pages must not reload every check.
+  readonly reloaded: Set<View>;
   readonly log: (fields: Readonly<Record<string, string>>) => void;
 }
 
@@ -42,10 +45,18 @@ export const checkViews = async <View>(port: RepaintPort<View>, reason: string):
   for (const { name, view, reloadable } of port.views()) {
     if (!stillShown(port, name, view)) continue;
     const before = await port.visibilityOf(view);
+    if (before === "visible") port.reloaded.delete(view);
     if (before !== "hidden" || !stillShown(port, name, view)) continue;
     port.reattach(view);
     let after = await port.visibilityOf(view);
-    if (after === "hidden" && reloadable && stillShown(port, name, view)) {
+    if (after === "visible") port.reloaded.delete(view);
+    if (
+      after === "hidden" &&
+      reloadable &&
+      !port.reloaded.has(view) &&
+      stillShown(port, name, view)
+    ) {
+      port.reloaded.add(view);
       port.reload(view);
       after = "reloaded";
     }
@@ -97,6 +108,7 @@ export const keepPainted = Effect.fn("Repaint.keepPainted")(function* (
       view.webContents.invalidate();
     },
     reload: (view) => view.webContents.reload(),
+    reloaded: new Set(),
     log: (fields) => run(Effect.logWarning("view shown again", fields)),
   };
   let checking = false;
