@@ -119,6 +119,8 @@ export interface DeviceText {
   readonly actionFailed: string;
   // "{host}" stands for the Environment's address.
   readonly switchLabel: string;
+  // Under a switch that is off with nothing wrong: what turning it on does.
+  readonly switchOffHint: string;
   // Where a switch that is on is before the helper has its channel.
   readonly signingIn: string;
   readonly retryingAuth: string;
@@ -270,6 +272,8 @@ const cs: Text = {
     remove: "Odebrat",
     actionFailed: "To se nepovedlo. Zkuste to znovu.",
     switchLabel: "Agent Desktop pro {host}",
+    switchOffHint:
+      "Vypnuto: agent z tohoto Prostředí tento počítač neovládá. Zapněte, když na něm má pracovat.",
     signingIn: "Přihlaste se v prohlížeči.",
     retryingAuth: "Lazurio teď neodpovídá. Zkusí se to znovu.",
     retryingChannel: "Spojení skončilo. Připojuje se znovu…",
@@ -437,6 +441,8 @@ const en: Text = {
     remove: "Remove",
     actionFailed: "That did not work. Try again.",
     switchLabel: "Agent Desktop for {host}",
+    switchOffHint:
+      "Off: no agent from this Environment can use this computer. Turn it on when one should work on it.",
     signingIn: "Sign in in your browser.",
     retryingAuth: "Lazurio is not answering. Trying again.",
     retryingChannel: "The connection ended. Reconnecting…",
