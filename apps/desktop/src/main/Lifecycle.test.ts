@@ -19,6 +19,7 @@ import {
   startQuitStep,
   startsHidden,
   trayMenu,
+  trayTooltip,
 } from "./Lifecycle.ts";
 
 describe("Lifecycle", () => {
@@ -63,6 +64,9 @@ describe("Lifecycle", () => {
     assert.strictEqual(secondStart(["Lazurio App.exe", "--show-status"]), "show-status");
     assert.isTrue(showsStatus(["Lazurio App.exe", "--show-status"]));
     assert.isFalse(showsStatus(["Lazurio App.exe"]));
+    // A coordinator opens the Agent Desktop window over SSH, without a click.
+    assert.strictEqual(secondStart(["Lazurio App.exe", "--show-agent-desktop"]), "agent-desktop");
+    assert.strictEqual(secondStart(["x", "--show-agent-desktop", "--quit"]), "quit");
   });
 
   it("starts at the sign-in to Windows only from a packaged app on Windows", () => {
@@ -96,23 +100,63 @@ describe("Lifecycle", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it("offers Open, the app's status and Quit in the tray's menu, in either language", () => {
+  it("offers Open, the app's status, Agent Desktop and Quit in the tray's menu, in either language", () => {
     const calls: Array<string> = [];
     const actions = {
       show: () => calls.push("show"),
       showStatus: () => calls.push("status"),
+      agentDesktop: () => calls.push("agent-desktop"),
+      stopAgent: () => calls.push("stop"),
       quit: () => calls.push("quit"),
     };
-    const cs = trayMenu(messages.cs.tray, actions);
+    const cs = trayMenu(messages.cs.tray, actions, false);
     assert.deepStrictEqual(
       cs.map((item) => item.label),
-      ["Otevřít Lazurio App (Alpha)", "Stav aplikace", "Ukončit Lazurio App (Alpha)"],
+      [
+        "Otevřít Lazurio App (Alpha)",
+        "Stav aplikace",
+        "Agent Desktop…",
+        "Ukončit Lazurio App (Alpha)",
+      ],
     );
     for (const item of cs) item.click();
-    assert.deepStrictEqual(calls, ["show", "status", "quit"]);
+    assert.deepStrictEqual(calls, ["show", "status", "agent-desktop", "quit"]);
     assert.deepStrictEqual(
-      trayMenu(messages.en.tray, actions).map((item) => item.label),
-      ["Open Lazurio App (Alpha)", "App status", "Quit Lazurio App (Alpha)"],
+      trayMenu(messages.en.tray, actions, false).map((item) => item.label),
+      ["Open Lazurio App (Alpha)", "App status", "Agent Desktop…", "Quit Lazurio App (Alpha)"],
+    );
+  });
+
+  it("offers Stop while an agent works, and says so in the tooltip", () => {
+    const calls: Array<string> = [];
+    const actions = {
+      show: () => {},
+      showStatus: () => {},
+      agentDesktop: () => {},
+      stopAgent: () => calls.push("stop"),
+      quit: () => {},
+    };
+    const working = trayMenu(messages.cs.tray, actions, true);
+    assert.deepStrictEqual(
+      working.map((item) => item.label),
+      [
+        "Otevřít Lazurio App (Alpha)",
+        "Stav aplikace",
+        "Agent Desktop…",
+        "Zastavit agenta",
+        "Ukončit Lazurio App (Alpha)",
+      ],
+    );
+    working[3]?.click();
+    assert.deepStrictEqual(calls, ["stop"]);
+    assert.strictEqual(trayTooltip(messages.cs.tray, false), "Lazurio App (Alpha)");
+    assert.strictEqual(
+      trayTooltip(messages.cs.tray, true),
+      "Lazurio App (Alpha): agent pracuje na tomto počítači",
+    );
+    assert.strictEqual(
+      trayTooltip(messages.en.tray, true),
+      "Lazurio App (Alpha): an agent is working on this computer",
     );
   });
 

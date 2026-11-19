@@ -16,6 +16,7 @@ import {
   type DeviceStatus,
 } from "../src/shared/bridge.ts";
 
+import { localPage } from "./local-page.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const HOSTILE_PAGE = `<!doctype html><title>hostile</title><p id="hostile">hostile</p>`;
@@ -25,6 +26,8 @@ let remoteUrl: string;
 let userData: string;
 let app: ElectronApplication;
 let shell: Page;
+// The Agent Desktop window's page, once a test opened it.
+let agentDesktop: Page;
 const output: Array<string> = [];
 
 beforeAll(async () => {
@@ -135,13 +138,15 @@ describe("Lazurio App GEN4", () => {
     assert.deepStrictEqual(reached, ["undefined", "undefined", []]);
   });
 
-  it("shows Agent Desktop in its local window with only the calls the window needs", async () => {
-    await shell.locator('[data-device-state="ready"]').waitFor();
-    await shell.locator('[data-device-environments="none"]').waitFor();
+  it("shows Agent Desktop in its own window with only the calls the window needs", async () => {
+    await shell.locator('[data-action="device-open-window"]').click();
+    agentDesktop = await localPage(app, "view=agent-desktop");
+    await agentDesktop.locator('[data-device-state="ready"]').waitFor();
+    await agentDesktop.locator('[data-device-environments="none"]').waitFor();
     // The remote page is no Environment's Lazurio, so there is nothing to add.
-    await shell.locator('[data-device-add="none"]').waitFor();
-    assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
-    const bridge = await shell.evaluate(async () => ({
+    await agentDesktop.locator('[data-device-add="none"]').waitFor();
+    assert.strictEqual(await agentDesktop.locator('[data-action="device-stop"]').count(), 0);
+    const bridge = await agentDesktop.evaluate(async () => ({
       calls: Object.keys(window.lazurio.device).toSorted(),
       state: await window.lazurio.device.getState(),
     }));
@@ -149,6 +154,7 @@ describe("Lazurio App GEN4", () => {
       calls: [
         "addEnvironment",
         "getState",
+        "openWindow",
         "removeEnvironment",
         "setSwitch",
         "signOut",
@@ -188,11 +194,14 @@ describe("Lazurio App GEN4", () => {
       },
       { channel: DEVICE_STATE_CHANGED_CHANNEL, status: working },
     );
-    await shell.locator('[data-device-agent="e2e"]').waitFor();
+    await agentDesktop.locator('[data-device-agent="e2e"]').waitFor();
     // The helper answers Stop with who holds the computer, and the window follows its answer.
-    await shell.locator('[data-action="device-stop"]').click();
-    await shell.locator('[data-action="device-stop"]').waitFor({ state: "detached" });
-    assert.strictEqual(await shell.locator('[data-device-problem="stop-failed"]').count(), 0);
+    await agentDesktop.locator('[data-action="device-stop"]').click();
+    await agentDesktop.locator('[data-action="device-stop"]').waitFor({ state: "detached" });
+    assert.strictEqual(
+      await agentDesktop.locator('[data-device-problem="stop-failed"]').count(),
+      0,
+    );
   });
 
   // After the tests of Agent Desktop's other states: it ends the Device helper.
@@ -204,12 +213,12 @@ describe("Lazurio App GEN4", () => {
     // The column is hidden before the helper is lost without confirming that its engines ended.
     await shell.evaluate(() => window.lazurio.setStatusPanel(false));
     process.kill(pid, "SIGKILL");
-    const problem = shell.locator('[data-device-state="lost"] [data-device-problem="lost"]');
+    const problem = agentDesktop.locator('[data-device-state="lost"] [data-device-problem="lost"]');
     await problem.waitFor();
     // The unconfirmed state opens the column, keeps it and the window in view, and Hide is off.
     const inView = () =>
       app.evaluate(({ BaseWindow }) => {
-        const window = BaseWindow.getAllWindows()[0];
+        const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
         const local = window?.contentView.children[0];
         return window?.isVisible() === true && local?.getVisible() === true;
       });
@@ -218,7 +227,7 @@ describe("Lazurio App GEN4", () => {
     await shell.evaluate(() => window.lazurio.setStatusPanel(false));
     // Hidden, the window shows again; one that never does fails the test by its timeout.
     const shownAgain = await app.evaluate(async ({ BaseWindow }) => {
-      const window = BaseWindow.getAllWindows()[0];
+      const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
       if (window === undefined) return false;
       await new Promise<void>((resolve) => {
         window.once("show", () => resolve());
@@ -229,7 +238,7 @@ describe("Lazurio App GEN4", () => {
     assert.isTrue(shownAgain);
     assert.isTrue(await inView());
     assert.match(await problem.innerText(), /not known whether|nevíme, jestli/iu);
-    assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
+    assert.strictEqual(await agentDesktop.locator('[data-action="device-stop"]').count(), 0);
     // The updates' section knows that an install would wait for the helper.
     await shell.locator('[data-updates-device="unreachable"]').waitFor();
     const state = await shell.evaluate(() => window.lazurio.device.getState());

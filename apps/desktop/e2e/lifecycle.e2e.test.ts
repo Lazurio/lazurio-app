@@ -87,12 +87,12 @@ const closeWindow = (launched: Launched) =>
     BaseWindow.getAllWindows()[0]?.close();
   });
 
-// Clicks the tray menu's item (0: Open, 1: Quit), as the person does.
+// Clicks the tray menu's item (0: Open, -1: Quit, the last), as the person does.
 const clickTray = (launched: Launched, index: number) =>
   launched.app.evaluate((_electron, item) => {
     const menu = Reflect.get(globalThis, "lazurioAppE2eTrayMenu") as Electron.Menu | undefined;
     if (menu === undefined) throw new Error("no tray menu");
-    menu.items[item]?.click();
+    menu.items.at(item)?.click();
   }, index);
 
 // Opens the window again as the person does: the tray's Open, or a click on the Mac's Dock icon.
@@ -106,7 +106,7 @@ const openWindow = (launched: Launched, hasTray: boolean) =>
 // Quits as the person does: the tray's Quit, or Cmd+Q on a Mac (app.quit).
 const quitApp = (launched: Launched, hasTray: boolean) =>
   hasTray
-    ? clickTray(launched, 2)
+    ? clickTray(launched, -1)
     : launched.app.evaluate(({ app }) => {
         app.quit();
       });

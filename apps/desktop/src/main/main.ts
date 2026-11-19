@@ -21,6 +21,7 @@ import * as Stream from "effect/Stream";
 
 import * as Electron from "electron";
 
+import { agentBarHeight, workingAgent } from "../shared/agentBar.ts";
 import { APP_NAME } from "../shared/appName.ts";
 import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
 import { statusText } from "../shared/statusText.ts";
@@ -30,6 +31,7 @@ import * as AuthClient from "./AuthClient.ts";
 import { DeviceActivity } from "./DeviceActivity.ts";
 import * as DeviceEnvironments from "./DeviceEnvironments.ts";
 import * as DeviceIpc from "./DeviceIpc.ts";
+import * as DevicePanel from "./DevicePanel.ts";
 import * as DeviceService from "./DeviceService.ts";
 import * as DeviceSwitches from "./DeviceSwitches.ts";
 import * as ElectronUpdater from "./ElectronUpdater.ts";
@@ -366,7 +368,8 @@ const program = Effect.gen(function* () {
     window.focus();
   };
   // The app's status column beside the page: hidden by default (Matěj, 2026-11-18), shown from
-  // the menu, the tray, --show-status, the waiting page or while an agent works.
+  // the menu, the tray, --show-status or the waiting page. An agent at work shows in the bar over
+  // the page (AgentBar), not by opening the column.
   let statusShown = Lifecycle.showsStatus(process.argv);
   let windowControls = Option.none<MainWindow.MainWindowControls>();
   let refreshMenu = () => {};
@@ -387,6 +390,14 @@ const program = Effect.gen(function* () {
     if (Option.isSome(windowControls)) windowControls.value.relayout();
     refreshMenu();
   };
+  // The Agent Desktop window (DevicePanel.ts) once it can open; asked for before that, by
+  // --show-agent-desktop or a second start, it opens as soon as the main window exists.
+  let devicePanel = Option.none<DevicePanel.DevicePanel>();
+  let agentDesktopWanted = Lifecycle.secondStart(process.argv) === "agent-desktop";
+  const openAgentDesktop = () => {
+    if (Option.isSome(devicePanel) && Option.isSome(mainWindow)) devicePanel.value.open();
+    else agentDesktopWanted = true;
+  };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       const secondInstance = (_event: Electron.Event, argv: ReadonlyArray<string>) => {
@@ -394,6 +405,7 @@ const program = Effect.gen(function* () {
         const step = Lifecycle.secondStart(argv);
         if (step === "quit") Electron.app.quit();
         else if (step === "show-status") setStatusShown(true);
+        else if (step === "agent-desktop") openAgentDesktop();
         else showWindow();
       };
       Electron.app.on("second-instance", secondInstance);
@@ -503,8 +515,9 @@ const program = Effect.gen(function* () {
       )
     : Option.none<DeviceSwitches.DeviceSwitches>();
   const noSwitch = Effect.fail(new DeviceSwitches.DeviceSwitchError({ problem: "not-listed" }));
+  const openWindow = Effect.sync(openAgentDesktop);
   const deviceControls: DeviceIpc.DeviceControls = Option.match(switches, {
-    onSome: (service) => service,
+    onSome: (service) => ({ ...service, openWindow }),
     onNone: () => ({
       current: () => DeviceService.withoutHelper(deviceHelper === undefined ? "absent" : "failed"),
       subscribe: () => () => {},
@@ -513,8 +526,16 @@ const program = Effect.gen(function* () {
       addEnvironment: () => noSwitch,
       removeEnvironment: () => noSwitch,
       signOut: Effect.void,
+      openWindow,
     }),
   });
+  devicePanel = Option.some(
+    yield* DevicePanel.make({
+      preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
+      title: "Agent Desktop",
+      parent: () => mainWindow,
+    }),
+  );
   // The updater's view of the computer: the configured helper's, or the default (always idle).
   const idleByDefault = yield* DeviceActivity;
   const deviceActivity = Option.getOrElse(
@@ -673,14 +694,17 @@ const program = Effect.gen(function* () {
   // keeps it in the Dock instead.
   const text = messages[localeOf(Electron.app.getLocale())];
   if (Lifecycle.keepsRunningInTray(platform)) {
-    hooks.trayMenu(
-      yield* Tray.serve({
-        text: text.tray,
-        show: showWindow,
-        showStatus: () => setStatusShown(true),
-        quit: () => Electron.app.quit(),
-      }),
-    );
+    yield* Tray.serve({
+      text: text.tray,
+      show: showWindow,
+      showStatus: () => setStatusShown(true),
+      agentDesktop: openAgentDesktop,
+      stopAgent: () => Effect.runForkWith(services)(Effect.ignore(deviceControls.stop)),
+      quit: () => Electron.app.quit(),
+      agentWorking: () => workingAgent(deviceControls.current()) !== null,
+      changes: deviceControls.subscribe,
+      menuBuilt: hooks.trayMenu,
+    });
   }
   // The window's menu in the app's language instead of Electron's English default (AppMenu.ts).
   refreshMenu = () => {
@@ -693,8 +717,7 @@ const program = Effect.gen(function* () {
           statusShown,
           actions: {
             toggleStatus: () => setStatusShown(!statusShown),
-            // Agent Desktop lives in the status column until it has a window of its own.
-            openAgentDesktop: () => setStatusShown(true),
+            openAgentDesktop,
             reloadPage: () => {
               if (Option.isSome(windowControls)) windowControls.value.reloadPage();
             },
@@ -735,8 +758,40 @@ const program = Effect.gen(function* () {
     else if (works) keepWindowInView();
     agentWorked = works;
   };
+  // Agent Desktop's bar over the page while an agent holds the computer (src/ui/AgentBar.tsx): a
+  // local view with the bridge, laid out again whenever Agent Desktop's state changes. It is made
+  // when the main window first takes it, after its status column, and loads once the column's page
+  // has loaded (showOnLoad), so the column stays the window's first page; it closes with the scope.
+  let agentBarView = Option.none<Electron.WebContentsView>();
+  const agentBar = (): Electron.WebContentsView => {
+    if (Option.isSome(agentBarView)) return agentBarView.value;
+    const view = new Electron.WebContentsView(
+      MainWindow.localViewOptions(path.join(appPath, "dist-electron", "preload.cjs")),
+    );
+    Hardening.registerView(view.webContents, "Local");
+    agentBarView = Option.some(view);
+    return view;
+  };
+  const loadAgentBar = () => {
+    const view = agentBar();
+    if (view.webContents.getURL() === "") {
+      void view.webContents.loadURL(`${LocalScheme.LOCAL_ENTRY}?view=agent-bar`);
+    }
+  };
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      if (Option.isSome(agentBarView) && !agentBarView.value.webContents.isDestroyed()) {
+        agentBarView.value.webContents.close();
+      }
+    }),
+  );
   yield* Effect.acquireRelease(
-    Effect.sync(() => deviceControls.subscribe(showWhileAgentWorks)),
+    Effect.sync(() =>
+      deviceControls.subscribe(() => {
+        showWhileAgentWorks();
+        if (Option.isSome(windowControls)) windowControls.value.relayout();
+      }),
+    ),
     (stop) => Effect.sync(stop),
   );
   // The helper may have been lost, or an agent may work, before this subscription.
@@ -768,8 +823,23 @@ const program = Effect.gen(function* () {
         mainWindow = Option.some(window);
         window.on("minimize", keepWindowInView);
         window.on("hide", keepWindowInView);
+        if (agentDesktopWanted) {
+          agentDesktopWanted = false;
+          openAgentDesktop();
+        }
       },
-      showOnLoad: () => showWanted,
+      // Agent Desktop's bar while an agent holds the computer (src/ui/AgentBar.tsx).
+      topBar: {
+        get view() {
+          return agentBar();
+        },
+        height: () => agentBarHeight(deviceControls.current()),
+      },
+      // Called once the column's page has loaded: the bar's page follows it.
+      showOnLoad: () => {
+        loadAgentBar();
+        return showWanted;
+      },
       closeStep: () => Lifecycle.closeStep(quitting, agentWorksNow()),
       hidden: () => {
         showWanted = false;

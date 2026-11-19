@@ -1,7 +1,13 @@
 // Tests only: lazurio-device. After Shutdown "stop" exits, "linger" never exits, "crash" exits after
-// Ping, "mute" closes its output. "v3": each StartChannel gets Connecting, then the next of
-// LAZURIO_FAKE_DEVICE_OUTCOMES. LAZURIO_FAKE_DEVICE_STOP=silent ignores StopChannel, and
+// Ping, "mute" closes its output. "v3": StartChannel gets Connecting, then the next of
+// LAZURIO_FAKE_DEVICE_OUTCOMES (connected, working, needs-hand-over, refused:<reason>); FAKE_DEVICE_STOP
+// =silent ignores StopChannel; once FAKE_DEVICE_AGENT_FILE exists, its "<id>|<label>" holds the computer.
 // LAZURIO_FAKE_DEVICE_EXIT_AFTER_READY=true exits after DeviceReady without DeviceStopped.
+// @effect-diagnostics-next-line nodeBuiltinImport:off - A fixture outside Effect: a file that appears.
+import * as NodeFS from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - A fixture outside Effect: the file's folder.
+import * as NodePath from "node:path";
+
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import type { ChannelStateSchema } from "@lazurio/app-contracts/device/v1";
 import { decodeFrames, encodeFrame } from "@lazurio/app-contracts/framing";
@@ -56,12 +62,39 @@ const outcomeOf = (outcome: string): ChannelStateInit => {
 };
 
 let idle = 1n;
+
+// An agent takes the computer once the test writes the file, as the helper says on its own.
+const agentFile = process.env["LAZURIO_FAKE_DEVICE_AGENT_FILE"];
+const holdWhenTold = () => {
+  if (agentFile === undefined) return;
+  let held = false;
+  const hold = () => {
+    if (held || !NodeFS.existsSync(agentFile)) return;
+    held = true;
+    watcher.close();
+    const [holderEnvironmentId = "", holderEnvironmentLabel = ""] = NodeFS.readFileSync(
+      agentFile,
+      "utf8",
+    ).split("|");
+    idle += 1n;
+    send({
+      requestId: 0n,
+      kind: {
+        case: "lockState",
+        value: { idle: false, sequence: idle, holderEnvironmentId, holderEnvironmentLabel },
+      },
+    });
+  };
+  const watcher = NodeFS.watch(NodePath.dirname(agentFile), hold);
+  hold();
+};
 const v3 = (requestId: bigint, request: AppKind): boolean => {
   if (!servesV3) return false;
   switch (request.case) {
     case "configureDevice":
       answer(requestId, { case: "deviceReady", value: { contractVersion: 3 } });
       if (process.env["LAZURIO_FAKE_DEVICE_EXIT_AFTER_READY"] === "true") process.exit(1);
+      holdWhenTold();
       return true;
     case "startChannel": {
       const { environmentId } = request.value;
@@ -83,6 +116,7 @@ const v3 = (requestId: bigint, request: AppKind): boolean => {
       return true;
     }
     case "stopAgent":
+      process.stderr.write("lazurio-fake-device stop-agent\n");
       idle += 1n;
       answer(requestId, {
         case: "lockState",

@@ -1,8 +1,18 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { DeviceStatus, DeviceSwitchStatus } from "../shared/bridge.ts";
-import { switchLabel } from "./deviceLabel.ts";
-import type { DeviceText } from "./messages.ts";
+import { problemCode, switchLabel } from "./deviceLabel.ts";
+import { localeOf, messages, type DeviceText } from "./messages.ts";
+
+// An explanation behind "?": the window shows data and actions, and what they mean on request.
+function Help({ label, children }: { readonly label: string; readonly children: string }) {
+  return (
+    <details className="device__help">
+      <summary aria-label={label}>?</summary>
+      <p>{children}</p>
+    </details>
+  );
+}
 
 // One Environment the person added: its switch, its state in words, why it went off and Remove.
 function EnvironmentSwitch({
@@ -19,6 +29,10 @@ function EnvironmentSwitch({
   const on = entry.switch.phase !== "off";
   const settled = entry.switch.phase !== "stopping" && entry.switch.phase !== "unknown";
   const label = switchLabel(entry, text);
+  const code =
+    entry.switch.phase === "off" && entry.switch.problem !== null
+      ? problemCode(entry.switch.problem)
+      : null;
   const act = (call: () => Promise<void>) => {
     setBusy(true);
     call()
@@ -50,6 +64,11 @@ function EnvironmentSwitch({
       {label.problem === null ? null : (
         <p className="shell__reason shell__problem" role="alert" data-switch-problem="">
           {label.problem}
+          {code === null ? null : (
+            <span className="shell__detail" data-switch-code={code}>
+              {text.code.replace("{code}", code)}
+            </span>
+          )}
         </p>
       )}
       <button
@@ -62,6 +81,23 @@ function EnvironmentSwitch({
         {text.remove}
       </button>
     </li>
+  );
+}
+
+// The Agent Desktop window's page (?view=agent-desktop, DevicePanel.ts): it follows Agent Desktop's
+// state like the column did, and reads it once more after subscribing to cover a change between.
+export function AgentDesktopWindow() {
+  const [status, setStatus] = useState<DeviceStatus | null>(null);
+  useEffect(() => {
+    const stop = window.lazurio.device.subscribe(setStatus);
+    void window.lazurio.device.getState().then(setStatus);
+    return stop;
+  }, []);
+  const text = messages[localeOf(navigator.language)].device;
+  return (
+    <main className="shell device-window" data-view="agent-desktop">
+      <AgentDesktopSection status={status} text={text} />
+    </main>
   );
 }
 
@@ -95,7 +131,6 @@ export function AgentDesktopSection({
   };
   return (
     <section aria-label={text.title} className="shell__device" data-device-state={status.state}>
-      <h2>{text.title}</h2>
       {status.state === "starting" ? <p className="shell__state">{text.starting}</p> : null}
       {status.state === "failed" ? (
         <p className="shell__problem" role="alert" data-device-problem="failed">
@@ -140,9 +175,9 @@ export function AgentDesktopSection({
       {/* Without an Environment to add, how to add one, until the list has one. */}
       {status.addable === null ? (
         status.switches.length === 0 ? (
-          <p className="shell__empty" data-device-add="none">
-            {text.addHint}
-          </p>
+          <div className="shell__empty" data-device-add="none">
+            <Help label={text.help}>{text.addHint}</Help>
+          </div>
         ) : null
       ) : (
         <div className="shell__agent" data-device-add={status.addable}>

@@ -5,6 +5,7 @@ import * as Electron from "electron";
 
 import {
   DEVICE_ADD_ENVIRONMENT_CHANNEL,
+  DEVICE_OPEN_WINDOW_CHANNEL,
   DEVICE_REMOVE_ENVIRONMENT_CHANNEL,
   DEVICE_SET_SWITCH_CHANNEL,
   DEVICE_SIGN_OUT_CHANNEL,
@@ -31,6 +32,7 @@ export interface DeviceControls {
   readonly addEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
   readonly removeEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
   readonly signOut: Effect.Effect<void, DeviceSwitchError>;
+  readonly openWindow: Effect.Effect<void>;
 }
 
 const isLocalSender = (event: Electron.IpcMainInvokeEvent): boolean => {
@@ -80,6 +82,9 @@ export const serve = Effect.fn("DeviceIpc.serve")(function* (device: DeviceContr
   );
   yield* handle(DEVICE_REMOVE_ENVIRONMENT_CHANNEL, (argument) =>
     decodeOrigin(argument).pipe(Effect.flatMap(device.removeEnvironment)),
+  );
+  yield* handle(DEVICE_OPEN_WINDOW_CHANNEL, (argument) =>
+    decodeNoArgument(argument).pipe(Effect.andThen(device.openWindow)),
   );
   yield* handle(DEVICE_SIGN_OUT_CHANNEL, (argument) =>
     decodeNoArgument(argument).pipe(Effect.andThen(device.signOut)),

@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { APP_NAME } from "../shared/appName.ts";
 import type { TrayText } from "../ui/messages.ts";
 
 // The app's life outside its window, without Electron so tests can call it: closing the window
@@ -54,8 +55,20 @@ export const showsStatus = (argv: ReadonlyArray<string>): boolean =>
 export const statusShownAfter = (requested: boolean, agentWorks: boolean): boolean =>
   requested || agentWorks;
 
-export const secondStart = (argv: ReadonlyArray<string>): "quit" | "show-status" | "show" =>
-  argv.includes(QUIT_ARGUMENT) ? "quit" : showsStatus(argv) ? "show-status" : "show";
+// `--show-agent-desktop`: the Agent Desktop window opens, at the start or from a second start, so a
+// coordinator can open it over SSH without a click.
+const AGENT_DESKTOP_ARGUMENT = "--show-agent-desktop";
+
+export const secondStart = (
+  argv: ReadonlyArray<string>,
+): "quit" | "show-status" | "agent-desktop" | "show" =>
+  argv.includes(QUIT_ARGUMENT)
+    ? "quit"
+    : showsStatus(argv)
+      ? "show-status"
+      : argv.includes(AGENT_DESKTOP_ARGUMENT)
+        ? "agent-desktop"
+        : "show";
 
 // The app's AppUserModelID on Windows: electron-builder gives the Start menu shortcut the
 // `appId` of electron-builder.yml, and a toast shows only when the app names the same one. The
@@ -82,17 +95,26 @@ export const loginItem = (options: {
 interface TrayActions {
   readonly show: () => void;
   readonly showStatus: () => void;
+  readonly agentDesktop: () => void;
+  readonly stopAgent: () => void;
   readonly quit: () => void;
 }
 
+// Stop only while an agent holds the computer (agentBar.workingAgent).
 export const trayMenu = (
   text: TrayText,
   actions: TrayActions,
+  agentWorking: boolean,
 ): ReadonlyArray<{ readonly label: string; readonly click: () => void }> => [
   { label: text.open, click: actions.show },
   { label: text.status, click: actions.showStatus },
+  { label: text.agentDesktop, click: actions.agentDesktop },
+  ...(agentWorking ? [{ label: text.stopAgent, click: actions.stopAgent }] : []),
   { label: text.quit, click: actions.quit },
 ];
+
+export const trayTooltip = (text: TrayText, agentWorking: boolean): string =>
+  agentWorking ? text.workingTooltip : APP_NAME;
 
 // `<userData>/tray.json`: whether the notice of the first hidden window was shown.
 const NoticeFile = Schema.Struct({ hiddenNoticeShown: Schema.Boolean });

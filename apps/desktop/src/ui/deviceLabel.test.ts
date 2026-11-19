@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import type { DeviceSwitchPhase, DeviceSwitchStatus } from "../shared/bridge.ts";
-import { channelLabel, problemLabel, switchLabel } from "./deviceLabel.ts";
+import { channelLabel, problemCode, problemLabel, switchLabel } from "./deviceLabel.ts";
 import { messages } from "./messages.ts";
 import { APP_NAME } from "../shared/appName.ts";
 
@@ -15,18 +15,18 @@ describe("channelLabel", () => {
     assert.strictEqual(channelLabel({ state: "connected" }, messages.cs.device), "Připojeno");
     assert.strictEqual(
       channelLabel({ state: "refused", reason: "not-paired" }, messages.en.device),
-      "Refused (not-paired)",
+      "The Environment refused the connection",
     );
   });
 
-  it("says why a channel ended and waits for a new hand-over", () => {
+  it("says a channel that needs a new hand-over is reconnecting, with no code in the sentence", () => {
     assert.strictEqual(
       channelLabel({ state: "needs-hand-over", reason: "expired" }, messages.cs.device),
-      "Odpojeno (expired)",
+      "Připojuje se znovu…",
     );
     assert.strictEqual(
       channelLabel({ state: "needs-hand-over", reason: "session_ended" }, messages.en.device),
-      "Disconnected (session_ended)",
+      "Reconnecting…",
     );
   });
 
@@ -107,7 +107,7 @@ describe("switchLabel", () => {
     assert.strictEqual(
       switchLabel(entry({ phase: "retrying", cause: "auth-unavailable" }), messages.en.device)
         .state,
-      "Lazurio Auth is not answering. Trying again.",
+      "Lazurio is not answering. Trying again.",
     );
     assert.strictEqual(
       switchLabel(entry({ phase: "channel" }, { state: "connected" }), messages.cs.device).state,
@@ -158,14 +158,32 @@ describe("switchLabel", () => {
       ] as const) {
         assert.notInclude(problemLabel({ from: "auth", reason }, text), "{");
       }
-      assert.include(
-        problemLabel({ from: "helper", reason: "upgrade_refused", httpStatus: 400 }, text),
-        "HTTP 400",
-      );
-      assert.include(
-        problemLabel({ from: "helper", reason: "something_new", httpStatus: 0 }, text),
-        "something_new",
-      );
+      // A sentence for the person; the code goes beside it, for whoever helps.
+      for (const problem of [
+        { from: "helper", reason: "upgrade_refused", httpStatus: 400 },
+        { from: "helper", reason: "hand_over_refused", httpStatus: 401 },
+        { from: "helper", reason: "something_new", httpStatus: 0 },
+      ] as const) {
+        const sentence = problemLabel(problem, text);
+        assert.notMatch(sentence, /[{_]|HTTP|\(/u);
+      }
+    }
+    assert.strictEqual(
+      problemCode({ from: "helper", reason: "upgrade_refused", httpStatus: 400 }),
+      "upgrade_refused 400",
+    );
+    assert.strictEqual(
+      problemCode({ from: "helper", reason: "something_new", httpStatus: 0 }),
+      "something_new",
+    );
+    assert.isNull(problemCode({ from: "auth", reason: "signed-out" }));
+  });
+
+  it("never names Lazurio Auth or shows a bare code to the person", () => {
+    for (const text of [messages.cs.device, messages.en.device]) {
+      const shown = JSON.stringify(text);
+      assert.notInclude(shown, "Lazurio Auth");
+      assert.notMatch(shown, /\((\{reason\}|HTTP)/u);
     }
   });
 });
