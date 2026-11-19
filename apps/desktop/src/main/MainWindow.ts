@@ -218,15 +218,17 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
     showCover(`${LOCAL_ENTRY}${problemQuery(problem)}#waiting`);
     options.outcome(outcome);
   };
-  // A refused navigation ends without any failure, and a page that shows stays as it is; only a
-  // view that has shown nothing yet would stay blank.
+  // A refused navigation ends without any failure: a page that shows stays as it is, but in place
+  // of nothing or of the app's page (a Retry refused, review of #66) the reason must show.
   onMainFrameRefused(contents, (refused) => {
     const inBrowser = destinationOf(refused.address)._tag === "SystemBrowser";
-    if (lastShown !== undefined) return options.outcome({ outcome: "refused", inBrowser });
+    if (lastShown !== undefined && covered === undefined) {
+      return options.outcome({ outcome: "refused", inBrowser });
+    }
     showProblem(
       { kind: inBrowser ? "browser" : "refused", host: hostOf(refused.address) },
       { outcome: "refused", inBrowser },
-      options.firstAddress,
+      lastShown ?? options.firstAddress,
     );
   });
   contents.on("did-navigate", (_event, address, responseCode) => {

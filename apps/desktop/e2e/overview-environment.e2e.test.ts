@@ -230,6 +230,18 @@ describe("Lazurio App GEN4 opening an Environment from the Overview", () => {
       code: 407,
       text: "",
     });
+    // The app's page shows once it has loaded.
+    await app.evaluate(async ({ BaseWindow }) => {
+      const coverView = BaseWindow.getAllWindows()[0]?.contentView.children[2] as
+        | Electron.WebContentsView
+        | undefined;
+      if (coverView === undefined) throw new Error("no cover view");
+      while (!coverView.getVisible() || !coverView.webContents.getURL().includes("problem=proxy")) {
+        await new Promise<void>((resolve) => {
+          coverView.webContents.once("did-finish-load", () => setImmediate(resolve));
+        });
+      }
+    });
     const cover = app.windows().find((window) => window.url().includes("problem=proxy"));
     if (cover === undefined) throw new Error("no cover page");
     await cover.locator('main[data-problem="proxy"]').waitFor();

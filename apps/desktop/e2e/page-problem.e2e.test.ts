@@ -138,4 +138,36 @@ describe("Lazurio App GEN4 when the window's page does not show", () => {
       responseCode: 200,
     });
   });
+
+  it("says a Retry refused a redirect continues in the browser, and Retry then shows the page", async () => {
+    serves = "nothing";
+    const failed = app.evaluate(({ BaseWindow }) => {
+      const remote = BaseWindow.getAllWindows()[0]?.contentView.children[1] as
+        | Electron.WebContentsView
+        | undefined;
+      remote?.webContents.reload();
+      return new Promise<void>((resolve) => {
+        remote?.webContents.once("did-fail-load", () => resolve());
+      });
+    });
+    await failed;
+    const cover = coverPage();
+    await cover.locator('main[data-problem="failed"]').waitFor();
+
+    serves = "elsewhere";
+    await cover.locator('[data-action="page-retry"]').click();
+    await cover.locator('main[data-problem="browser"]').waitFor();
+    const covered = await viewsOnceShowing("cover");
+    assert.isFalse(covered.remoteVisible);
+    assert.include(covered.coverUrl, "problem=browser");
+    assert.deepStrictEqual((await cover.evaluate(() => window.lazurio.status())).page, {
+      outcome: "refused",
+      inBrowser: true,
+    });
+
+    serves = "page";
+    await cover.locator('[data-action="page-retry"]').click();
+    const shown = await viewsOnceShowing("page");
+    assert.isTrue(shown.remoteVisible);
+  });
 });
