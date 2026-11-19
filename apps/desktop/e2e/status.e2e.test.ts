@@ -16,6 +16,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 const page = Promise.withResolvers<void>();
 const pageRequested = Promise.withResolvers<void>();
@@ -68,7 +69,7 @@ beforeAll(async () => {
       ]),
     },
   });
-  shell = await app.firstWindow();
+  shell = await columnPage(app);
 });
 
 afterAll(async () => {
@@ -83,12 +84,16 @@ afterAll(async () => {
 describe("Lazurio App GEN4 status", () => {
   it("shows a tailnet change that happens while its main window is still opening", async () => {
     const tailnet = shell.locator('[data-tailnet="e2e"]');
-    await shell.locator('main[data-status="live"]').waitFor();
+    // The status column is hidden by default (#61), so its page is waited for as loaded, not as
+    // visible: on Windows a hidden view's elements are not visible.
+    await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
     await pageRequested.promise;
     assert.notStrictEqual(await tailnet.getAttribute("data-state"), "running");
 
     running.resolve();
-    await shell.locator('[data-tailnet="e2e"][data-state="running"]').waitFor({ timeout: 10_000 });
+    await shell
+      .locator('[data-tailnet="e2e"][data-state="running"]')
+      .waitFor({ state: "attached", timeout: 10_000 });
     page.resolve();
   });
 });

@@ -9,6 +9,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 let userData: string;
 let app: ElectronApplication;
@@ -35,7 +36,7 @@ beforeAll(async () => {
       LAZURIO_FAKE_DEVICE_EXIT_AFTER_READY: "true",
     },
   });
-  shell = await app.firstWindow();
+  shell = await columnPage(app);
 });
 
 afterAll(async () => {

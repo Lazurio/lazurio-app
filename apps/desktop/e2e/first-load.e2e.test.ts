@@ -14,6 +14,7 @@ import { _electron, type ElectronApplication, type Page } from "playwright-core"
 
 import { selfSigned } from "./certificate.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 const PAGE = "https://launchpad.e2e.lazurio.io/";
 
@@ -80,7 +81,7 @@ beforeAll(async () => {
       ]),
     },
   });
-  shell = await app.firstWindow();
+  shell = await columnPage(app);
 });
 
 afterAll(async () => {

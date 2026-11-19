@@ -16,7 +16,7 @@ import {
   type DeviceStatus,
 } from "../src/shared/bridge.ts";
 
-import { localPage } from "./local-page.ts";
+import { columnPage, localPage } from "./local-page.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const HOSTILE_PAGE = `<!doctype html><title>hostile</title><p id="hostile">hostile</p>`;
@@ -54,7 +54,7 @@ beforeAll(async () => {
     },
   });
   app.process().stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
-  shell = await app.firstWindow();
+  shell = await columnPage(app);
 });
 
 afterAll(async () => {
@@ -303,6 +303,7 @@ describe("Lazurio App GEN4", () => {
       tailnets: [{ tailnet: "e2e", state: "running", addresses: ["100.64.0.1"] }],
       networkMissing: false,
       updates: { channel: "latest", state: { phase: "off", reason: "unpackaged" } },
+      page: { outcome: "none" },
     };
     await app.evaluate(
       ({ webContents }, { channel, status }) => {

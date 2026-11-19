@@ -20,13 +20,28 @@ let failNextConnect = process.env["LAZURIO_FAKE_FAIL_FIRST_CONNECT"] === "true";
 // the Organization has not approved yet, and works once the test removes it.
 const refuseWhile = process.env["LAZURIO_FAKE_REFUSE_WHILE"];
 const CREDENTIALS = `Basic ${btoa("e2e:e2e")}`;
+// LAZURIO_FAKE_SLOW_PLAIN_CHALLENGE_MS: the challenge to a plain HTTP request comes this late.
+const slowPlainChallenge = Number(process.env["LAZURIO_FAKE_SLOW_PLAIN_CHALLENGE_MS"] ?? "0");
+// LAZURIO_FAKE_ANSWERED_URL: a GET to it once a plain request came with the credentials.
+const answeredUrl = process.env["LAZURIO_FAKE_ANSWERED_URL"];
 
 // The proxy asks for its credentials as the real one does, then tunnels to the upstream.
 const startProxy = async (target: string): Promise<number> => {
   const [host = "", port = ""] = target.split(":");
-  const proxy = NodeHttp.createServer((_request, response) => {
+  // As the real proxy: the challenge first, for every request, and only CONNECT after it.
+  const proxy = NodeHttp.createServer((request, response) => {
+    if (request.headers["proxy-authorization"] !== CREDENTIALS) {
+      // @effect-diagnostics-next-line globalTimers:off - The fake proxy answers late on purpose.
+      setTimeout(() => {
+        response.writeHead(407, { "proxy-authenticate": 'Basic realm="Lazurio App"' });
+        response.end();
+      }, slowPlainChallenge);
+      return;
+    }
     response.writeHead(405);
     response.end();
+    // @effect-diagnostics-next-line globalFetch:off - A fixture outside Effect, as small as it can be.
+    if (answeredUrl !== undefined) void fetch(answeredUrl).catch(() => undefined);
   });
   proxy.on("connect", (request: NodeHttp.IncomingMessage, client: NodeNet.Socket) => {
     if (request.headers["proxy-authorization"] !== CREDENTIALS) {

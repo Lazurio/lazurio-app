@@ -244,10 +244,34 @@ body {
 }
 
 .waiting p {
-  margin: 0;
+  margin: 0 0 8px;
   color: var(--muted);
   line-height: 1.5;
   text-wrap: pretty;
+  /* A host has no spaces to wrap at. */
+  overflow-wrap: anywhere;
+}
+
+.waiting .waiting__code {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.waiting__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.waiting button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.waiting .waiting__secondary {
+  background: transparent;
+  color: var(--text);
 }
 
 /* The status column's head: the app's name with Hide, what the column is, the version and Copy. */

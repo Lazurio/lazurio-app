@@ -14,6 +14,7 @@ import { _electron, type ElectronApplication, type Page } from "playwright-core"
 import { APP_NAME } from "../src/shared/appName.ts";
 import { STATUS_CHANGED_CHANNEL, type AppStatus } from "../src/shared/bridge.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 let server: NodeHttp.Server;
 let userData: string;
@@ -41,7 +42,7 @@ beforeAll(async () => {
       LAZURIO_APP_E2E_REMOTE_URL: `http://127.0.0.1:${address.port}/`,
     },
   });
-  shell = await app.firstWindow();
+  shell = await columnPage(app);
   await shell.locator('main[data-status="live"]').waitFor();
   // The helper programs are folded under the technical details; this test measures their rows.
   await shell.locator("[data-details] summary").click();
@@ -196,6 +197,7 @@ describe("Lazurio App GEN4 with a remote page", () => {
       ],
       networkMissing: false,
       updates: { channel: "nightly", state: { phase: "off", reason: "unpackaged" } },
+      page: { outcome: "none" },
     };
     await app.evaluate(
       ({ webContents }, { channel, status }) => {

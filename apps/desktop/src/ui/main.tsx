@@ -11,7 +11,7 @@ import "./styles.css";
 // One bundle for every local view; its address picks the page (view.ts).
 function LocalPage() {
   switch (viewOf(location.search, location.hash)) {
-    // In the remote page's place while its tailnet cannot reach it, without a bridge.
+    // In the remote page's place while it cannot show: waiting for its tailnet, or why it failed.
     case "waiting":
       return <Waiting />;
     case "agent-bar":

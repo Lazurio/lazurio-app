@@ -5,9 +5,11 @@ import {
   type ProxyEndpoint,
 } from "@lazurio/app-contracts/tailnet/v1";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -161,6 +163,9 @@ export const isSafeLoginUrl = (loginUrl: string, controlUrl: string): boolean =>
   }
 };
 
+const isHelperProxy = (authInfo: Electron.AuthInfo, proxy: ProxyEndpoint): boolean =>
+  authInfo.isProxy && authInfo.host === proxy.host && authInfo.port === proxy.port;
+
 // Answers the proxy's challenge with its credentials, and no other proxy's, for the scope's life.
 const answerProxyChallenge = (proxy: ProxyEndpoint) =>
   Effect.acquireRelease(
@@ -172,9 +177,7 @@ const answerProxyChallenge = (proxy: ProxyEndpoint) =>
         authInfo: Electron.AuthInfo,
         callback: (username?: string, password?: string) => void,
       ) => {
-        if (!authInfo.isProxy || authInfo.host !== proxy.host || authInfo.port !== proxy.port) {
-          return;
-        }
+        if (!isHelperProxy(authInfo, proxy)) return;
         event.preventDefault();
         callback(proxy.username, proxy.password);
       };
@@ -183,6 +186,47 @@ const answerProxyChallenge = (proxy: ProxyEndpoint) =>
     }),
     (listener) => Effect.sync(() => Electron.app.off("login", listener)),
   );
+
+// A service worker's navigation preload cannot answer the proxy's challenge, and the window then
+// shows the proxy's empty 407 (Lazurio/lazurio-app#36). One answered request of the app's own puts
+// the credentials in the session, which sends them at once from then on; plain HTTP ends at the
+// proxy (it tunnels only CONNECT), so nothing reaches a tailnet.
+const primeProxyCredentials = (session: Electron.Session, proxy: ProxyEndpoint, domain: string) =>
+  Effect.callback<boolean>((resume) => {
+    let answered = false;
+    const request = Electron.net.request({
+      url: `http://${domain}/`,
+      session,
+      redirect: "manual",
+      useSessionCookies: false,
+    });
+    request.on("login", (authInfo, callback) => {
+      if (!isHelperProxy(authInfo, proxy)) return callback();
+      answered = true;
+      callback(proxy.username, proxy.password);
+    });
+    request.on("response", (response) => {
+      response.on("data", () => {});
+      response.on("end", () => resume(Effect.succeed(answered)));
+      response.on("error", () => resume(Effect.succeed(answered)));
+    });
+    request.on("redirect", () => {
+      request.abort();
+      resume(Effect.succeed(answered));
+    });
+    request.on("error", () => resume(Effect.succeed(answered)));
+    request.end();
+    return Effect.sync(() => request.abort());
+  }).pipe(
+    Effect.timeoutOption(PRIME_GIVES_UP),
+    Effect.map((answered) => Option.getOrElse(answered, () => false)),
+    Effect.tap((answered) => Effect.logInfo("tailnet proxy credentials", { answered })),
+  );
+
+// A request to the loopback proxy takes milliseconds. The start waits for it this long, the
+// request itself runs on until it gives up, and one without an answered challenge goes again.
+const PRIME_WITHIN = "5 seconds";
+const PRIME_GIVES_UP = "30 seconds";
 
 export interface TailnetOptions {
   readonly connection: HelperConnection;
@@ -242,6 +286,16 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
       options.session.resolveProxy(`https://${normalizeDomain(domain)}/`),
     );
     yield* Effect.logInfo("tailnet proxy", { domain, chosen });
+  }
+  const firstDomain = domains.map(normalizeDomain).find((domain) => domain !== "");
+  // No window navigates before the answer, within PRIME_WITHIN (review of #66); the requests go
+  // on beside the start until one challenge is answered.
+  if (firstDomain !== undefined) {
+    const primed = yield* primeProxyCredentials(options.session, proxy, firstDomain).pipe(
+      Effect.repeat({ schedule: Schedule.spaced(PRIME_WITHIN), until: (answered) => answered }),
+      Effect.forkScoped,
+    );
+    yield* Fiber.join(primed).pipe(Effect.timeoutOption(PRIME_WITHIN));
   }
 
   let board = startingBoard(options.tailnets.map((tailnet) => tailnet.tailnet));

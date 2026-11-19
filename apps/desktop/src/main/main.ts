@@ -23,7 +23,12 @@ import * as Electron from "electron";
 
 import { agentBarHeight, workingAgent } from "../shared/agentBar.ts";
 import { APP_NAME } from "../shared/appName.ts";
-import { STATUS_CHANGED_CHANNEL, type AppStatus, type UpdatesOffReason } from "../shared/bridge.ts";
+import {
+  STATUS_CHANGED_CHANNEL,
+  type AppStatus,
+  type PageOutcome,
+  type UpdatesOffReason,
+} from "../shared/bridge.ts";
 import { statusText } from "../shared/statusText.ts";
 import { localeOf, messages } from "../ui/messages.ts";
 
@@ -382,6 +387,8 @@ const program = Effect.gen(function* () {
   // the page (AgentBar), not by opening the column.
   let statusShown = Lifecycle.showsStatus(process.argv);
   let windowControls = Option.none<MainWindow.MainWindowControls>();
+  // How the window's page last ended, for Copy status (MainWindow.pageOutcome).
+  let page: PageOutcome = { outcome: "none" };
   let refreshMenu = () => {};
   // Set once Agent Desktop's controls exist; until then no agent can work.
   let agentWorksNow = () => false;
@@ -625,6 +632,7 @@ const program = Effect.gen(function* () {
     tailnets: tailnets.current(),
     networkMissing: joining.networkMissing,
     updates: updates.current(),
+    page,
   });
   // Every change of status goes to every local window, from before the first window exists. A
   // window reads the status after subscribing to these messages, so no change falls between.
@@ -760,6 +768,9 @@ const program = Effect.gen(function* () {
         at: DateTime.formatIso(now),
       }),
     ),
+    retryPage: Effect.promise(() =>
+      Option.isSome(windowControls) ? windowControls.value.retryPage() : Promise.resolve(),
+    ),
   });
   // While an agent holds the computer, or the helper was lost and nothing confirmed that its work
   // ended, the status column with Stop or its warning shows by itself and stays in view
@@ -828,6 +839,10 @@ const program = Effect.gen(function* () {
       whenReachable: tailnets.whenReachable,
       pageShown: (url) => {
         if (Option.isSome(switches)) switches.value.pageShown(url);
+      },
+      pageOutcome: (outcome) => {
+        page = outcome;
+        broadcastStatus();
       },
       servedByTailnet: (address) => {
         const url = URL.parse(address);

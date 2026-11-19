@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
+import { columnPage } from "./local-page.ts";
 
 const APP_DIRECTORY = NodePath.resolve(import.meta.dirname, "..");
 const osSandbox = process.env["LAZURIO_APP_E2E_OS_SANDBOX"] === "true";
@@ -43,7 +44,7 @@ const launch = async (userData: string, args: ReadonlyArray<string> = []): Promi
   });
   const child = app.process();
   child.stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
-  const shell = await app.firstWindow();
+  const shell = await columnPage(app);
   await shell.locator('main[data-status="live"]').waitFor();
   await shell
     .locator('[data-helper="lazurio-tailnet"][data-state="ready"]')

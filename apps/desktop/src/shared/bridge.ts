@@ -19,6 +19,8 @@ export const DEVICE_REMOVE_ENVIRONMENT_CHANNEL = "lazurio:device-remove-environm
 export const DEVICE_SIGN_OUT_CHANNEL = "lazurio:device-sign-out";
 export const STATUS_PANEL_CHANNEL = "lazurio:status-panel";
 export const COPY_STATUS_CHANNEL = "lazurio:copy-status";
+// Loads the Environment's page again from the page that says why it did not show.
+export const RETRY_PAGE_CHANNEL = "lazurio:retry-page";
 // Opens the Agent Desktop window (DevicePanel.ts), from the bar that says an agent works.
 export const DEVICE_OPEN_WINDOW_CHANNEL = "lazurio:device-open-window";
 
@@ -52,6 +54,17 @@ type TailnetStopReason =
   | "key-not-saved"
   | "key-unreadable"
   | "state-unreadable";
+
+// How the last navigation of the window's page ended, for Copy status: codes only, never an
+// address. `code` is Chromium's network error, `responseCode` the page's HTTP status.
+export type PageOutcome =
+  | { readonly outcome: "none" }
+  | { readonly outcome: "shown"; readonly responseCode: number }
+  | { readonly outcome: "waiting"; readonly code: number }
+  | { readonly outcome: "failed"; readonly code: number }
+  | { readonly outcome: "proxy-refused" }
+  | { readonly outcome: "refused"; readonly inBrowser: boolean }
+  | { readonly outcome: "crashed"; readonly reason: string };
 
 export type UpdateChannelName = "latest" | "nightly";
 
@@ -172,6 +185,7 @@ export interface AppStatus {
   // Organization, and none joined in its place.
   readonly networkMissing: boolean;
   readonly updates: UpdatesStatus;
+  readonly page: PageOutcome;
 }
 
 export interface LazurioBridge {
@@ -185,6 +199,8 @@ export interface LazurioBridge {
   readonly setStatusPanel: (shown: boolean) => Promise<void>;
   // Copies the app's status as text without secrets (statusText.ts) to the clipboard.
   readonly copyStatus: () => Promise<void>;
+  // Loads the Environment's page again; settles once the attempt has shown or failed.
+  readonly retryPage: () => Promise<void>;
   // Agent Desktop. Only the app's local windows have it, never a remote page.
   readonly device: DeviceBridge;
 }

@@ -56,6 +56,24 @@ export const electronObserver: NavigationObserver = {
 // (Navigation.step). A web contents the app did not register loads nothing.
 const views = new WeakMap<Electron.WebContents, Tracked>();
 
+// Who learns that a view's main frame was refused an address (MainWindow): a refused redirect
+// ends the load with ERR_ABORTED, which alone does not say why.
+export interface MainFrameRefusal {
+  readonly address: string;
+  readonly step: "Navigate" | "Redirect";
+}
+const refusalListeners = new WeakMap<Electron.WebContents, (refusal: MainFrameRefusal) => void>();
+
+export const onMainFrameRefused = (
+  contents: Electron.WebContents,
+  listener: (refusal: MainFrameRefusal) => void,
+): void => {
+  refusalListeners.set(contents, listener);
+};
+
+// An address's host for a log line, never its path, query or fragment.
+export const hostOf = (address: string): string => URL.parse(address)?.hostname ?? "";
+
 export const registerView = (contents: Electron.WebContents, kind: ViewKind): void => {
   views.set(contents, track(kind));
 };
@@ -97,6 +115,16 @@ const guard = (observer: NavigationObserver) => (contents: Electron.WebContents)
     if (advance(request)) return;
     event.preventDefault();
     observer.refused(request.address, request.frame);
+    if (request.frame === "main") {
+      refusalListeners.get(contents)?.({ address: request.address, step: request._tag });
+    }
+    Effect.runFork(
+      Effect.logWarning("navigation refused", {
+        host: hostOf(request.address),
+        frame: request.frame,
+        step: request._tag,
+      }),
+    );
     if (request.frame === "main" && destinationOf(request.address)._tag === "SystemBrowser") {
       observer.openExternally(request.address);
     }
