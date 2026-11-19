@@ -189,14 +189,13 @@ const testHooks = Effect.gen(function* () {
   };
 });
 
-// The tailnets a packaged app joins (TailnetDirectory, ADR 0008): on Windows an IT policy, when the
-// computer's IT set one (TailnetPolicy, Lazurio App (Alpha) at a client), and the directory built into the
-// app otherwise. Development may set them as a JSON array of Tailnet.TailnetConfig in
-// LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
+// The tailnets a packaged app joins (ADR 0008): on Windows IT's policy or the person's setting,
+// else the built-in directory where TailnetDirectory.builtInAllowed lets it (not a stable Windows
+// build). Development may set them as JSON in LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
 const packagedDirectory = Effect.gen(function* () {
   const path = yield* Path.Path;
   const builtInFile = path.join(process.resourcesPath, "tailnets", "directory.json");
-  // A stable build joins no built-in network (TailnetDirectory.builtInAllowed).
+  // A stable Windows build joins no built-in network; a nightly and any build off Windows do.
   const platform = yield* HostProcess.Platform;
   const builtIn = TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform)
     ? TailnetDirectory.fromFile(builtInFile, NodeOS.hostname())
