@@ -104,7 +104,8 @@ export const pacDataUrl = (script: string): string =>
 export const statusOf = (state: NodeState): TailnetStatus => {
   switch (state.state.case) {
     case "needsLogin":
-      return { tailnet: state.tailnet, state: "needs-login" };
+      // Whether its address can be copied is the board's to say (withSignIns).
+      return { tailnet: state.tailnet, state: "needs-login", canCopySignIn: false };
     case "running":
       return { tailnet: state.tailnet, state: "running", addresses: state.state.value.addresses };
     case "stopped":
@@ -162,6 +163,48 @@ export const isSafeLoginUrl = (loginUrl: string, controlUrl: string): boolean =>
     return false;
   }
 };
+
+// The sign-in address a person may copy, by tailnet: the browser leaves it for OIDC at once.
+// Only the newest report counts, and only needsLogin on the node's own control server
+// (isSafeLoginUrl); any other report drops it. It goes only to the clipboard on request,
+// never to a window, the log or the status text.
+export const signInsAfter = (
+  signIns: ReadonlyMap<string, string>,
+  state: NodeState,
+  controlUrl: string,
+): ReadonlyMap<string, string> => {
+  const next = new Map(signIns);
+  if (state.state.case === "needsLogin" && isSafeLoginUrl(state.state.value.loginUrl, controlUrl)) {
+    next.set(state.tailnet, state.state.value.loginUrl);
+  } else {
+    next.delete(state.tailnet);
+  }
+  return next;
+};
+
+// Only a tailnet whose status still waits for sign-in keeps its address; a failed start, for one,
+// stops the node without a report of its own.
+export const keptSignIns = (
+  signIns: ReadonlyMap<string, string>,
+  statuses: ReadonlyArray<TailnetStatus>,
+): ReadonlyMap<string, string> =>
+  new Map(
+    [...signIns].filter(([tailnet]) =>
+      statuses.some((status) => status.tailnet === tailnet && status.state === "needs-login"),
+    ),
+  );
+
+// The statuses for the windows: a tailnet that waits for sign-in says whether its address can be
+// copied, never the address itself.
+export const withSignIns = (
+  statuses: ReadonlyArray<TailnetStatus>,
+  signIns: ReadonlyMap<string, string>,
+): ReadonlyArray<TailnetStatus> =>
+  statuses.map((status) =>
+    status.state === "needs-login"
+      ? { ...status, canCopySignIn: signIns.has(status.tailnet) }
+      : status,
+  );
 
 const isHelperProxy = (authInfo: Electron.AuthInfo, proxy: ProxyEndpoint): boolean =>
   authInfo.isProxy && authInfo.host === proxy.host && authInfo.port === proxy.port;
@@ -249,6 +292,9 @@ export interface Tailnets {
   // The tailnet helper's proxy, with the credentials of its current start, for a host in a
   // tailnet's domains; none for a host no tailnet serves (proxyForHost).
   readonly proxyFor: (host: string) => Option.Option<ProxyEndpoint>;
+  // The newest safe sign-in address of a tailnet that waits for sign-in, for the clipboard only
+  // (signInsAfter); none for any other tailnet.
+  readonly signInAddress: (tailnet: string) => Option.Option<string>;
 }
 
 // Tailnets of an app that runs no tailnet helper: every address is reachable as it is.
@@ -257,6 +303,7 @@ export const noTailnets: Tailnets = {
   subscribe: () => () => {},
   whenReachable: () => Effect.void,
   proxyFor: () => Option.none(),
+  signInAddress: () => Option.none(),
 };
 
 // Runs the tailnets for as long as the scope lives.
@@ -299,10 +346,12 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
   }
 
   let board = startingBoard(options.tailnets.map((tailnet) => tailnet.tailnet));
+  let signIns: ReadonlyMap<string, string> = new Map();
   const listeners = new Set<() => void>();
   const change = (next: TailnetBoard) =>
     Effect.sync(() => {
       board = next;
+      signIns = keptSignIns(signIns, board.statuses);
       for (const listener of listeners) listener();
     });
   const controlUrlOf = (tailnet: string) =>
@@ -322,7 +371,12 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
           ? openSignIn(state.tailnet, state.state.value.loginUrl)
           : Effect.void;
       return signIn.pipe(
-        Effect.andThen(Effect.suspend(() => change(afterEvent(board, statusOf(state))))),
+        Effect.andThen(
+          Effect.suspend(() => {
+            signIns = signInsAfter(signIns, state, controlUrlOf(state.tailnet));
+            return change(afterEvent(board, statusOf(state)));
+          }),
+        ),
       );
     }),
     Effect.forkScoped,
@@ -375,7 +429,7 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
   const runs = (tailnet: string) =>
     board.statuses.some((status) => status.tailnet === tailnet && status.state === "running");
   const tailnets: Tailnets = {
-    current: () => board.statuses,
+    current: () => withSignIns(board.statuses, signIns),
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -400,6 +454,7 @@ export const run = Effect.fn("Tailnet.run")(function* (options: TailnetOptions) 
       });
     },
     proxyFor: (host) => proxyForHost(options.tailnets, proxy, host),
+    signInAddress: (tailnet) => Option.fromUndefinedOr(signIns.get(tailnet)),
   };
   return tailnets;
 });

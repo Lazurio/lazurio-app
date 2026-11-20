@@ -1,4 +1,4 @@
-import { create } from "@bufbuild/protobuf";
+import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { NodeStateSchema, ProxyEndpointSchema } from "@lazurio/app-contracts/tailnet/v1";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -10,12 +10,15 @@ import {
   afterReply,
   decodeTailnets,
   isSafeLoginUrl,
+  keptSignIns,
   pacDataUrl,
   pacScript,
   proxyForHost,
   servingTailnet,
+  signInsAfter,
   startingBoard,
   statusOf,
+  withSignIns,
 } from "./Tailnet.ts";
 import { fromText } from "./TailnetDirectory.ts";
 
@@ -90,7 +93,7 @@ describe("statusOf", () => {
         tailnet: "example",
         state: { case: "needsLogin", value: { loginUrl: "https://x/" } },
       }),
-      { tailnet: "example", state: "needs-login" },
+      { tailnet: "example", state: "needs-login", canCopySignIn: false },
     );
     assert.deepStrictEqual(
       state({
@@ -149,10 +152,71 @@ describe("isSafeLoginUrl", () => {
   });
 });
 
+describe("the sign-in addresses", () => {
+  const control = "https://headscale.example-org.lazurio.io";
+  const address = `${control}/register/abc`;
+  const report = (init: MessageInitShape<typeof NodeStateSchema>) =>
+    create(NodeStateSchema, { tailnet: "example", ...init });
+  const waiting = signInsAfter(
+    new Map(),
+    report({ state: { case: "needsLogin", value: { loginUrl: address } } }),
+    control,
+  );
+
+  it("keeps the address while the node waits for sign-in", () => {
+    assert.strictEqual(waiting.get("example"), address);
+    assert.deepStrictEqual(
+      withSignIns([{ tailnet: "example", state: "needs-login", canCopySignIn: false }], waiting),
+      [{ tailnet: "example", state: "needs-login", canCopySignIn: true }],
+    );
+  });
+
+  it("drops it once the node runs, stops or starts again", () => {
+    for (const next of [
+      report({ state: { case: "running", value: { addresses: ["100.64.0.9"] } } }),
+      report({ state: { case: "stopped", value: { reason: "gone" } } }),
+      report({ state: { case: "starting", value: {} } }),
+    ]) {
+      assert.isFalse(signInsAfter(waiting, next, control).has("example"), next.state.case);
+    }
+  });
+
+  it("drops it when the board no longer waits for sign-in, as after a failed start", () => {
+    assert.isFalse(
+      keptSignIns(waiting, [{ tailnet: "example", state: "stopped", problem: "refused" }]).has(
+        "example",
+      ),
+    );
+    assert.isTrue(
+      keptSignIns(waiting, [{ tailnet: "example", state: "needs-login", canCopySignIn: true }]).has(
+        "example",
+      ),
+    );
+  });
+
+  it("keeps no address outside the tailnet's control server, nor an earlier one after it", () => {
+    for (const unsafe of [
+      "https://evil.example/register/abc",
+      "http://headscale.example-org.lazurio.io/register/abc",
+    ]) {
+      const next = signInsAfter(
+        waiting,
+        report({ state: { case: "needsLogin", value: { loginUrl: unsafe } } }),
+        control,
+      );
+      assert.isFalse(next.has("example"), unsafe);
+      assert.deepStrictEqual(
+        withSignIns([{ tailnet: "example", state: "needs-login", canCopySignIn: false }], next),
+        [{ tailnet: "example", state: "needs-login", canCopySignIn: false }],
+      );
+    }
+  });
+});
+
 describe("the tailnet board", () => {
   const starting = { tailnet: "example", state: "starting" } as const;
   const running = { tailnet: "example", state: "running", addresses: ["100.64.0.9"] } as const;
-  const login = { tailnet: "example", state: "needs-login" } as const;
+  const login = { tailnet: "example", state: "needs-login", canCopySignIn: false } as const;
   const failed = { tailnet: "example", state: "stopped", problem: "refused" } as const;
 
   it("keeps a node's report when the reply to its start comes after it", () => {

@@ -19,6 +19,9 @@ export const DEVICE_REMOVE_ENVIRONMENT_CHANNEL = "lazurio:device-remove-environm
 export const DEVICE_SIGN_OUT_CHANNEL = "lazurio:device-sign-out";
 export const STATUS_PANEL_CHANNEL = "lazurio:status-panel";
 export const COPY_STATUS_CHANNEL = "lazurio:copy-status";
+// Copies the sign-in address of a tailnet that waits for sign-in; the address stays in the main
+// process.
+export const COPY_TAILNET_SIGN_IN_CHANNEL = "lazurio:copy-tailnet-sign-in";
 // Loads the Environment's page again from the page that says why it did not show.
 export const RETRY_PAGE_CHANNEL = "lazurio:retry-page";
 // Leaves that page for the window's first page, the Overview (#68).
@@ -34,7 +37,12 @@ export type HelperStatus =
 // signed in but is not approved stays "running" without reaching any Environment.
 export type TailnetStatus =
   | { readonly tailnet: string; readonly state: "starting" }
-  | { readonly tailnet: string; readonly state: "needs-login" }
+  | {
+      readonly tailnet: string;
+      readonly state: "needs-login";
+      // Whether the app holds a sign-in address of the node to copy; never the address itself.
+      readonly canCopySignIn: boolean;
+    }
   | {
       readonly tailnet: string;
       readonly state: "running";
@@ -201,6 +209,9 @@ export interface LazurioBridge {
   readonly setStatusPanel: (shown: boolean) => Promise<void>;
   // Copies the app's status as text without secrets (statusText.ts) to the clipboard.
   readonly copyStatus: () => Promise<void>;
+  // Copies the sign-in address of a tailnet that waits for sign-in to the clipboard; fails when
+  // the app holds none.
+  readonly copyTailnetSignIn: (tailnet: string) => Promise<void>;
   // Loads the Environment's page again; settles once the attempt has shown or failed.
   readonly retryPage: () => Promise<void>;
   // Loads the window's first page, the Overview, instead; settles like retryPage.
