@@ -36,6 +36,9 @@ export interface MainWindowOptions {
   // Whether a tailnet serves the address (Tailnet.Tailnets.proxyFor): only such a page waits for
   // its Environment to become reachable, for example for the Organization to approve the Device.
   readonly servedByTailnet: (address: string) => boolean;
+  // Whether the Organization's network is missing (a stable build without a setting): a failed
+  // load then says that, not a host that cannot be found (#81).
+  readonly networkMissing: () => boolean;
   // The window, as soon as it exists, so the tray, a second start or the Dock can show it.
   readonly created: (window: Electron.BaseWindow) => void;
   // Whether the window shows once its page loaded: not at a start with --hidden, unless a second
@@ -185,6 +188,7 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
   readonly cover: Electron.WebContentsView;
   readonly firstAddress: string;
   readonly servedByTailnet: (address: string) => boolean;
+  readonly networkMissing: () => boolean;
   readonly outcome: (outcome: PageOutcome) => void;
 }) {
   const { remote, cover } = options;
@@ -264,7 +268,8 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
       return;
     }
     log(Effect.logWarning("page failed", { host, code, description }));
-    showProblem({ kind: "failed", code, host }, { outcome: "failed", code }, address);
+    const kind = options.networkMissing() ? "network" : "failed";
+    showProblem({ kind, code, host }, { outcome: "failed", code }, address);
   });
   contents.on("render-process-gone", (_event, details) => {
     if (details.reason === "clean-exit") return;
@@ -393,6 +398,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
           cover: waiting,
           firstAddress: options.remoteUrl.value,
           servedByTailnet: options.servedByTailnet,
+          networkMissing: options.networkMissing,
           outcome: options.pageOutcome,
         })
       : undefined;

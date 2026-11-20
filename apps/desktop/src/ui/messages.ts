@@ -21,6 +21,8 @@ export interface Text {
   readonly noTailnets: string;
   // A stable build without the Organization's network.
   readonly networkMissing: string;
+  // The network setting appeared while the app ran: it starts again (SettingWatch.ts, #81).
+  readonly networkFound: string;
   // The heading of the nodes' addresses under the technical details.
   readonly addresses: string;
   readonly starting: string;
@@ -61,6 +63,8 @@ interface PageText {
   readonly browserTitle: string;
   readonly browserLead: string;
   readonly crashedTitle: string;
+  // A load failed while the Organization's network is not set up (#81).
+  readonly networkTitle: string;
   readonly crashedLead: string;
   readonly persists: string;
 }
@@ -223,7 +227,8 @@ const cs: Text = {
   tailnets: "Síť Organizace",
   noTailnets: "Žádná síť",
   addresses: "Adresy v síti",
-  networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Soubor se sítí vám pošle Lazurio nebo Admin vaší Organizace, případně ji nastaví IT. Po jeho spuštění ${APP_NAME} ukončete a spusťte znovu.`,
+  networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Soubor se sítí vám pošle Lazurio nebo Admin vaší Organizace, případně ji nastaví IT. Po jeho spuštění se ${APP_NAME} sama spustí znovu a připojí se.`,
+  networkFound: `Síť vaší Organizace je nastavená. ${APP_NAME} se teď spustí znovu a připojí se.`,
   starting: "Připojuje se",
   "needs-login": "Čeká na přihlášení",
   running: "Připojeno",
@@ -268,6 +273,7 @@ const cs: Text = {
     browserTitle: "Stránka pokračuje v prohlížeči",
     browserLead: `${APP_NAME} otevřela {host} ve vašem prohlížeči. Až tam budete hotovi, zkuste to tady znovu.`,
     crashedTitle: "Stránka Prostředí přestala fungovat",
+    networkTitle: "Síť vaší Organizace zatím není nastavená",
     crashedLead: "Načtěte ji prosím znovu.",
     persists: "Když se to opakuje, otevřete stav aplikace, zkopírujte ho a pošlete podpoře.",
   },
@@ -420,7 +426,8 @@ const en: Text = {
   tailnets: "Organization networks",
   noTailnets: "No network",
   addresses: "Addresses in the network",
-  networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Lazurio or your Organization's Admin sends you the file with the network, or your IT sets it. After running it, quit ${APP_NAME} and start it again.`,
+  networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Lazurio or your Organization's Admin sends you the file with the network, or your IT sets it. Once it has run, ${APP_NAME} starts again by itself and connects.`,
+  networkFound: `Your Organization's network is set up. ${APP_NAME} starts again now and connects.`,
   starting: "Connecting",
   "needs-login": "Waiting for sign-in",
   running: "Connected",
@@ -467,6 +474,7 @@ const en: Text = {
     browserTitle: "The page continues in your browser",
     browserLead: `${APP_NAME} opened {host} in your browser. When you are done there, try again here.`,
     crashedTitle: "The Environment's page stopped working",
+    networkTitle: "Your Organization's network is not set up yet",
     crashedLead: "Please load it again.",
     persists: "If it keeps happening, open the app's status, copy it and send it to support.",
   },

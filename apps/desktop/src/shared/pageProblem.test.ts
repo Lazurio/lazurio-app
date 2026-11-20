@@ -7,6 +7,7 @@ describe("pageProblem", () => {
     const problems: ReadonlyArray<PageProblem> = [
       { kind: "waiting", code: -111, host: "launchpad.ada.example-org.lazurio.io" },
       { kind: "failed", code: -324, host: "launchpad.ada.example-org.lazurio.io" },
+      { kind: "network", code: -105, host: "launchpad.ada.example-org.lazurio.io" },
       { kind: "proxy", host: "launchpad.ada.example-org.lazurio.io" },
       { kind: "refused", host: "evil.example" },
       { kind: "browser", host: "docs.example" },
