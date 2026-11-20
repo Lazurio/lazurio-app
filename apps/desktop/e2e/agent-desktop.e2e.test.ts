@@ -17,7 +17,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
-import { COLUMN_PAGE, localPage } from "./local-page.ts";
+import { columnPage, localPage } from "./local-page.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const ENVIRONMENT_HOST = "launchpad.e2e.lazurio.io";
@@ -207,9 +207,7 @@ const launch = async (fakeHelperSettings: Record<string, string> = {}) => {
   // Every switch lives in the Agent Desktop window, which --show-agent-desktop opens before the
   // column: the column is found by its address.
   shell = await localPage(app, "view=agent-desktop");
-  column =
-    app.windows().find((page) => page.url() === COLUMN_PAGE) ??
-    (await app.waitForEvent("window", { predicate: (page) => page.url() === COLUMN_PAGE }));
+  column = await columnPage(app);
 };
 
 beforeAll(async () => {

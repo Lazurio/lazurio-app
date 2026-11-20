@@ -3,7 +3,7 @@
 // The status column is the page at exactly COLUMN_PAGE.
 import type { ElectronApplication, Page } from "playwright-core";
 
-export const COLUMN_PAGE = "lazurio-app://shell/index.html";
+const COLUMN_PAGE = "lazurio-app://shell/index.html";
 
 // Resolves with the local page whose address has the part (or is exactly it, with `exact`), once it
 // has loaded.
@@ -18,10 +18,12 @@ export const localPage = async (
       const loaded = (contents: Electron.WebContents) =>
         fits(contents.getURL()) && !contents.isLoading();
       if (webContents.getAllWebContents().some(loaded)) return;
+      // isLoading() turns false only at did-stop-loading, after did-finish-load: a page between
+      // the two would otherwise never be seen as loaded.
       await new Promise<void>((resolve) => {
         const watch = (contents: Electron.WebContents) =>
-          contents.on("did-finish-load", () => {
-            if (fits(contents.getURL())) resolve();
+          contents.on("did-stop-loading", () => {
+            if (loaded(contents)) resolve();
           });
         electronApp.on("web-contents-created", (_event, contents) => watch(contents));
         for (const contents of webContents.getAllWebContents()) watch(contents);
