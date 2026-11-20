@@ -164,12 +164,10 @@ export const isSafeLoginUrl = (loginUrl: string, controlUrl: string): boolean =>
   }
 };
 
-// The sign-in addresses a person may copy, by tailnet: the control server sends the system's
-// browser on to its OIDC sign-in at once, so nobody can read the address there afterwards.
-// Only a node's newest report counts: an address of a node that waits for sign-in, and only
-// one on its own control server (isSafeLoginUrl); any other report drops it. The address never
-// goes to a window, the log or the app's status text, only to the clipboard on the person's
-// request.
+// The sign-in address a person may copy, by tailnet: the browser leaves it for OIDC at once.
+// Only the newest report counts, and only needsLogin on the node's own control server
+// (isSafeLoginUrl); any other report drops it. It goes only to the clipboard on request,
+// never to a window, the log or the status text.
 export const signInsAfter = (
   signIns: ReadonlyMap<string, string>,
   state: NodeState,
