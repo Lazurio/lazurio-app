@@ -75,12 +75,9 @@ export const keptNames = (
   };
 };
 
-// The Environment's own names where it gave them, else each from its address.
+// The Environment's own names where it gave them. Its name falls back to the address; its
+// Organization does not, since an address's label ("Lazurioexampleorganization") is no name.
 export const namedEnvironment = (origin: string, names: EnvironmentNames): EnvironmentName => {
-  const fallback = environmentName(origin);
   const own = keptNames(origin, names, {});
-  return {
-    name: own.name ?? fallback.name,
-    organization: own.organization ?? fallback.organization,
-  };
+  return { name: own.name ?? environmentName(origin).name, organization: own.organization ?? null };
 };
