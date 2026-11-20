@@ -1,0 +1,76 @@
+# The Bitwarden trial (issue #8, tools/bitwarden-trial): Bitwarden's own Chromium build in
+# Electron 44 with electron-chrome-extensions, under each system's sandbox. No part of the app;
+# evidence for the proposed docs/adr/0004. Runs when the trial changes, and on demand.
+name: Bitwarden trial
+
+on:
+  pull_request:
+    paths:
+      - tools/bitwarden-trial/**
+      - .github/workflows/bitwarden-trial.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bitwarden-trial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trial:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Bitwarden's release browser-v2026.10.2, the asset's SHA-256 as GitHub records it.
+      BITWARDEN_URL: https://github.com/bitwarden/clients/releases/download/browser-v2026.10.2/dist-chrome-2026.10.2.zip
+      BITWARDEN_SHA256: 2ebc61246a2ea82a65c589b8484e26a5678253fa6474c26dc5b6a7a7fcacbda4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - name: Bitwarden's build, checked against its digest
+        shell: bash
+        run: |
+          curl -fsSL -o bitwarden.zip "$BITWARDEN_URL"
+          actual="$(node -e "const c=require('node:crypto'),f=require('node:fs');process.stdout.write(c.createHash('sha256').update(f.readFileSync('bitwarden.zip')).digest('hex'))")"
+          test "$actual" = "$BITWARDEN_SHA256"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -NoProfile -Command "Expand-Archive -Path bitwarden.zip -DestinationPath bitwarden"
+          else
+            unzip -q bitwarden.zip -d bitwarden
+          fi
+          test -f bitwarden/manifest.json
+      - name: Operating system sandbox for Electron
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sandbox="$(dirname "$(cd apps/desktop && node -p "require('electron')")")/chrome-sandbox"
+          sudo chown root:root "$sandbox"
+          sudo chmod 4755 "$sandbox"
+      - name: The trial
+        shell: bash
+        env:
+          BITWARDEN_DIR: ${{ github.workspace }}/bitwarden
+          TRIAL_OUT: ${{ github.workspace }}/trial-out
+        run: |
+          electron="$(cd apps/desktop && node -p "require('electron')")"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a "$electron" tools/bitwarden-trial
+          else
+            "$electron" tools/bitwarden-trial
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: bitwarden-trial-${{ matrix.os }}
+          path: trial-out
+          if-no-files-found: warn

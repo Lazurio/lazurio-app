@@ -1,0 +1,12 @@
+{
+  "name": "@lazurio/bitwarden-trial",
+  "private": true,
+  "type": "module",
+  "main": "main.ts",
+  "dependencies": {
+    "electron-chrome-extensions": "4.10.0"
+  },
+  "devDependencies": {
+    "electron": "catalog:"
+  }
+}
