@@ -1,6 +1,6 @@
 {
   "name": "@lazurio/app-desktop",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Lazurio App GEN4 for macOS and Windows",
   "license": "Elastic-2.0",
