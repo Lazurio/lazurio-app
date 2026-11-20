@@ -1,4 +1,5 @@
 import type { ChannelState } from "@lazurio/app-contracts/device/v1";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -16,10 +17,18 @@ import type {
   DeviceStatus,
   DeviceSwitchPhase,
   DeviceSwitchProblem,
+  DeviceSwitchStatus,
 } from "../shared/bridge.ts";
 import type { AuthClientShape, AuthState, HandOver, HandOverError } from "./AuthClient.ts";
 import type { DeviceEnvironments } from "./DeviceEnvironments.ts";
 import type { DeviceRequestError, DeviceService } from "./DeviceService.ts";
+import type { MacPermissions } from "./MacPermissions.ts";
+import {
+  environmentName,
+  keptNames,
+  namedEnvironment,
+  type EnvironmentNames,
+} from "../shared/environmentName.ts";
 import { environmentOriginOf } from "./Navigation.ts";
 
 // Agent Desktop's switches (docs/adr/0006, contract v3 in the app): off after every start, on only
@@ -107,10 +116,11 @@ interface Entry {
 }
 
 const OFF: DeviceSwitchPhase = { phase: "off", problem: null };
-const STOPPED_BY_ENDING_HELPER: DeviceSwitchPhase = {
+const stoppedByEndingHelper = (at: number): DeviceSwitchPhase => ({
   phase: "off",
   problem: { from: "app", reason: "stop-not-confirmed" },
-};
+  at,
+});
 
 // How a channel's stop ended: the helper confirmed it; it did not, and the app ended the helper and
 // confirmed that every engine ended; or not even that is confirmed.
@@ -124,6 +134,11 @@ export interface DeviceSwitchesOptions {
   >;
   readonly auth: AuthClientShape;
   readonly environments: DeviceEnvironments;
+  // Reads the names an Environment's Lazurio gives (ShellNames.read, with the main window's
+  // session); none when it could not. It never fails.
+  readonly readNames: (origin: string) => Effect.Effect<Option.Option<EnvironmentNames>>;
+  // macOS's permissions: on a Mac a switch goes on only with both allowed (MacPermissions.ts).
+  readonly permissions: Pick<MacPermissions, "allowSwitch" | "current" | "subscribe">;
 }
 
 export interface DeviceSwitches {
@@ -143,7 +158,7 @@ const hostOf = (origin: string): string => URL.parse(origin)?.hostname ?? origin
 
 // Runs the switches for as long as the scope lives; closing it ends every switch's work.
 export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwitchesOptions) {
-  const { device, auth, environments } = options;
+  const { device, auth, environments, readNames, permissions } = options;
   const scope = yield* Effect.scope;
 
   const listeners = new Set<() => void>();
@@ -167,10 +182,13 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
   for (const origin of environments.origins()) yield* entryOf(origin);
 
   let account: AuthState = yield* auth.state;
+  // The account's name from the sign-in's ID token, read again at every change of the state.
+  let accountName = Option.getOrUndefined(yield* auth.accountName);
   yield* auth.changes.pipe(
     Stream.runForEach((next) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         account = next;
+        accountName = Option.getOrUndefined(yield* auth.accountName);
         changed();
       }),
     ),
@@ -178,6 +196,25 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
   );
 
   let shownOrigin: string | undefined;
+
+  // The Environments whose names to read, one read at a time, apart from every switch: a read that
+  // fails or takes long holds up neither adding an Environment nor a switch. Names read for an
+  // Environment the person removed meanwhile are not kept.
+  const toName = yield* Queue.unbounded<string>();
+  yield* Effect.gen(function* () {
+    const origin = yield* Queue.take(toName);
+    if (!environments.origins().includes(origin)) return;
+    const names = yield* readNames(origin);
+    if (Option.isNone(names)) return;
+    // A stand-in that only repeats the address never replaces a name kept before.
+    const kept = yield* Effect.exit(
+      environments.setNames(origin, keptNames(origin, names.value, environments.names(origin))),
+    );
+    if (Exit.isFailure(kept)) {
+      yield* Effect.logWarning("the Environment's names could not be saved", { origin });
+    }
+    changed();
+  }).pipe(Effect.forever, Effect.forkIn(scope));
 
   const stopListening = device.onChannel((state) => {
     const entry = entries.get(state.environmentId);
@@ -231,7 +268,9 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       return device
         .startChannel({
           environmentId: origin,
-          environmentLabel: host,
+          // The helper's label never carries the Environment's own name (DeviceService.ChannelStart).
+          environmentLabel: environmentName(origin).name,
+          displayLabel: namedEnvironment(origin, environments.names(origin)).name,
           attachUrl: `wss://${host}/.lazurio/computers/attach`,
           handOver: bytes,
         })
@@ -249,6 +288,7 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
   // other switches' work ends without waiting for it, since one of them may be ending too.
   const failSafe = Effect.fn("DeviceSwitches.failSafe")(function* (caller: Entry) {
     const confirmed = yield* device.endHelper;
+    const at = yield* Clock.currentTimeMillis;
     for (const entry of entries.values()) {
       const fiber = entry.fiber;
       entry.fiber = Option.none();
@@ -256,7 +296,7 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       if (entry !== caller && Option.isSome(fiber)) {
         yield* Fiber.interrupt(fiber.value).pipe(Effect.forkIn(scope));
       }
-      entry.phase = confirmed ? STOPPED_BY_ENDING_HELPER : { phase: "unknown" };
+      entry.phase = confirmed ? stoppedByEndingHelper(at) : { phase: "unknown" };
     }
     changed();
     return confirmed ? "helper-ended" : "unknown";
@@ -288,7 +328,9 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     yield* Effect.logWarning("Agent Desktop's switch went off", { origin, problem });
     const outcome = yield* stopConfirmed(origin, entry);
     entry.fiber = Option.none();
-    if (outcome === "stopped") yield* setPhase(entry, { phase: "off", problem });
+    if (outcome === "stopped") {
+      yield* setPhase(entry, { phase: "off", problem, at: yield* Clock.currentTimeMillis });
+    }
   });
 
   // The work of a switch that is on, until it goes off by itself or the person turns it off.
@@ -402,6 +444,9 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     if (device.current().state !== "ready") {
       return yield* new DeviceSwitchError({ problem: "unavailable" });
     }
+    // On a Mac without both permissions the switch stays off: no sign-in, no hand-over, no channel.
+    // The window shows the permissions instead.
+    if (!(yield* permissions.allowSwitch)) return;
     yield* Effect.logInfo("Agent Desktop's switch on", { origin });
     yield* setPhase(entry, { phase: "connecting" });
     entry.fiber = Option.some(yield* work(origin, entry).pipe(Effect.forkIn(scope)));
@@ -428,30 +473,43 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
   const addable = (): string | null =>
     shownOrigin === undefined || environments.origins().includes(shownOrigin) ? null : shownOrigin;
 
+  // A listed Environment's switch for the window, with the names its Lazurio gave.
+  const switchStatus = (origin: string, channel: DeviceChannelState): DeviceSwitchStatus => {
+    const { name, organization } = environments.names(origin);
+    return {
+      origin,
+      host: hostOf(origin),
+      ...(name === undefined ? {} : { name }),
+      ...(organization === undefined ? {} : { organization }),
+      switch: entries.get(origin)?.phase ?? OFF,
+      channel,
+    };
+  };
+
   const switches: DeviceSwitches = {
     current: () => {
       const helper = device.current();
       const channelOf = (origin: string) =>
         helper.environments.find((environment) => environment.environmentId === origin)?.channel ??
         NO_CHANNEL;
+      const missing = permissions.current();
       return {
         ...helper,
         account: account === "signedIn" ? "signed-in" : "signed-out",
-        switches: environments.origins().map((origin) => ({
-          origin,
-          host: hostOf(origin),
-          switch: entries.get(origin)?.phase ?? OFF,
-          channel: channelOf(origin),
-        })),
+        ...(account === "signedIn" && accountName !== undefined ? { accountName } : {}),
+        switches: environments.origins().map((origin) => switchStatus(origin, channelOf(origin))),
         addable: addable(),
+        ...(missing === undefined ? {} : { permissions: missing }),
       };
     },
     subscribe: (listener) => {
       listeners.add(listener);
       const stopDevice = device.subscribe(listener);
+      const stopPermissions = permissions.subscribe(listener);
       return () => {
         listeners.delete(listener);
         stopDevice();
+        stopPermissions();
       };
     },
     stop: device.stop,
@@ -477,6 +535,8 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
           yield* entryOf(origin);
           yield* Effect.logInfo("Agent Desktop's Environment added", { origin });
           changed();
+          // The main window shows this Environment's Lazurio now: its names, once.
+          Queue.offerUnsafe(toName, origin);
         }),
       ),
     removeEnvironment: (origin) =>
@@ -516,6 +576,10 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       const next = environmentOriginOf(address);
       if (next === shownOrigin) return;
       shownOrigin = next;
+      // An Environment already listed whose Lazurio the main window shows: its names, once more.
+      if (next !== undefined && environments.origins().includes(next)) {
+        Queue.offerUnsafe(toName, next);
+      }
       changed();
     },
   };

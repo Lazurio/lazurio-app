@@ -2,8 +2,10 @@ import * as Electron from "electron";
 
 import {
   DEVICE_ADD_ENVIRONMENT_CHANNEL,
+  DEVICE_OPEN_PERMISSION_SETTINGS_CHANNEL,
   DEVICE_OPEN_WINDOW_CHANNEL,
   DEVICE_REMOVE_ENVIRONMENT_CHANNEL,
+  DEVICE_RESTART_APP_CHANNEL,
   DEVICE_SET_SWITCH_CHANNEL,
   DEVICE_SIGN_OUT_CHANNEL,
   DEVICE_STATE_CHANGED_CHANNEL,
@@ -82,6 +84,12 @@ const bridge: LazurioBridge = {
     },
     openWindow: async () => {
       await Electron.ipcRenderer.invoke(DEVICE_OPEN_WINDOW_CHANNEL);
+    },
+    openPermissionSettings: async (kind) => {
+      await Electron.ipcRenderer.invoke(DEVICE_OPEN_PERMISSION_SETTINGS_CHANNEL, kind);
+    },
+    restartApp: async () => {
+      await Electron.ipcRenderer.invoke(DEVICE_RESTART_APP_CHANNEL);
     },
   },
 };

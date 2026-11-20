@@ -5,24 +5,28 @@ import * as Electron from "electron";
 
 import {
   DEVICE_ADD_ENVIRONMENT_CHANNEL,
+  DEVICE_OPEN_PERMISSION_SETTINGS_CHANNEL,
   DEVICE_OPEN_WINDOW_CHANNEL,
   DEVICE_REMOVE_ENVIRONMENT_CHANNEL,
+  DEVICE_RESTART_APP_CHANNEL,
   DEVICE_SET_SWITCH_CHANNEL,
   DEVICE_SIGN_OUT_CHANNEL,
   DEVICE_STATE_CHANGED_CHANNEL,
   DEVICE_STATE_CHANNEL,
   DEVICE_STOP_CHANNEL,
+  type DevicePermissionKind,
   type DeviceStatus,
 } from "../shared/bridge.ts";
 import type { DeviceRequestError } from "./DeviceService.ts";
 import type { DeviceSwitchError } from "./DeviceSwitches.ts";
 import { localViews } from "./Hardening.ts";
+import { decodeKind, type MacPermissionsError } from "./MacPermissions.ts";
 import { destinationOf } from "./Navigation.ts";
 
-// Agent Desktop's requests from the app's local windows (docs/adr/0006, point 5): state, Stop, the
-// switches, adding and removing an Environment, signing out. Only a local view of the app may ask,
-// so only a native window turns a switch on; a remote page has no preload and is refused here too.
-// Every argument goes through Schema.
+// Agent Desktop's requests from the app's local windows (docs/adr/0006, points 5 and 6): its state,
+// switches and Environments, and on a Mac a permission's pane and the restart. Only a local view may
+// ask, so only a native window turns a switch on; a remote page has no preload and is refused here
+// too. Every argument goes through Schema.
 
 export interface DeviceControls {
   readonly current: () => DeviceStatus;
@@ -33,6 +37,10 @@ export interface DeviceControls {
   readonly removeEnvironment: (origin: string) => Effect.Effect<void, DeviceSwitchError>;
   readonly signOut: Effect.Effect<void, DeviceSwitchError>;
   readonly openWindow: Effect.Effect<void>;
+  readonly openPermissionSettings: (
+    kind: DevicePermissionKind,
+  ) => Effect.Effect<void, MacPermissionsError>;
+  readonly restartApp: Effect.Effect<void, MacPermissionsError>;
 }
 
 const isLocalSender = (event: Electron.IpcMainInvokeEvent): boolean => {
@@ -88,6 +96,13 @@ export const serve = Effect.fn("DeviceIpc.serve")(function* (device: DeviceContr
   );
   yield* handle(DEVICE_SIGN_OUT_CHANNEL, (argument) =>
     decodeNoArgument(argument).pipe(Effect.andThen(device.signOut)),
+  );
+  // Only a kind: the main process picks the pane's address (MacPermissions.SETTINGS_PANES).
+  yield* handle(DEVICE_OPEN_PERMISSION_SETTINGS_CHANNEL, (argument) =>
+    decodeKind(argument).pipe(Effect.flatMap(device.openPermissionSettings)),
+  );
+  yield* handle(DEVICE_RESTART_APP_CHANNEL, (argument) =>
+    decodeNoArgument(argument).pipe(Effect.andThen(device.restartApp)),
   );
   // Every change goes to every local window. A window reads the state after subscribing, so no
   // change falls between.

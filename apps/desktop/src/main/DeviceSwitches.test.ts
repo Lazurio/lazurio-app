@@ -14,6 +14,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 
 import type { DeviceStatus, DeviceSwitchStatus } from "../shared/bridge.ts";
+import type { EnvironmentNames } from "../shared/environmentName.ts";
 import {
   AuthUnreachableError,
   HandOverError,
@@ -28,6 +29,7 @@ import * as DeviceEnvironments from "./DeviceEnvironments.ts";
 import * as DeviceService from "./DeviceService.ts";
 import { run, type DeviceSwitches } from "./DeviceSwitches.ts";
 import { fakeHelper, type FakeHelper, type Reply } from "./fake-device-connection.ts";
+import * as MacPermissions from "./MacPermissions.ts";
 
 const ORIGIN = "https://launchpad.bob.example-org.lazurio.io";
 const OTHER = "https://launchpad.carol.example-org.lazurio.io";
@@ -52,6 +54,10 @@ const fakeAuth = (initial: AuthState) =>
     let issued = 0;
     const shape: AuthClientShape = {
       state: SubscriptionRef.get(state),
+      // The ID token's name, once signed in.
+      accountName: SubscriptionRef.get(state).pipe(
+        Effect.map((now) => (now === "signedIn" ? Option.some("Bob Novák") : Option.none())),
+      ),
       changes: SubscriptionRef.changes(state),
       signIn: Effect.gen(function* () {
         calls.signIn += 1;
@@ -90,8 +96,10 @@ const fakeAuth = (initial: AuthState) =>
 
 const memoryEnvironments = (origins: ReadonlyArray<string>) => {
   let list = [...origins];
+  const names = new Map<string, EnvironmentNames>();
   const environments: DeviceEnvironments.DeviceEnvironments = {
     origins: () => list,
+    names: (origin) => names.get(origin) ?? {},
     add: (origin) =>
       Effect.sync(() => {
         if (!list.includes(origin)) list = [...list, origin];
@@ -99,10 +107,32 @@ const memoryEnvironments = (origins: ReadonlyArray<string>) => {
     remove: (origin) =>
       Effect.sync(() => {
         list = list.filter((known) => known !== origin);
+        names.delete(origin);
+      }),
+    setNames: (origin, next) =>
+      Effect.sync(() => {
+        if (list.includes(origin)) names.set(origin, next);
       }),
   };
   return environments;
 };
+
+// What the Environments' Lazurio answers for their names: the test queues one answer per read.
+const fakeNames = () =>
+  Effect.gen(function* () {
+    const answers = yield* Queue.unbounded<Option.Option<EnvironmentNames>>();
+    // Each read as it starts; the switches read one at a time, so a read that starts means the
+    // one before it ended.
+    const asked = yield* Queue.unbounded<string>();
+    const reads: Array<string> = [];
+    const readNames = (origin: string) =>
+      Effect.gen(function* () {
+        reads.push(origin);
+        yield* Queue.offer(asked, origin);
+        return yield* Queue.take(answers);
+      });
+    return { answers, asked, reads, readNames };
+  });
 
 // The Device helper answers StartChannel with Connecting and StopChannel with Off, as the real one.
 const answerChannels = (helper: FakeHelper) =>
@@ -125,10 +155,26 @@ const answerChannels = (helper: FakeHelper) =>
     return undefined;
   });
 
+// macOS as the switches see it: the test sets what is allowed and counts the reads.
+const fakeMac = (allowed: { accessibility: boolean; screen: boolean }) => {
+  const reads = { count: 0 };
+  const system: MacPermissions.PermissionSystem = {
+    read: Effect.sync(() => {
+      reads.count += 1;
+      return { ...allowed };
+    }),
+    enlist: () => Effect.void,
+    openPane: () => Effect.void,
+    restart: Effect.void,
+  };
+  return { allowed, reads, system };
+};
+
 const setUp = (options: {
   readonly account: AuthState;
   readonly origins?: ReadonlyArray<string>;
   readonly environments?: DeviceEnvironments.DeviceEnvironments;
+  readonly permissions?: MacPermissions.MacPermissions;
 }) =>
   Effect.gen(function* () {
     const helper = yield* fakeHelper;
@@ -151,12 +197,20 @@ const setUp = (options: {
       },
     });
     const auth = yield* fakeAuth(options.account);
+    const names = yield* fakeNames();
     const switches = yield* run({
       device,
       auth: auth.shape,
       environments: options.environments ?? memoryEnvironments(options.origins ?? [ORIGIN]),
+      readNames: names.readNames,
+      permissions:
+        options.permissions ??
+        MacPermissions.make({
+          platform: "linux",
+          system: fakeMac({ accessibility: false, screen: false }).system,
+        }),
     });
-    return { helper, auth, switches };
+    return { helper, auth, switches, names };
   });
 
 // Waits until the switches' state passes the check, from the change that made it so.
@@ -173,6 +227,17 @@ const stateWhere = (switches: DeviceSwitches, check: (status: DeviceStatus) => b
     });
     return Effect.sync(stop);
   });
+
+// The next change of the switches' state, from the moment of this call.
+const nextChange = (switches: DeviceSwitches) => {
+  const changed = new Promise<void>((resolve) => {
+    const stop = switches.subscribe(() => {
+      stop();
+      resolve();
+    });
+  });
+  return Effect.promise(() => changed);
+};
 
 const switchOf = (status: DeviceStatus, origin = ORIGIN): DeviceSwitchStatus | undefined =>
   status.switches.find((entry) => entry.origin === origin);
@@ -217,7 +282,8 @@ describe("DeviceSwitches", () => {
       assert.deepStrictEqual(auth.handOverOrigins, [ORIGIN]);
       const [start] = startsOf(helper);
       assert.strictEqual(start?.environmentId, ORIGIN);
-      assert.strictEqual(start?.environmentLabel, HOST);
+      // The Environment's name for the bar and the helper's state, not its address.
+      assert.strictEqual(start?.environmentLabel, "Bob");
       assert.strictEqual(start?.attachUrl, `wss://${HOST}/.lazurio/computers/attach`);
       // The Environment lies in the app's tailnet: the channel goes through its proxy.
       assert.strictEqual(start?.proxy?.host, "127.0.0.1");
@@ -237,6 +303,69 @@ describe("DeviceSwitches", () => {
         switch: { phase: "channel" },
         channel: { state: "connected" },
       });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps the switch off on a Mac without its permissions, and asks nothing", () =>
+    Effect.gen(function* () {
+      const mac = fakeMac({ accessibility: true, screen: false });
+      const permissions = MacPermissions.make({ platform: "darwin", system: mac.system });
+      const { helper, auth, switches } = yield* setUp({ account: "signedOut", permissions });
+      // Nothing shows before a click on a switch.
+      assert.isUndefined(switches.current().permissions);
+      yield* switches.setSwitch(ORIGIN, true);
+      const status = switches.current();
+      assert.deepStrictEqual(switchOf(status)?.switch, { phase: "off", problem: null });
+      assert.deepStrictEqual(status.permissions, {
+        accessibility: true,
+        screen: false,
+        screenPaneOpened: false,
+      });
+      // No sign-in, no hand-over, no channel.
+      assert.strictEqual(auth.calls.signIn, 0);
+      assert.deepStrictEqual(auth.handOverOrigins, []);
+      assert.lengthOf(startsOf(helper), 0);
+      // Allowed meanwhile: the window's block goes, and the switch stays off until the next click.
+      mac.allowed.screen = true;
+      yield* permissions.refresh;
+      assert.isUndefined(switches.current().permissions);
+      assert.deepStrictEqual(switchOf(switches.current())?.switch, { phase: "off", problem: null });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("signing-in"));
+      assert.lengthOf(startsOf(helper), 0);
+      yield* Queue.offer(auth.signIns, "ok");
+      yield* stateWhere(switches, phaseIs("channel"));
+      assert.strictEqual(auth.calls.signIn, 1);
+      assert.deepStrictEqual(auth.handOverOrigins, [ORIGIN]);
+      assert.lengthOf(startsOf(helper), 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("turns the switch on on a Mac with both permissions", () =>
+    Effect.gen(function* () {
+      const mac = fakeMac({ accessibility: true, screen: true });
+      const permissions = MacPermissions.make({ platform: "darwin", system: mac.system });
+      const { helper, switches } = yield* setUp({ account: "signedIn", permissions });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      assert.isAbove(mac.reads.count, 0);
+      assert.lengthOf(startsOf(helper), 1);
+      assert.isUndefined(switches.current().permissions);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reads no permission off macOS", () =>
+    Effect.gen(function* () {
+      const mac = fakeMac({ accessibility: false, screen: false });
+      for (const platform of ["win32", "linux"]) {
+        const permissions = MacPermissions.make({ platform, system: mac.system });
+        const { helper, switches } = yield* setUp({ account: "signedIn", permissions });
+        yield* switches.setSwitch(ORIGIN, true);
+        yield* stateWhere(switches, phaseIs("channel"));
+        assert.lengthOf(startsOf(helper), 1);
+        assert.isUndefined(switches.current().permissions);
+      }
+      assert.strictEqual(mac.reads.count, 0);
     }).pipe(Effect.scoped),
   );
 
@@ -278,11 +407,14 @@ describe("DeviceSwitches", () => {
       const { helper, switches } = yield* setUp({ account: "signedIn" });
       yield* switches.setSwitch(ORIGIN, true);
       yield* stateWhere(switches, phaseIs("channel"));
+      // The problem carries the time it happened, by the app's clock.
+      yield* TestClock.adjust(Duration.minutes(5));
       yield* helper.send(refused("agent_desktop_paired"));
       const status = yield* stateWhere(switches, phaseIs("off"));
       assert.deepStrictEqual(switchOf(status)?.switch, {
         phase: "off",
         problem: { from: "helper", reason: "agent_desktop_paired", httpStatus: 0 },
+        at: Duration.toMillis(Duration.minutes(5)),
       });
       // As when the person turns it off: the helper forgets the channel.
       assert.deepStrictEqual(stopsOf(helper), [ORIGIN]);
@@ -307,6 +439,7 @@ describe("DeviceSwitches", () => {
         assert.deepStrictEqual(switchOf(current)?.switch, {
           phase: "off",
           problem: { from: "auth", reason },
+          at: 0,
         });
         assert.lengthOf(startsOf(helper), 0);
       }).pipe(Effect.scoped),
@@ -352,6 +485,7 @@ describe("DeviceSwitches", () => {
       assert.deepStrictEqual(switchOf(status)?.switch, {
         phase: "off",
         problem: { from: "auth", reason: "signed-out" },
+        at: 1000,
       });
       assert.strictEqual(status.account, "signed-out");
       assert.strictEqual(auth.calls.signIn, 0);
@@ -381,6 +515,7 @@ describe("DeviceSwitches", () => {
       assert.deepStrictEqual(switchOf(status)?.switch, {
         phase: "off",
         problem: { from: "auth", reason: "sign-in-failed" },
+        at: 0,
       });
     }).pipe(Effect.scoped),
   );
@@ -402,6 +537,16 @@ describe("DeviceSwitches", () => {
       yield* helper.send(needsHandOver(1000));
       yield* TestClock.adjust(Duration.minutes(1));
       assert.lengthOf(startsOf(helper), 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("names the signed-in account, and no one once signed out", () =>
+    Effect.gen(function* () {
+      const { auth, switches } = yield* setUp({ account: "signedIn" });
+      assert.strictEqual(switches.current().accountName, "Bob Novák");
+      yield* SubscriptionRef.set(auth.state, "signedOut");
+      const status = yield* stateWhere(switches, (current) => current.account === "signed-out");
+      assert.isUndefined(status.accountName);
     }).pipe(Effect.scoped),
   );
 
@@ -502,6 +647,62 @@ describe("DeviceSwitches", () => {
         },
       ]);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("reads the Environment's names once it is added, and gives them to the helper", () =>
+    Effect.gen(function* () {
+      const { helper, switches, names } = yield* setUp({ account: "signedIn", origins: [] });
+      switches.pageShown(`${ORIGIN}/settings/tools`);
+      // Not listed yet: nothing to name.
+      assert.deepStrictEqual(names.reads, []);
+      yield* switches.addEnvironment(ORIGIN);
+      // Added at once, with the name from its address until its Lazurio answers.
+      assert.deepStrictEqual(switches.current().switches[0]?.origin, ORIGIN);
+      assert.isUndefined(switches.current().switches[0]?.name);
+      yield* Queue.offer(
+        names.answers,
+        Option.some({ name: "Bob Dvořák", organization: "Ukázková Organizace" }),
+      );
+      const named = yield* stateWhere(switches, (status) => switchOf(status)?.name !== undefined);
+      assert.deepStrictEqual(names.reads, [ORIGIN]);
+      assert.strictEqual(switchOf(named)?.name, "Bob Dvořák");
+      assert.strictEqual(switchOf(named)?.organization, "Ukázková Organizace");
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      // The window shows the name; the helper's label, which another Environment's agent may
+      // read in a tool error, stays the one from the address.
+      assert.strictEqual(startsOf(helper)[0]?.environmentLabel, "Bob");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "reads a listed Environment's names when the main window shows it, keeping the last on failure",
+    () =>
+      Effect.gen(function* () {
+        const environments = memoryEnvironments([ORIGIN]);
+        const { switches, names } = yield* setUp({ account: "signedIn", environments });
+        switches.pageShown(`${ORIGIN}/`);
+        yield* Queue.offer(names.answers, Option.some({ name: "Bob Dvořák" }));
+        yield* stateWhere(switches, (status) => switchOf(status)?.name === "Bob Dvořák");
+        // The same page again reads nothing; another page and back reads once more.
+        switches.pageShown(`${ORIGIN}/settings/tools`);
+        switches.pageShown("https://dashboard.lazurio.ai/");
+        switches.pageShown(`${ORIGIN}/`);
+        yield* Queue.offer(names.answers, Option.none());
+        // The third read starts only once the second, which failed, has ended.
+        switches.pageShown("https://dashboard.lazurio.ai/");
+        switches.pageShown(`${ORIGIN}/`);
+        for (let read = 0; read < 3; read += 1) yield* Queue.take(names.asked);
+        assert.deepStrictEqual(names.reads, [ORIGIN, ORIGIN, ORIGIN]);
+        assert.strictEqual(switchOf(switches.current())?.name, "Bob Dvořák");
+        // A read for an Environment removed meanwhile keeps nothing.
+        yield* switches.removeEnvironment(ORIGIN);
+        const kept = nextChange(switches);
+        yield* Queue.offer(names.answers, Option.some({ name: "Gone" }));
+        yield* kept;
+        assert.deepStrictEqual(environments.names(ORIGIN), {});
+        assert.deepStrictEqual(switches.current().switches, []);
+      }).pipe(Effect.scoped),
   );
 
   it.effect("removes an Environment and stops its channel first", () =>
@@ -643,6 +844,8 @@ describe("DeviceSwitches when the helper does not confirm a channel's stop", () 
           assert.deepStrictEqual(switchOf(status, origin)?.switch, {
             phase: "off",
             problem: STOP_NOT_CONFIRMED,
+            // The fail-safe ends the helper once the stop went unconfirmed: its time.
+            at: failure === "no-answer" ? 5000 : 0,
           });
         }
         const starts = startsOf(helper).length;
@@ -723,6 +926,7 @@ describe("DeviceSwitches when the helper does not confirm a channel's stop", () 
       assert.deepStrictEqual(switchOf(status)?.switch, {
         phase: "off",
         problem: STOP_NOT_CONFIRMED,
+        at: 0,
       });
     }).pipe(Effect.scoped),
   );

@@ -1,189 +1,154 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 
-import type { DeviceSwitchPhase, DeviceSwitchStatus } from "../shared/bridge.ts";
-import { channelLabel, problemCode, problemLabel, switchLabel } from "./deviceLabel.ts";
+import type {
+  DeviceChannelState,
+  DeviceSwitchPhase,
+  DeviceSwitchProblem,
+  DeviceSwitchStatus,
+} from "../shared/bridge.ts";
+import { problemCode, problemKey, problemRetries, problemTime, rowState } from "./deviceLabel.ts";
 import { messages } from "./messages.ts";
-import { APP_NAME } from "../shared/appName.ts";
-
-describe("channelLabel", () => {
-  it("names each state of a channel, in either language", () => {
-    assert.strictEqual(channelLabel({ state: "off" }, messages.cs.device), "Vypnuto");
-    assert.strictEqual(
-      channelLabel({ state: "connecting", failedAttempts: 2 }, messages.en.device),
-      "Connecting",
-    );
-    assert.strictEqual(channelLabel({ state: "connected" }, messages.cs.device), "Připojeno");
-    assert.strictEqual(
-      channelLabel({ state: "refused", reason: "not-paired" }, messages.en.device),
-      "The Environment refused the connection",
-    );
-  });
-
-  it("says a channel that needs a new hand-over is reconnecting, with no code in the sentence", () => {
-    assert.strictEqual(
-      channelLabel({ state: "needs-hand-over", reason: "expired" }, messages.cs.device),
-      "Připojuje se znovu…",
-    );
-    assert.strictEqual(
-      channelLabel({ state: "needs-hand-over", reason: "session_ended" }, messages.en.device),
-      "Reconnecting…",
-    );
-  });
-
-  it("says in words that the utility Lazurio Agent Desktop keeps the channels closed", () => {
-    assert.strictEqual(
-      channelLabel({ state: "refused", reason: "agent_desktop_paired" }, messages.cs.device),
-      "Na tomto počítači je spárovaná utilita Lazurio Agent Desktop.",
-    );
-    assert.strictEqual(
-      channelLabel({ state: "refused", reason: "agent_desktop_paired" }, messages.en.device),
-      "The utility Lazurio Agent Desktop is paired on this computer.",
-    );
-    assert.match(
-      channelLabel({ state: "refused", reason: "agent_desktop_check_failed" }, messages.cs.device),
-      /Nepodařilo se ověřit/u,
-    );
-    assert.match(
-      channelLabel({ state: "refused", reason: "agent_desktop_check_failed" }, messages.en.device),
-      /Could not check/u,
-    );
-  });
-
-  it("names the tool an agent runs and the application, when the engine names one", () => {
-    assert.strictEqual(
-      channelLabel({ state: "working", tool: "click", application: "Outlook" }, messages.cs.device),
-      "Pracuje agent: click v Outlook",
-    );
-    assert.strictEqual(
-      channelLabel({ state: "working", tool: "screenshot", application: "" }, messages.en.device),
-      "An agent is working: screenshot",
-    );
-  });
-
-  it("claims nothing about a channel once the connection to the helper was lost", () => {
-    assert.strictEqual(
-      channelLabel({ state: "unknown" }, messages.cs.device),
-      "Stav agenta neznámý",
-    );
-    assert.strictEqual(
-      channelLabel({ state: "unknown" }, messages.en.device),
-      "Agent's state unknown",
-    );
-  });
-
-  it("says after a lost connection that nobody knows whether an agent works, and what to do", () => {
-    assert.match(messages.cs.device.lost, /nevíme, jestli/iu);
-    assert.include(
-      messages.cs.device.lost.toLowerCase(),
-      `ukončete ${APP_NAME.toLowerCase()} a spusťte ji znovu`,
-    );
-    assert.match(messages.en.device.lost, /not known whether/iu);
-    assert.include(
-      messages.en.device.lost.toLowerCase(),
-      `quit ${APP_NAME.toLowerCase()} and start it again`,
-    );
-    for (const text of [messages.cs.device.lost, messages.en.device.lost]) {
-      assert.notMatch(text, /skončil|ended|neběží|not running/iu);
-    }
-  });
-});
 
 const entry = (
   phase: DeviceSwitchPhase,
-  channel: DeviceSwitchStatus["channel"] = { state: "off" },
+  channel: DeviceChannelState = { state: "off" },
 ): DeviceSwitchStatus => ({
-  origin: "https://launchpad.bob.lazurio.io",
-  host: "launchpad.bob.lazurio.io",
+  origin: "https://launchpad.lazurio-bob.lazurioexampleorganization.lazurio.io",
+  host: "launchpad.lazurio-bob.lazurioexampleorganization.lazurio.io",
   switch: phase,
   channel,
 });
 
-describe("switchLabel", () => {
-  it("says where a switch that is on is before and after the helper has its channel", () => {
-    assert.deepStrictEqual(switchLabel(entry({ phase: "signing-in" }), messages.cs.device), {
-      state: "Přihlaste se v prohlížeči.",
-      problem: null,
-    });
-    assert.strictEqual(
-      switchLabel(entry({ phase: "retrying", cause: "auth-unavailable" }), messages.en.device)
-        .state,
-      "Lazurio is not answering. Trying again.",
-    );
-    assert.strictEqual(
-      switchLabel(entry({ phase: "channel" }, { state: "connected" }), messages.cs.device).state,
-      "Připojeno",
-    );
+describe("rowState", () => {
+  it("gives each switch one short state", () => {
+    const states = [
+      [entry({ phase: "off", problem: null }), "off"],
+      [entry({ phase: "signing-in" }), "signing-in"],
+      [entry({ phase: "connecting" }), "connecting"],
+      [entry({ phase: "retrying", cause: "needs-hand-over" }), "reconnecting"],
+      [entry({ phase: "channel" }, { state: "connecting", failedAttempts: 0 }), "connecting"],
+      [entry({ phase: "channel" }, { state: "connected" }), "connected"],
+      [
+        entry({ phase: "channel" }, { state: "working", tool: "click", application: "Excel" }),
+        "working",
+      ],
+      [
+        entry({ phase: "channel" }, { state: "needs-hand-over", reason: "expired" }),
+        "reconnecting",
+      ],
+      [entry({ phase: "stopping" }), "stopping"],
+      [entry({ phase: "unknown" }), "unknown"],
+      [entry({ phase: "off", problem: { from: "auth", reason: "not-permitted" } }), "error"],
+    ] as const;
+    for (const [row, kind] of states) assert.strictEqual(rowState(row), kind);
   });
 
-  it("says a switch is turning off, or that nobody knows, and never Off before it is", () => {
-    assert.strictEqual(
-      switchLabel(entry({ phase: "stopping" }), messages.cs.device).state,
-      "Vypíná se…",
-    );
-    assert.deepStrictEqual(switchLabel(entry({ phase: "unknown" }), messages.en.device), {
-      state: "Agent's state unknown",
-      problem: null,
-    });
-    const ended = switchLabel(
-      entry({ phase: "off", problem: { from: "app", reason: "stop-not-confirmed" } }),
-      messages.cs.device,
-    );
-    assert.strictEqual(ended.state, "Vypnuto");
-    assert.match(ended.problem ?? "", /nepotvrdil vypnutí/u);
-  });
-
-  it("says what to do when the utility Lazurio Agent Desktop turned a switch off", () => {
-    const off = entry({
-      phase: "off",
-      problem: { from: "helper", reason: "agent_desktop_paired", httpStatus: 0 },
-    });
-    const cs = switchLabel(off, messages.cs.device);
-    assert.strictEqual(cs.state, "Vypnuto");
-    assert.match(cs.problem ?? "", /odeberte všechna Prostředí a utilitu odinstalujte/u);
-    assert.match(cs.problem ?? "", /io\.lazurio\.agent-desktop ve Správci pověření/u);
-    const en = switchLabel(off, messages.en.device).problem ?? "";
-    assert.match(en, /Remove every Environment in the utility and uninstall it/u);
-    assert.match(en, /Keychain Access/u);
-  });
-
-  it("names every final answer of Lazurio Auth and of the helper in a sentence", () => {
+  it("has a short word for every state, in either language", () => {
     for (const text of [messages.cs.device, messages.en.device]) {
-      for (const reason of [
-        "sign-in-failed",
-        "signed-out",
-        "unknown-environment",
-        "not-permitted",
-        "environment-state-conflict",
-        "rejected",
-      ] as const) {
-        assert.notInclude(problemLabel({ from: "auth", reason }, text), "{");
-      }
-      // A sentence for the person; the code goes beside it, for whoever helps.
-      for (const problem of [
-        { from: "helper", reason: "upgrade_refused", httpStatus: 400 },
-        { from: "helper", reason: "hand_over_refused", httpStatus: 401 },
-        { from: "helper", reason: "something_new", httpStatus: 0 },
-      ] as const) {
-        const sentence = problemLabel(problem, text);
-        assert.notMatch(sentence, /[{_]|HTTP|\(/u);
+      for (const word of Object.values(text.states)) {
+        assert.isAtMost(word.length, 26, word);
+        assert.notMatch(word, /[{_]/u);
       }
     }
+    assert.strictEqual(messages.cs.device.states.signingIn, "Přihlaste se v prohlížeči");
+    assert.strictEqual(messages.en.device.states.connected, "Connected");
+  });
+});
+
+describe("the problems of a switch", () => {
+  const problems: ReadonlyArray<DeviceSwitchProblem> = [
+    { from: "auth", reason: "sign-in-failed" },
+    { from: "auth", reason: "signed-out" },
+    { from: "auth", reason: "unknown-environment" },
+    { from: "auth", reason: "not-permitted" },
+    { from: "auth", reason: "environment-state-conflict" },
+    { from: "auth", reason: "rejected" },
+    { from: "app", reason: "helper-unavailable" },
+    { from: "app", reason: "stop-not-confirmed" },
+    { from: "helper", reason: "agent_desktop_paired", httpStatus: 0 },
+    { from: "helper", reason: "agent_desktop_check_failed", httpStatus: 0 },
+    { from: "helper", reason: "hand_over_refused", httpStatus: 401 },
+    { from: "helper", reason: "not_permitted", httpStatus: 403 },
+    { from: "helper", reason: "bad-token", httpStatus: 0 },
+    { from: "helper", reason: "contract_mismatch", httpStatus: 0 },
+    { from: "helper", reason: "already-attached", httpStatus: 0 },
+    { from: "helper", reason: "upgrade_refused", httpStatus: 400 },
+    { from: "helper", reason: "invalid_attach_url", httpStatus: 0 },
+    { from: "helper", reason: "something_new", httpStatus: 0 },
+  ];
+
+  it("says each in one short sentence without internal names or codes", () => {
+    for (const text of [messages.cs.device, messages.en.device]) {
+      for (const problem of problems) {
+        const sentence = text.problems[problemKey(problem)];
+        assert.isAtMost(sentence.length, 80, sentence);
+        assert.notMatch(sentence, /io\.lazurio|[{_]|HTTP|Auth\b/u, sentence);
+        assert.isAbove(text.problemDetails[problemKey(problem)].length, sentence.length);
+      }
+    }
+  });
+
+  it("keeps the utility's keychain entries for the technical details", () => {
+    const key = problemKey({ from: "helper", reason: "agent_desktop_paired", httpStatus: 0 });
+    assert.notInclude(messages.cs.device.problems[key], "io.lazurio.agent-desktop");
+    assert.include(messages.cs.device.problemDetails[key], "io.lazurio.agent-desktop");
+    assert.include(messages.en.device.problemDetails[key], "io.lazurio.agent-desktop");
+  });
+
+  it("offers to try again only where turning the switch on again can help", () => {
+    assert.isTrue(problemRetries({ from: "auth", reason: "sign-in-failed" }));
+    assert.isTrue(problemRetries({ from: "helper", reason: "already-attached", httpStatus: 0 }));
+    assert.isFalse(problemRetries({ from: "auth", reason: "not-permitted" }));
+    assert.isFalse(problemRetries({ from: "auth", reason: "unknown-environment" }));
+    assert.isFalse(problemRetries({ from: "helper", reason: "not_permitted", httpStatus: 403 }));
+    assert.isFalse(problemRetries({ from: "app", reason: "stop-not-confirmed" }));
+  });
+
+  it("gives the helper's code with its HTTP status for the details", () => {
     assert.strictEqual(
       problemCode({ from: "helper", reason: "upgrade_refused", httpStatus: 400 }),
       "upgrade_refused 400",
     );
     assert.strictEqual(
-      problemCode({ from: "helper", reason: "something_new", httpStatus: 0 }),
-      "something_new",
+      problemCode({ from: "auth", reason: "unknown-environment" }),
+      "unknown-environment",
     );
-    assert.isNull(problemCode({ from: "auth", reason: "signed-out" }));
+  });
+});
+
+describe("problemTime", () => {
+  // Local times, so the test holds in any time zone.
+  const local = (year: number, month: number, day: number, hour: number, minute: number) =>
+    DateTime.toEpochMillis(
+      DateTime.makeZonedUnsafe(
+        { year, month, day, hour, minute },
+        { timeZone: DateTime.zoneMakeLocal(), adjustForTimeZone: true },
+      ),
+    );
+  const now = local(2026, 11, 19, 16, 0);
+
+  it("gives the time of day for today, 24-hour in Czech", () => {
+    assert.strictEqual(problemTime(local(2026, 11, 19, 13, 45), now, "cs"), "13:45");
+    assert.strictEqual(problemTime(local(2026, 11, 19, 9, 5), now, "cs"), "9:05");
+    assert.strictEqual(
+      messages.cs.device.asOf.replace(
+        "{time}",
+        problemTime(local(2026, 11, 19, 13, 45), now, "cs"),
+      ),
+      "Stav z 13:45",
+    );
   });
 
-  it("never names Lazurio Auth or shows a bare code to the person", () => {
-    for (const text of [messages.cs.device, messages.en.device]) {
-      const shown = JSON.stringify(text);
-      assert.notInclude(shown, "Lazurio Auth");
-      assert.notMatch(shown, /\((\{reason\}|HTTP)/u);
-    }
+  it("adds the date for another day, and the year for another year", () => {
+    assert.strictEqual(problemTime(local(2026, 11, 18, 13, 45), now, "cs"), "18. 11. 13:45");
+    assert.strictEqual(problemTime(local(2025, 12, 31, 23, 59), now, "cs"), "31. 12. 2025 23:59");
+  });
+
+  it("gives English in the system's format, with the minutes and the date when needed", () => {
+    const today = problemTime(local(2026, 11, 19, 13, 45), now, "en");
+    assert.match(today, /45/u);
+    assert.notMatch(today, /11|19/u);
+    assert.match(problemTime(local(2026, 11, 18, 13, 45), now, "en"), /18/u);
   });
 });

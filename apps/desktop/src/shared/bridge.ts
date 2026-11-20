@@ -17,6 +17,10 @@ export const DEVICE_SET_SWITCH_CHANNEL = "lazurio:device-set-switch";
 export const DEVICE_ADD_ENVIRONMENT_CHANNEL = "lazurio:device-add-environment";
 export const DEVICE_REMOVE_ENVIRONMENT_CHANNEL = "lazurio:device-remove-environment";
 export const DEVICE_SIGN_OUT_CHANNEL = "lazurio:device-sign-out";
+// macOS's permissions for Agent Desktop (docs/adr/0006, point 6): the pane of System Settings for
+// one kind, and the app's restart once Screen Recording's pane was opened.
+export const DEVICE_OPEN_PERMISSION_SETTINGS_CHANNEL = "lazurio:device-open-permission-settings";
+export const DEVICE_RESTART_APP_CHANNEL = "lazurio:device-restart-app";
 export const STATUS_PANEL_CHANNEL = "lazurio:status-panel";
 export const COPY_STATUS_CHANNEL = "lazurio:copy-status";
 // Copies the sign-in address of a tailnet that waits for sign-in; the address stays in the main
@@ -145,7 +149,13 @@ export type DeviceSwitchProblem =
 
 // Where an Environment's switch is. It is on in every phase but "off".
 export type DeviceSwitchPhase =
-  | { readonly phase: "off"; readonly problem: DeviceSwitchProblem | null }
+  | {
+      readonly phase: "off";
+      readonly problem: DeviceSwitchProblem | null;
+      // When the switch went off with its problem (milliseconds since the epoch, the app's clock):
+      // the problem is the outcome of that attempt, and the window says from when.
+      readonly at?: number;
+    }
   // The app waits for the person to sign in in the system's browser.
   | { readonly phase: "signing-in" }
   // The app asks Lazurio Auth for a hand-over.
@@ -165,8 +175,24 @@ export interface DeviceSwitchStatus {
   // `https://<host>` of the Environment's Lazurio.
   readonly origin: string;
   readonly host: string;
+  // The names the Environment's Lazurio gave (shell.json), when the app read them; the window
+  // falls back to the name from the address (environmentName.ts).
+  readonly name?: string;
+  readonly organization?: string;
   readonly switch: DeviceSwitchPhase;
   readonly channel: DeviceChannelState;
+}
+
+// The two permissions of macOS that Agent Desktop's engine needs (docs/adr/0006, point 6).
+export type DevicePermissionKind = "accessibility" | "screen";
+
+// Whether each is allowed now, as macOS says without asking. macOS applies a newly allowed Screen
+// Recording only to a new process, so "not allowed" may mean "allowed, waits for a restart".
+export interface DevicePermissions {
+  readonly accessibility: boolean;
+  readonly screen: boolean;
+  // The person opened Screen Recording's pane in this run of the app.
+  readonly screenPaneOpened: boolean;
 }
 
 // Agent Desktop on this computer (docs/adr/0006). "absent": this build runs no Device helper;
@@ -180,10 +206,15 @@ export interface DeviceStatus {
   readonly agent: { readonly environmentId: string; readonly label: string } | null | "unknown";
   // The app's own Lazurio account (its sign-in with Lazurio Auth).
   readonly account: "signed-in" | "signed-out";
+  // The account's name from the sign-in's ID token, when it carried one.
+  readonly accountName?: string;
   // The Environments the person added, each with its switch, off after every start.
   readonly switches: ReadonlyArray<DeviceSwitchStatus>;
   // The origin of the Environment the main window shows, when it is not in the list yet.
   readonly addable: string | null;
+  // Only on a Mac, after a click on a switch in this run found a permission missing, and until
+  // both are allowed: the switch stayed off.
+  readonly permissions?: DevicePermissions;
 }
 
 export interface AppStatus {
@@ -235,4 +266,8 @@ interface DeviceBridge {
   readonly signOut: () => Promise<void>;
   // Opens the Agent Desktop window, or brings it to the front.
   readonly openWindow: () => Promise<void>;
+  // macOS only: opens the pane of System Settings for that permission.
+  readonly openPermissionSettings: (kind: DevicePermissionKind) => Promise<void>;
+  // macOS only, once Screen Recording's pane was opened: starts the app again.
+  readonly restartApp: () => Promise<void>;
 }
