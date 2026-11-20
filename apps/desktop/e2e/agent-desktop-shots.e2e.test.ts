@@ -121,10 +121,9 @@ describe("Agent Desktop's panel in its sample states", () => {
       // No names from its Lazurio: the name from its address.
       "X",
     ]);
+    // Only an Organization its Lazurio named has a line; an address's label is no name.
     assert.deepStrictEqual(await rows.locator(".ad__env-name small").allInnerTexts(), [
       "Ukázková Organizace pro zkoušku nejdelších názvů, s. r. o., odštěpný závod Morava",
-      "Nejneobhospodarovavatelnejsimi",
-      "Organizace s velmi dlouhym nazvem pro zkousku",
     ]);
     // The agent's work is in the head with Stop; the other rows keep their state.
     assert.strictEqual(await rows.nth(0).locator("[data-row-state]").count(), 0);
