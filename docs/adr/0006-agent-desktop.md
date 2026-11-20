@@ -56,7 +56,7 @@ Decision 0248 puts the Device's capabilities into Lazurio App GEN4 as a Rust hel
 
 6. **macOS permissions belong to `io.lazurio.app`.**
    - The engine needs Accessibility and Screen Recording. Because the app's main process starts the helper and the helper starts the engine, macOS attributes both to Lazurio App, as long as both binaries lie inside the bundle and carry the app's signing team.
-   - The native window checks both (`systemPreferences.isTrustedAccessibilityClient`, `getMediaAccessStatus("screen")`), opens the right pane of System Settings and says that Screen Recording needs the app to restart. It asks only when the person first turns a switch on, not at the app's first start.
+   - When the person turns a switch on, the main process reads both without asking (`systemPreferences.isTrustedAccessibilityClient(false)`, `getMediaAccessStatus("screen")`). With one missing the switch stays off, with no sign-in, hand-over or channel, and the window shows both with one button: it lets macOS list the app and opens the pane of the first one missing, and once Screen Recording's pane was opened it restarts the app the way Quit does, because macOS applies Screen Recording only to a new process. The window reads both again while it shows them, and the person turns the switch on again; nothing is asked at the app's first start.
    - Windows needs no such permission. UI Automation works only in the signed-in person's session, so a locked computer cannot be used.
 
 7. **Updates wait for the agent.** The updater of ADR 0005 ([#16](https://github.com/Lazurio/lazurio-app/pull/16), its point 5) installs an update only when no agent holds the computer.

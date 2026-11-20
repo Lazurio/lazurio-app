@@ -29,6 +29,7 @@ import * as DeviceEnvironments from "./DeviceEnvironments.ts";
 import * as DeviceService from "./DeviceService.ts";
 import { run, type DeviceSwitches } from "./DeviceSwitches.ts";
 import { fakeHelper, type FakeHelper, type Reply } from "./fake-device-connection.ts";
+import * as MacPermissions from "./MacPermissions.ts";
 
 const ORIGIN = "https://launchpad.bob.example-org.lazurio.io";
 const OTHER = "https://launchpad.carol.example-org.lazurio.io";
@@ -154,10 +155,26 @@ const answerChannels = (helper: FakeHelper) =>
     return undefined;
   });
 
+// macOS as the switches see it: the test sets what is allowed and counts the reads.
+const fakeMac = (allowed: { accessibility: boolean; screen: boolean }) => {
+  const reads = { count: 0 };
+  const system: MacPermissions.PermissionSystem = {
+    read: Effect.sync(() => {
+      reads.count += 1;
+      return { ...allowed };
+    }),
+    enlist: () => Effect.void,
+    openPane: () => Effect.void,
+    restart: Effect.void,
+  };
+  return { allowed, reads, system };
+};
+
 const setUp = (options: {
   readonly account: AuthState;
   readonly origins?: ReadonlyArray<string>;
   readonly environments?: DeviceEnvironments.DeviceEnvironments;
+  readonly permissions?: MacPermissions.MacPermissions;
 }) =>
   Effect.gen(function* () {
     const helper = yield* fakeHelper;
@@ -186,6 +203,12 @@ const setUp = (options: {
       auth: auth.shape,
       environments: options.environments ?? memoryEnvironments(options.origins ?? [ORIGIN]),
       readNames: names.readNames,
+      permissions:
+        options.permissions ??
+        MacPermissions.make({
+          platform: "linux",
+          system: fakeMac({ accessibility: false, screen: false }).system,
+        }),
     });
     return { helper, auth, switches, names };
   });
@@ -280,6 +303,69 @@ describe("DeviceSwitches", () => {
         switch: { phase: "channel" },
         channel: { state: "connected" },
       });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps the switch off on a Mac without its permissions, and asks nothing", () =>
+    Effect.gen(function* () {
+      const mac = fakeMac({ accessibility: true, screen: false });
+      const permissions = MacPermissions.make({ platform: "darwin", system: mac.system });
+      const { helper, auth, switches } = yield* setUp({ account: "signedOut", permissions });
+      // Nothing shows before a click on a switch.
+      assert.isUndefined(switches.current().permissions);
+      yield* switches.setSwitch(ORIGIN, true);
+      const status = switches.current();
+      assert.deepStrictEqual(switchOf(status)?.switch, { phase: "off", problem: null });
+      assert.deepStrictEqual(status.permissions, {
+        accessibility: true,
+        screen: false,
+        screenPaneOpened: false,
+      });
+      // No sign-in, no hand-over, no channel.
+      assert.strictEqual(auth.calls.signIn, 0);
+      assert.deepStrictEqual(auth.handOverOrigins, []);
+      assert.lengthOf(startsOf(helper), 0);
+      // Allowed meanwhile: the window's block goes, and the switch stays off until the next click.
+      mac.allowed.screen = true;
+      yield* permissions.refresh;
+      assert.isUndefined(switches.current().permissions);
+      assert.deepStrictEqual(switchOf(switches.current())?.switch, { phase: "off", problem: null });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("signing-in"));
+      assert.lengthOf(startsOf(helper), 0);
+      yield* Queue.offer(auth.signIns, "ok");
+      yield* stateWhere(switches, phaseIs("channel"));
+      assert.strictEqual(auth.calls.signIn, 1);
+      assert.deepStrictEqual(auth.handOverOrigins, [ORIGIN]);
+      assert.lengthOf(startsOf(helper), 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("turns the switch on on a Mac with both permissions", () =>
+    Effect.gen(function* () {
+      const mac = fakeMac({ accessibility: true, screen: true });
+      const permissions = MacPermissions.make({ platform: "darwin", system: mac.system });
+      const { helper, switches } = yield* setUp({ account: "signedIn", permissions });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      assert.isAbove(mac.reads.count, 0);
+      assert.lengthOf(startsOf(helper), 1);
+      assert.isUndefined(switches.current().permissions);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reads no permission off macOS", () =>
+    Effect.gen(function* () {
+      const mac = fakeMac({ accessibility: false, screen: false });
+      for (const platform of ["win32", "linux"]) {
+        const permissions = MacPermissions.make({ platform, system: mac.system });
+        const { helper, switches } = yield* setUp({ account: "signedIn", permissions });
+        yield* switches.setSwitch(ORIGIN, true);
+        yield* stateWhere(switches, phaseIs("channel"));
+        assert.lengthOf(startsOf(helper), 1);
+        assert.isUndefined(switches.current().permissions);
+      }
+      assert.strictEqual(mac.reads.count, 0);
     }).pipe(Effect.scoped),
   );
 

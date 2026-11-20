@@ -22,6 +22,7 @@ import type {
 import type { AuthClientShape, AuthState, HandOver, HandOverError } from "./AuthClient.ts";
 import type { DeviceEnvironments } from "./DeviceEnvironments.ts";
 import type { DeviceRequestError, DeviceService } from "./DeviceService.ts";
+import type { MacPermissions } from "./MacPermissions.ts";
 import {
   environmentName,
   keptNames,
@@ -136,6 +137,8 @@ export interface DeviceSwitchesOptions {
   // Reads the names an Environment's Lazurio gives (ShellNames.read, with the main window's
   // session); none when it could not. It never fails.
   readonly readNames: (origin: string) => Effect.Effect<Option.Option<EnvironmentNames>>;
+  // macOS's permissions: on a Mac a switch goes on only with both allowed (MacPermissions.ts).
+  readonly permissions: Pick<MacPermissions, "allowSwitch" | "current" | "subscribe">;
 }
 
 export interface DeviceSwitches {
@@ -155,7 +158,7 @@ const hostOf = (origin: string): string => URL.parse(origin)?.hostname ?? origin
 
 // Runs the switches for as long as the scope lives; closing it ends every switch's work.
 export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwitchesOptions) {
-  const { device, auth, environments, readNames } = options;
+  const { device, auth, environments, readNames, permissions } = options;
   const scope = yield* Effect.scope;
 
   const listeners = new Set<() => void>();
@@ -441,6 +444,9 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     if (device.current().state !== "ready") {
       return yield* new DeviceSwitchError({ problem: "unavailable" });
     }
+    // On a Mac without both permissions the switch stays off: no sign-in, no hand-over, no channel.
+    // The window shows the permissions instead.
+    if (!(yield* permissions.allowSwitch)) return;
     yield* Effect.logInfo("Agent Desktop's switch on", { origin });
     yield* setPhase(entry, { phase: "connecting" });
     entry.fiber = Option.some(yield* work(origin, entry).pipe(Effect.forkIn(scope)));
@@ -486,20 +492,24 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       const channelOf = (origin: string) =>
         helper.environments.find((environment) => environment.environmentId === origin)?.channel ??
         NO_CHANNEL;
+      const missing = permissions.current();
       return {
         ...helper,
         account: account === "signedIn" ? "signed-in" : "signed-out",
         ...(account === "signedIn" && accountName !== undefined ? { accountName } : {}),
         switches: environments.origins().map((origin) => switchStatus(origin, channelOf(origin))),
         addable: addable(),
+        ...(missing === undefined ? {} : { permissions: missing }),
       };
     },
     subscribe: (listener) => {
       listeners.add(listener);
       const stopDevice = device.subscribe(listener);
+      const stopPermissions = permissions.subscribe(listener);
       return () => {
         listeners.delete(listener);
         stopDevice();
+        stopPermissions();
       };
     },
     stop: device.stop,

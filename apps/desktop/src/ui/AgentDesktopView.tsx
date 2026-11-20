@@ -4,8 +4,14 @@ import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
 import { useEffect, useRef, useState } from "react";
 
-import type { DeviceStatus, DeviceSwitchStatus } from "../shared/bridge.ts";
+import type {
+  DevicePermissionKind,
+  DevicePermissions,
+  DeviceStatus,
+  DeviceSwitchStatus,
+} from "../shared/bridge.ts";
 import { environmentName, namedEnvironment } from "../shared/environmentName.ts";
+import { permissionStep } from "../shared/macPermissions.ts";
 import {
   problemCode,
   problemKey,
@@ -27,6 +33,8 @@ export interface AgentDesktopActions {
   readonly removeEnvironment: (origin: string) => Promise<void>;
   readonly signOut: () => Promise<void>;
   readonly stop: () => Promise<void>;
+  readonly openPermissionSettings: (kind: DevicePermissionKind) => Promise<void>;
+  readonly restartApp: () => Promise<void>;
 }
 
 function Help({ label, children }: { readonly label: string; readonly children: string }) {
@@ -233,6 +241,67 @@ function EnvironmentRow({
   );
 }
 
+// macOS's permissions after a switch stayed off for them (docs/adr/0006, point 6): two rows with
+// their state and one button, for the pane of the first one missing or, once Screen Recording's pane
+// was opened, the app's restart.
+function Permissions({
+  permissions,
+  text,
+  onOpen,
+  onRestart,
+}: {
+  readonly permissions: DevicePermissions;
+  readonly text: DeviceText["permissions"];
+  readonly onOpen: (kind: DevicePermissionKind) => void;
+  readonly onRestart: () => void;
+}) {
+  const step = permissionStep(permissions);
+  if (step.action === "none") return null;
+  const row = (kind: DevicePermissionKind, name: string, allowed: boolean) => (
+    <li className="ad__perm" data-permission={kind} data-allowed={allowed}>
+      <span className="ad__perm-name">{name}</span>
+      <span className="ad__state">
+        <span className="ad__dot" data-state={allowed ? "allowed" : "denied"} aria-hidden="true" />
+        {allowed ? text.allowed : text.notAllowed}
+      </span>
+    </li>
+  );
+  return (
+    <div
+      className="ad__perms"
+      role="group"
+      aria-label={text.label}
+      data-device-permissions={step.action}
+    >
+      <ul className="ad__perm-rows">
+        {row("accessibility", text.accessibility, permissions.accessibility)}
+        {row("screen", text.screen, permissions.screen)}
+      </ul>
+      {permissions.screen ? null : <p className="ad__perm-note">{text.screenAfterRestart}</p>}
+      {step.action === "restart" ? (
+        <button
+          type="button"
+          className="ad__quiet"
+          data-action="device-restart"
+          onClick={onRestart}
+        >
+          {text.restart}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="ad__quiet"
+          data-action="device-open-settings"
+          data-permission={step.kind}
+          onClick={() => onOpen(step.kind)}
+        >
+          {text.open}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // A state of the whole Agent Desktop, not of one Environment: one sentence, its details folded.
 function Notice({
   kind,
@@ -350,6 +419,14 @@ export function AgentDesktopView({
             {text.stopFailed}
           </p>
         ) : null}
+        {status.permissions === undefined ? null : (
+          <Permissions
+            permissions={status.permissions}
+            text={text.permissions}
+            onOpen={(kind) => run(() => actions.openPermissionSettings(kind))}
+            onRestart={() => run(() => actions.restartApp())}
+          />
+        )}
         {status.switches.length === 0 ? (
           <div className="ad__empty" data-device-environments="none">
             <p>{text.noEnvironments}</p>

@@ -11,6 +11,8 @@ const bridgeActions: AgentDesktopActions = {
   removeEnvironment: (origin) => window.lazurio.device.removeEnvironment(origin),
   signOut: () => window.lazurio.device.signOut(),
   stop: () => window.lazurio.device.stop(),
+  openPermissionSettings: (kind) => window.lazurio.device.openPermissionSettings(kind),
+  restartApp: () => window.lazurio.device.restartApp(),
 };
 
 // The Agent Desktop window's page (?view=agent-desktop, DevicePanel.ts): it follows Agent Desktop's

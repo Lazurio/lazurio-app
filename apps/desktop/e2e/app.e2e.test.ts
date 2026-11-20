@@ -155,8 +155,10 @@ describe("Lazurio App GEN4", () => {
       calls: [
         "addEnvironment",
         "getState",
+        "openPermissionSettings",
         "openWindow",
         "removeEnvironment",
+        "restartApp",
         "setSwitch",
         "signOut",
         "stop",

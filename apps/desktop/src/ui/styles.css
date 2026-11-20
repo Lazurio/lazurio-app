@@ -578,7 +578,8 @@ body {
   background: var(--muted);
 }
 
-.ad__dot[data-state="connected"] {
+.ad__dot[data-state="connected"],
+.ad__dot[data-state="allowed"] {
   background: var(--ad-on);
 }
 
@@ -591,8 +592,60 @@ body {
 }
 
 .ad__dot[data-state="error"],
-.ad__dot[data-state="unknown"] {
+.ad__dot[data-state="unknown"],
+.ad__dot[data-state="denied"] {
   background: var(--problem);
+}
+
+/* macOS's permissions: two quiet rows with their state, at most one short sentence, one button. */
+.ad__perms {
+  display: grid;
+  gap: 8px;
+  padding: 6px 12px 12px;
+  border-radius: 10px;
+  background: var(--ad-card);
+}
+
+.ad__perm-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ad__perm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.ad__perm:first-child {
+  border-top: 0;
+}
+
+.ad__perm-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ad__perm-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* On the block's own background the quiet button's hover needs a darker one. */
+@media (hover: hover) and (pointer: fine) {
+  .ad__perms .ad__quiet:hover {
+    background: var(--line);
+  }
 }
 
 .ad__envs {

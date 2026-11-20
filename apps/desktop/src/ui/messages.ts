@@ -184,6 +184,18 @@ export interface DeviceText {
   // Why a switch went off by itself: one short sentence, and the details behind it.
   readonly problems: SwitchProblemText;
   readonly problemDetails: SwitchProblemText;
+  // macOS's permissions (docs/adr/0006, point 6): two rows with their state and one button.
+  readonly permissions: {
+    readonly label: string;
+    readonly accessibility: string;
+    readonly screen: string;
+    readonly allowed: string;
+    readonly notAllowed: string;
+    readonly open: string;
+    readonly restart: string;
+    // Under the rows while Screen Recording is missing.
+    readonly screenAfterRestart: string;
+  };
 }
 
 interface SwitchProblemText {
@@ -428,6 +440,16 @@ const cs: Text = {
       other:
         "Prostředí odmítlo připojení s kódem uvedeným níže. Když se to opakuje, pošlete kód Adminovi své Organizace.",
     },
+    permissions: {
+      label: "Oprávnění macOS",
+      accessibility: "Zpřístupnění",
+      screen: "Nahrávání obrazovky",
+      allowed: "Povoleno",
+      notAllowed: "Nepovoleno",
+      open: "Otevřít Nastavení",
+      restart: `Restartovat ${APP_NAME}`,
+      screenAfterRestart: "Nahrávání obrazovky platí až po restartu aplikace.",
+    },
   },
   tray: {
     open: `Otevřít ${APP_NAME}`,
@@ -667,6 +689,16 @@ const en: Text = {
         "This Environment's address is not one Agent Desktop connects to. Remove it and add it again from its Lazurio page.",
       other:
         "The Environment refused the connection with the code below. If it keeps happening, send the code to your Organization's Admin.",
+    },
+    permissions: {
+      label: "macOS permissions",
+      accessibility: "Accessibility",
+      screen: "Screen Recording",
+      allowed: "Allowed",
+      notAllowed: "Not allowed",
+      open: "Open System Settings",
+      restart: `Restart ${APP_NAME}`,
+      screenAfterRestart: "Screen Recording takes effect after the app restarts.",
     },
   },
   tray: {
