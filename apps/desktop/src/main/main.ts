@@ -48,6 +48,7 @@ import * as Helpers from "./Helpers.ts";
 import * as AppMenu from "./AppMenu.ts";
 import * as Lifecycle from "./Lifecycle.ts";
 import * as LocalScheme from "./LocalScheme.ts";
+import * as MacPermissions from "./MacPermissions.ts";
 import * as MainWindow from "./MainWindow.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
@@ -105,6 +106,7 @@ const testHooks = Effect.gen(function* () {
       trayIcon: (_image: Electron.NativeImage) => {},
       startGate: Effect.void,
       quitHeld: () => {},
+      macPermissions: Option.none<MacPermissions.PermissionSystem>(),
     };
   }
   // A launch may keep its data apart from the development profile, before the app is ready.
@@ -186,7 +188,35 @@ const testHooks = Effect.gen(function* () {
   const quitHeld = () => {
     process.stdout.write("lazurio-app-e2e quit-held\n");
   };
+  // A Mac's permissions for Agent Desktop, as "accessibility:denied,screen:granted": the app acts
+  // as on a Mac for them alone. A test allows one by changing lazurioAppE2eMacPermissions; asking
+  // macOS, opening a pane and the restart are written out instead.
+  const simulated = yield* Config.option(Config.String("LAZURIO_APP_E2E_MAC_PERMISSIONS"));
+  let macPermissions = Option.none<MacPermissions.PermissionSystem>();
+  if (Option.isSome(simulated)) {
+    const allowed = { accessibility: false, screen: false };
+    for (const pair of simulated.value.split(",")) {
+      const [kind, answer] = pair.split(":");
+      if (kind !== "accessibility" && kind !== "screen") {
+        return yield* Effect.die(`LAZURIO_APP_E2E_MAC_PERMISSIONS: no permission ${kind}`);
+      }
+      allowed[kind] = answer === "granted";
+    }
+    Reflect.set(globalThis, "lazurioAppE2eMacPermissions", allowed);
+    macPermissions = Option.some<MacPermissions.PermissionSystem>({
+      read: Effect.sync(() => ({ ...allowed })),
+      enlist: (kind) =>
+        Effect.sync(() => {
+          process.stdout.write(`lazurio-app-e2e enlist ${kind}\n`);
+        }),
+      openPane: (address) => Effect.sync(() => observer.openExternally(address)),
+      restart: Effect.sync(() => {
+        process.stdout.write("lazurio-app-e2e restart\n");
+      }),
+    });
+  }
   return {
+    macPermissions,
     notice,
     secondInstance,
     trayMenu,
@@ -344,6 +374,53 @@ const keystoreOn = (platform: string, development: boolean): NodeKeys.Keystore =
     seal: (text) => Electron.safeStorage.encryptString(text),
     open: (sealed) => Electron.safeStorage.decryptString(Buffer.from(sealed)),
   };
+};
+
+// macOS's answers about Agent Desktop's permissions (MacPermissions.ts); only a Mac asks them.
+const electronPermissions: MacPermissions.PermissionSystem = {
+  // Reading prompts for nothing: isTrustedAccessibilityClient(false), and Screen Recording's status
+  // as macOS keeps it for this process (CGPreflightScreenCaptureAccess), so a newly allowed one
+  // reads as missing until the app starts again.
+  read: Effect.sync(() => ({
+    accessibility: Electron.systemPreferences.isTrustedAccessibilityClient(false),
+    screen: Electron.systemPreferences.getMediaAccessStatus("screen") === "granted",
+  })),
+  enlist: (kind) =>
+    kind === "accessibility"
+      ? // macOS's own prompt, which also lists the app under Accessibility.
+        Effect.sync(() => {
+          Electron.systemPreferences.isTrustedAccessibilityClient(true);
+        })
+      : // Only while Screen Recording is not allowed: getSources then asks macOS first
+        // (CGRequestScreenCaptureAccess), which lists the app and prompts, and fails before any
+        // capturer exists, so nothing is captured. No thumbnails were asked for either way, and the
+        // answer is dropped.
+        Effect.suspend(() =>
+          Electron.systemPreferences.getMediaAccessStatus("screen") === "granted"
+            ? Effect.void
+            : Effect.promise(() =>
+                Electron.desktopCapturer
+                  .getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } })
+                  .then(
+                    () => undefined,
+                    () => undefined,
+                  ),
+              ).pipe(Effect.timeoutOption("5 seconds"), Effect.asVoid),
+        ),
+  openPane: (address) =>
+    Effect.tryPromise({
+      try: () => Electron.shell.openExternal(address),
+      catch: () => new MacPermissions.MacPermissionsError({ problem: "not-opened" }),
+    }),
+  // The same end as Quit in the tray: the helpers stop and every switch is off after the start,
+  // which opens the Agent Desktop window again.
+  restart: Effect.sync(() => {
+    const args = process.argv.slice(1).filter((arg) => arg !== "--hidden");
+    Electron.app.relaunch({
+      args: args.includes("--show-agent-desktop") ? args : [...args, "--show-agent-desktop"],
+    });
+    Electron.app.quit();
+  }),
 };
 
 // Why this system cannot update the app by itself (docs/adr/0005, point 7). Squirrel.Mac installs
@@ -554,6 +631,13 @@ const program = Effect.gen(function* () {
           }),
         )
       : Option.none<DeviceService.DeviceService>();
+  // macOS's permissions for its engine: on a Mac a switch goes on only with both (MacPermissions).
+  const permissions = MacPermissions.make(
+    Option.match(hooks.macPermissions, {
+      onNone: () => ({ platform, system: electronPermissions }),
+      onSome: (system) => ({ platform: "darwin", system }),
+    }),
+  );
   // Its switches (contract v3): the Environments the person added, the app's own sign-in with
   // Lazurio Auth and a hand-over for each channel. Every switch is off after each start.
   const switches = Option.isSome(device)
@@ -584,13 +668,18 @@ const program = Effect.gen(function* () {
             ShellNames.read(origin, (url, init) =>
               Electron.session.fromPartition(MainWindow.REMOTE_PARTITION).fetch(url, init),
             ),
+          permissions,
         }),
       )
     : Option.none<DeviceSwitches.DeviceSwitches>();
   const noSwitch = Effect.fail(new DeviceSwitches.DeviceSwitchError({ problem: "not-listed" }));
   const openWindow = Effect.sync(openAgentDesktop);
+  const permissionControls = {
+    openPermissionSettings: permissions.openSettings,
+    restartApp: permissions.restartApp,
+  };
   const deviceControls: DeviceIpc.DeviceControls = Option.match(switches, {
-    onSome: (service) => ({ ...service, openWindow }),
+    onSome: (service) => ({ ...service, openWindow, ...permissionControls }),
     onNone: () => ({
       current: () => DeviceService.withoutHelper(deviceHelper === undefined ? "absent" : "failed"),
       subscribe: () => () => {},
@@ -600,15 +689,23 @@ const program = Effect.gen(function* () {
       removeEnvironment: () => noSwitch,
       signOut: Effect.void,
       openWindow,
+      ...permissionControls,
     }),
   });
+  const panelServices = yield* Effect.context<never>();
   devicePanel = Option.some(
     yield* DevicePanel.make({
       preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
       title: "Agent Desktop",
       parent: () => mainWindow,
+      focused: () => Effect.runForkWith(panelServices)(permissions.refresh),
     }),
   );
+  // While the window shows the permissions, they are read again every 2 seconds, so the block goes
+  // once both are allowed; the switch stays off until the person turns it on.
+  yield* Effect.suspend(() =>
+    Option.isSome(devicePanel) && devicePanel.value.visible() ? permissions.refresh : Effect.void,
+  ).pipe(Effect.repeat(Schedule.spaced("2 seconds")), Effect.forkScoped);
   // The updater's view of the computer: the configured helper's, or the default (always idle).
   const idleByDefault = yield* DeviceActivity;
   const deviceActivity = Option.getOrElse(

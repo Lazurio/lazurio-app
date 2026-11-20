@@ -98,6 +98,14 @@ const AGENT_DESKTOP_FIXTURES: Readonly<Record<string, DeviceStatus>> = {
   "error-device-not-approved": named([
     row(BOB, failed({ from: "helper", reason: "not_permitted", httpStatus: 403 })),
   ]),
+  // A Mac where a click on the switch found the permissions missing: the switch stayed off.
+  "permissions-missing": named([row(BOB, OFF)], {
+    permissions: { accessibility: false, screen: false, screenPaneOpened: false },
+  }),
+  // Accessibility allowed, Screen Recording's pane opened: it applies after a restart.
+  "permissions-restart": named([row(BOB, OFF)], {
+    permissions: { accessibility: true, screen: false, screenPaneOpened: true },
+  }),
   worst: named(
     [
       row(
@@ -123,6 +131,8 @@ const inert: AgentDesktopActions = {
   removeEnvironment: () => Promise.resolve(),
   signOut: () => Promise.resolve(),
   stop: () => Promise.resolve(),
+  openPermissionSettings: () => Promise.resolve(),
+  restartApp: () => Promise.resolve(),
 };
 
 export function AgentDesktopFixtures() {

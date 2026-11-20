@@ -340,13 +340,17 @@ describe("Agent Desktop's switch", () => {
     assert.deepStrictEqual(calls, [
       "addEnvironment",
       "getState",
+      "openPermissionSettings",
       "openWindow",
       "removeEnvironment",
+      "restartApp",
       "setSwitch",
       "signOut",
       "stop",
       "subscribe",
     ]);
+    // Off a Mac no permission shows, and none can be opened.
+    assert.strictEqual(await shell.locator("[data-device-permissions]").count(), 0);
   });
 
   // The Agent Desktop window has no menu (DevicePanel). On Windows and Linux a menu bar sits inside
@@ -585,6 +589,123 @@ describe("Agent Desktop's switch", () => {
     // The next test signs in again.
     await shell.locator('[data-action="device-sign-out"]').click();
     await shell.locator('[data-device-account="signed-out"]').waitFor();
+  });
+
+  // Resolves once the app's output after the mark has the line.
+  const said = (from: number, line: string): Promise<void> =>
+    new Promise((resolve) => {
+      const check = () => {
+        if (!output.join("").slice(from).includes(`${line}\n`)) return;
+        app.process().stdout?.off("data", check);
+        resolve();
+      };
+      app.process().stdout?.on("data", check);
+      check();
+    });
+  // Allows a simulated permission of macOS, as the person does in System Settings.
+  const allow = (kind: "accessibility" | "screen") =>
+    app.evaluate((_electron, which) => {
+      Reflect.set(Reflect.get(globalThis, "lazurioAppE2eMacPermissions") ?? {}, which, true);
+    }, kind);
+  const permissions = () => shell.locator("[data-device-permissions]");
+
+  // It restarts the app as on a Mac without Accessibility and Screen Recording (docs/adr/0006,
+  // point 6): the switch stays off and the window shows both, with one button.
+  it("keeps the switch off on a Mac without its permissions, and shows them with one button", async () => {
+    await app.close();
+    await launch({ LAZURIO_APP_E2E_MAC_PERMISSIONS: "accessibility:denied,screen:denied" });
+    await shell.locator('[data-action="device-add"]').click();
+    await inPhase("off", "off");
+    // Nothing shows before a click on the switch.
+    assert.strictEqual(await permissions().count(), 0);
+    const signInsBefore = signIns;
+    const handOversBefore = handOverOrigins.length;
+    const from = mark();
+    await environmentRow().locator('[data-action="device-switch"]').click();
+    await shell.locator('[data-device-permissions="open"]').waitFor();
+    // The switch stayed off: no sign-in, no hand-over, nothing for the system's browser.
+    await inPhase("off", "off");
+    assert.isFalse(await environmentRow().locator('[data-action="device-switch"]').isChecked());
+    assert.strictEqual(signIns, signInsBefore);
+    assert.strictEqual(handOverOrigins.length, handOversBefore);
+    assert.notInclude(output.join("").slice(from), "system-browser");
+    // Two rows with their state, the sentence about the restart, one button.
+    assert.deepStrictEqual(
+      await permissions()
+        .locator("[data-permission][data-allowed]")
+        .evaluateAll((rows) =>
+          rows.map((row) => [
+            row.getAttribute("data-permission"),
+            row.getAttribute("data-allowed"),
+          ]),
+        ),
+      [
+        ["accessibility", "false"],
+        ["screen", "false"],
+      ],
+    );
+    assert.strictEqual(await permissions().locator("button").count(), 1);
+    assert.strictEqual(await permissions().locator("p").count(), 1);
+    // The window sends only a kind; the main process refuses any other.
+    const refused = await shell.evaluate(async () => {
+      const results: Array<string> = [];
+      for (const kind of ["camera", "x-apple.systempreferences:evil", ""]) {
+        try {
+          // @ts-expect-error -- A kind the bridge does not know, as a page that misbehaves sends it.
+          await window.lazurio.device.openPermissionSettings(kind);
+          results.push("opened");
+        } catch {
+          results.push("refused");
+        }
+      }
+      return results;
+    });
+    assert.deepStrictEqual(refused, ["refused", "refused", "refused"]);
+    // No restart is offered yet.
+    const restartRefused = await shell.evaluate(() =>
+      window.lazurio.device.restartApp().then(
+        () => "restarted",
+        () => "refused",
+      ),
+    );
+    assert.strictEqual(restartRefused, "refused");
+    assert.notInclude(output.join("").slice(from), "system-browser");
+    assert.notInclude(output.join("").slice(from), "lazurio-app-e2e restart");
+
+    // The button opens the first missing pane, after macOS lists the app.
+    let opened = mark();
+    await permissions().locator('[data-action="device-open-settings"]').click();
+    await said(
+      opened,
+      "lazurio-app-e2e system-browser x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    );
+    assert.include(output.join("").slice(opened), "lazurio-app-e2e enlist accessibility\n");
+    // Allowed in System Settings: the window reads it again by itself.
+    await allow("accessibility");
+    await permissions().locator('[data-permission="accessibility"][data-allowed="true"]').waitFor();
+    opened = mark();
+    await permissions().locator('[data-action="device-open-settings"]').click();
+    await said(
+      opened,
+      "lazurio-app-e2e system-browser x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+    );
+    // Screen Recording's pane was opened: it applies after a restart, which the one button does.
+    await shell.locator('[data-device-permissions="restart"]').waitFor();
+    assert.strictEqual(await permissions().locator("button").count(), 1);
+    const restarted = mark();
+    await permissions().locator('[data-action="device-restart"]').click();
+    await said(restarted, "lazurio-app-e2e restart");
+    // Both allowed: the block goes, and the switch stays off until the person turns it on.
+    await allow("screen");
+    await permissions().waitFor({ state: "detached" });
+    await inPhase("off", "off");
+    await environmentRow().locator('[data-action="device-switch"]').click();
+    await inPhase("signing-in");
+    await environmentRow().locator('[data-action="device-switch"]').click();
+    await inPhase("off");
+    await environmentRow().locator('[data-action="device-more"]').click();
+    await environmentRow().locator('[data-action="device-remove"]').click();
+    await shell.locator('[data-device-environments="none"]').waitFor();
   });
 
   // Last: it restarts the app with a Device helper that never answers StopChannel.

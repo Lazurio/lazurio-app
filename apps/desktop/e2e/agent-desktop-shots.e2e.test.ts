@@ -26,6 +26,8 @@ const STATES = [
   "error-unknown-environment",
   "error-not-yours",
   "error-device-not-approved",
+  "permissions-missing",
+  "permissions-restart",
   "worst",
 ] as const;
 
@@ -149,6 +151,55 @@ describe("Agent Desktop's panel in its sample states", () => {
         () => (document.scrollingElement?.scrollWidth ?? 0) <= document.documentElement.clientWidth,
       ),
     );
+  });
+
+  it("shows macOS's permissions as two rows and one button, within the window", async () => {
+    const page = await localPage(app, "view=agent-desktop");
+    for (const lang of ["cs", "en"] as const) {
+      await show("permissions-missing", lang, "light");
+      const block = page.locator("[data-device-permissions]");
+      assert.strictEqual(await block.getAttribute("data-device-permissions"), "open");
+      assert.deepStrictEqual(
+        await block.locator(".ad__perm-name").allInnerTexts(),
+        lang === "cs"
+          ? ["Zpřístupnění", "Nahrávání obrazovky"]
+          : ["Accessibility", "Screen Recording"],
+      );
+      assert.deepStrictEqual(
+        await block.locator(".ad__perm .ad__state").allInnerTexts(),
+        lang === "cs" ? ["Nepovoleno", "Nepovoleno"] : ["Not allowed", "Not allowed"],
+      );
+      assert.strictEqual(await block.locator("button").count(), 1);
+      assert.strictEqual(
+        await block.locator("button").innerText(),
+        lang === "cs" ? "Otevřít Nastavení" : "Open System Settings",
+      );
+      await show("permissions-restart", lang, "dark");
+      assert.strictEqual(await block.getAttribute("data-device-permissions"), "restart");
+      assert.deepStrictEqual(
+        await block.locator(".ad__perm .ad__state").allInnerTexts(),
+        lang === "cs" ? ["Povoleno", "Nepovoleno"] : ["Allowed", "Not allowed"],
+      );
+      assert.strictEqual(
+        await block.locator("button").innerText(),
+        lang === "cs" ? "Restartovat Lazurio App (Alpha)" : "Restart Lazurio App (Alpha)",
+      );
+      assert.strictEqual(
+        await block.locator(".ad__perm-note").innerText(),
+        lang === "cs"
+          ? "Nahrávání obrazovky platí až po restartu aplikace."
+          : "Screen Recording takes effect after the app restarts.",
+      );
+      // Nothing runs out of the window sideways, and the button keeps its text on one line.
+      assert.isTrue(
+        await page.evaluate(
+          () =>
+            (document.scrollingElement?.scrollWidth ?? 0) <= document.documentElement.clientWidth,
+        ),
+      );
+      const button = await block.locator("button").boundingBox();
+      assert.isBelow(button?.height ?? 0, 40);
+    }
   });
 
   it("says from when a problem is, in each language", async () => {
