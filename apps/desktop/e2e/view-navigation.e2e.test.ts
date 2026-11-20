@@ -23,6 +23,11 @@ beforeAll(async () => {
   server = NodeHttp.createServer((request, response) => {
     const path = request.url ?? "/";
     answered.set(path, (answered.get(path) ?? 0) + 1);
+    // A page that never answers, for a failed load.
+    if (path === "/broken") {
+      request.socket.destroy();
+      return;
+    }
     response.writeHead(path === "/favicon.ico" ? 404 : 200, {
       "content-type": "text/html",
       "cache-control": "no-store",
@@ -57,7 +62,7 @@ afterAll(async () => {
 
 // Runs the step in the main process and resolves with the remote page's address once it has
 // loaded after it.
-const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5" | "f5-bar") =>
+const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5" | "f5-bar" | "broken") =>
   app.evaluate(
     async ({ BaseWindow, Menu }, [which, firstAddress, secondAddress]) => {
       const remote = BaseWindow.getAllWindows()[0]?.contentView.children[1] as
@@ -96,9 +101,11 @@ const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5" | "f5-ba
       if (which === "start") {
         // The first page may have loaded before this runs, or may still wait for its start.
         while (contents.getURL() !== firstAddress || contents.isLoading()) await loaded();
-      } else if (which === "second") {
+      } else if (which === "second" || which === "broken") {
         const done = loaded();
-        void contents.loadURL(secondAddress);
+        void contents
+          .loadURL(which === "second" ? secondAddress : secondAddress.replace("/second", "/broken"))
+          .catch(() => undefined);
         await done;
       } else if (which === "back" || which === "forward") {
         const done = loaded();
@@ -118,31 +125,75 @@ const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5" | "f5-ba
       }
       const back = item(["Alt+Left", "Cmd+["]);
       const forward = item(["Alt+Right", "Cmd+]"]);
-      return { url: contents.getURL(), back: back.enabled, forward: forward.enabled };
+      // The page's own title proves its content, also when a load failed before this listened:
+      // Chromium's error page for the same address has none of it (review of #85).
+      const title = String(await contents.executeJavaScript("document.title"));
+      return { url: contents.getURL(), title, back: back.enabled, forward: forward.enabled };
     },
     [step, first, second] as const,
   );
 
 describe("Lazurio App GEN4's Back, Forward and Reload", () => {
   it("has nowhere to go back or forward on its first page", async () => {
-    assert.deepStrictEqual(await afterLoad("start"), { url: first, back: false, forward: false });
+    assert.deepStrictEqual(await afterLoad("start"), {
+      url: first,
+      title: "/first",
+      back: false,
+      forward: false,
+    });
   });
 
   it("goes back and forward between two pages from the View menu", async () => {
-    assert.deepStrictEqual(await afterLoad("second"), { url: second, back: true, forward: false });
-    assert.deepStrictEqual(await afterLoad("back"), { url: first, back: false, forward: true });
-    assert.deepStrictEqual(await afterLoad("forward"), { url: second, back: true, forward: false });
+    assert.deepStrictEqual(await afterLoad("second"), {
+      url: second,
+      title: "/second",
+      back: true,
+      forward: false,
+    });
+    assert.deepStrictEqual(await afterLoad("back"), {
+      url: first,
+      title: "/first",
+      back: false,
+      forward: true,
+    });
+    assert.deepStrictEqual(await afterLoad("forward"), {
+      url: second,
+      title: "/second",
+      back: true,
+      forward: false,
+    });
   });
 
   it("reloads the page with F5", async () => {
     const before = answered.get("/second") ?? 0;
-    assert.deepStrictEqual(await afterLoad("f5"), { url: second, back: true, forward: false });
+    assert.deepStrictEqual(await afterLoad("f5"), {
+      url: second,
+      title: "/second",
+      back: true,
+      forward: false,
+    });
     assert.strictEqual(answered.get("/second"), before + 1);
   });
 
   it("reloads the page with F5 while Agent Desktop's bar has the focus", async () => {
     const before = answered.get("/second") ?? 0;
-    assert.deepStrictEqual(await afterLoad("f5-bar"), { url: second, back: true, forward: false });
+    assert.deepStrictEqual(await afterLoad("f5-bar"), {
+      url: second,
+      title: "/second",
+      back: true,
+      forward: false,
+    });
     assert.strictEqual(answered.get("/second"), before + 1);
+  });
+
+  // The check itself: a page that does not load is a failure, never a pass.
+  it("reports a page that does not load as a failure", async () => {
+    let failure: unknown;
+    try {
+      await afterLoad("broken");
+    } catch (error) {
+      failure = error;
+    }
+    assert.match(String(failure), /did not load/u);
   });
 });
