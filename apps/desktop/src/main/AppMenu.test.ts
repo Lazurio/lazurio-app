@@ -7,6 +7,8 @@ const actions = (calls: Array<string>) => ({
   toggleStatus: () => calls.push("status"),
   openAgentDesktop: () => calls.push("agent-desktop"),
   reloadPage: () => calls.push("reload"),
+  goBack: () => calls.push("back"),
+  goForward: () => calls.push("forward"),
   about: () => calls.push("about"),
 });
 
@@ -20,6 +22,8 @@ describe("AppMenu.menuTemplate", () => {
       appName: "Lazurio App (Alpha)",
       platform: "win32",
       statusShown: false,
+      canGoBack: true,
+      canGoForward: false,
       actions: actions(calls),
     });
     assert.deepStrictEqual(labels(menu), ["Úpravy", "Zobrazit", "Nápověda"]);
@@ -31,7 +35,22 @@ describe("AppMenu.menuTemplate", () => {
     );
     for (const item of view) item.click?.();
     menu[2]?.submenu?.[0]?.click?.();
-    assert.deepStrictEqual(calls, ["status", "agent-desktop", "reload", "about"]);
+    assert.deepStrictEqual(calls, [
+      "status",
+      "agent-desktop",
+      "back",
+      "forward",
+      "reload",
+      "about",
+    ]);
+    // Back and Forward with their keys, enabled only where the page's history goes.
+    assert.deepStrictEqual(
+      view.slice(3, 5).map((item) => [item.label, item.accelerator, item.enabled]),
+      [
+        ["Zpět", "Alt+Left", true],
+        ["Vpřed", "Alt+Right", false],
+      ],
+    );
   });
 
   it("ticks the status item while the column shows, and gives a Mac the app's own menu first", () => {
@@ -40,6 +59,8 @@ describe("AppMenu.menuTemplate", () => {
       appName: "Lazurio App (Alpha)",
       platform: "darwin",
       statusShown: true,
+      canGoBack: false,
+      canGoForward: false,
       actions: actions([]),
     });
     assert.deepStrictEqual(labels(menu), ["Lazurio App (Alpha)", "Edit", "View"]);
@@ -49,5 +70,9 @@ describe("AppMenu.menuTemplate", () => {
       "hide",
     );
     assert.isTrue(menu[2]?.submenu?.[0]?.checked);
+    assert.deepStrictEqual(
+      menu[2]?.submenu?.slice(3, 5).map((item) => item.accelerator),
+      ["Cmd+[", "Cmd+]"],
+    );
   });
 });

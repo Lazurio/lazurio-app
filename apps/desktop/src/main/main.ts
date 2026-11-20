@@ -743,11 +743,20 @@ const program = Effect.gen(function* () {
           appName: APP_NAME,
           platform,
           statusShown,
+          ...(Option.isSome(windowControls)
+            ? windowControls.value.history()
+            : { canGoBack: false, canGoForward: false }),
           actions: {
             toggleStatus: () => setStatusShown(!statusShown),
             openAgentDesktop,
             reloadPage: () => {
               if (Option.isSome(windowControls)) windowControls.value.reloadPage();
+            },
+            goBack: () => {
+              if (Option.isSome(windowControls)) windowControls.value.goBack();
+            },
+            goForward: () => {
+              if (Option.isSome(windowControls)) windowControls.value.goForward();
             },
             about: () => {
               void Electron.dialog.showMessageBox({
@@ -846,6 +855,7 @@ const program = Effect.gen(function* () {
       status,
       remoteUrl: yield* remoteUrlOf(hooks.remoteUrl),
       whenReachable: tailnets.whenReachable,
+      historyChanged: () => refreshMenu(),
       pageShown: (url) => {
         if (Option.isSome(switches)) switches.value.pageShown(url);
       },
