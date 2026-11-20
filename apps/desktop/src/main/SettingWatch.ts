@@ -17,10 +17,20 @@ export const startAgainFor = (options: {
   options.joinsAny &&
   (Option.isNone(options.atStart) || options.now.value !== options.atStart.value);
 
+// What one reading leads to. Once the app asked to start again, nothing more: its quit may be held
+// (an update waiting for the computer to be idle), and another relaunch would start a second app
+// and repeat the notice (review of #84).
+export const stepFor = (options: {
+  readonly requested: boolean;
+  readonly startAgain: boolean;
+  readonly agentWorks: boolean;
+}): "none" | "wait" | "start" =>
+  options.requested || !options.startAgain ? "none" : options.agentWorks ? "wait" : "start";
+
 const READ_EVERY = "10 seconds";
 
-// Reads the setting every READ_EVERY for as long as the scope lives, and starts the app again once
-// startAgainFor says so and no agent works on the computer; with an agent at work it waits.
+// Reads the setting every READ_EVERY for as long as the scope lives, and starts the app again once,
+// when stepFor says so; with an agent at work it waits.
 export const watch = Effect.fn("SettingWatch.watch")(function* <E, R>(options: {
   readonly atStart: Option.Option<string>;
   // The chosen setting's text now, and whether it names a network the app would join.
@@ -32,12 +42,19 @@ export const watch = Effect.fn("SettingWatch.watch")(function* <E, R>(options: {
   readonly agentWorks: () => boolean;
   readonly startAgain: Effect.Effect<void>;
 }) {
+  let requested = false;
   yield* options.read.pipe(
     Effect.flatMap(({ text, joinsAny }) => {
-      if (!startAgainFor({ atStart: options.atStart, now: text, joinsAny })) return Effect.void;
-      if (options.agentWorks()) {
+      const step = stepFor({
+        requested,
+        startAgain: startAgainFor({ atStart: options.atStart, now: text, joinsAny }),
+        agentWorks: options.agentWorks(),
+      });
+      if (step === "none") return Effect.void;
+      if (step === "wait") {
         return Effect.logInfo("tailnet setting changed; the app starts again once no agent works");
       }
+      requested = true;
       return Effect.logInfo("tailnet setting changed; the app starts again").pipe(
         Effect.andThen(options.startAgain),
       );

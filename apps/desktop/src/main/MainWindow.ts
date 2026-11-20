@@ -9,7 +9,7 @@ import { STATUS_CHANNEL, type AppStatus, type PageOutcome } from "../shared/brid
 import { problemQuery, type PageProblem } from "../shared/pageProblem.ts";
 import { hardenSession, hostOf, onMainFrameRefused, registerView } from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
-import { destinationOf } from "./Navigation.ts";
+import { destinationOf, isOrganizationHost } from "./Navigation.ts";
 
 // The main window: the local view with the preload bridge in a column, and beside it at most one
 // remote view for a page of the web Lazurio, without preload and in its own session. The two views
@@ -268,7 +268,9 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
       return;
     }
     log(Effect.logWarning("page failed", { host, code, description }));
-    const kind = options.networkMissing() ? "network" : "failed";
+    // Only a page of the Organization's network fails for want of it; any other failure, the
+    // public Dashboard's for one, keeps its own reason (review of #84).
+    const kind = options.networkMissing() && isOrganizationHost(host) ? "network" : "failed";
     showProblem({ kind, code, host }, { outcome: "failed", code }, address);
   });
   contents.on("render-process-gone", (_event, details) => {

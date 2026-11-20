@@ -75,6 +75,11 @@ const httpsUrl = (address: string): URL | undefined => {
   }
 };
 
+// A name in an Organization's network (`*.lazurio.io`), which only that network reaches: its
+// Environments. The Dashboard and Auth on lazurio.ai, and lazurio.app, are on the public internet.
+export const isOrganizationHost = (hostname: string): boolean =>
+  isUnder(nameOf(hostname.toLowerCase()), LAZURIO_DOMAIN);
+
 // The origin `https://<host>` of a page of an Environment's Lazurio, for Agent Desktop's list: HTTPS
 // on the default port, a `launchpad.` name below lazurio.io; never lazurio.app, Auth or
 // the Dashboard. Only Lazurio Auth's hand-over says whether it is the person's Environment (404,
