@@ -57,7 +57,7 @@ afterAll(async () => {
 
 // Runs the step in the main process and resolves with the remote page's address once it has
 // loaded after it.
-const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5") =>
+const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5" | "f5-bar") =>
   app.evaluate(
     async ({ BaseWindow, Menu }, [which, firstAddress, secondAddress]) => {
       const remote = BaseWindow.getAllWindows()[0]?.contentView.children[1] as
@@ -89,8 +89,15 @@ const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5") =>
         item(which === "back" ? ["Alt+Left", "Cmd+["] : ["Alt+Right", "Cmd+]"]).click();
         await done;
       } else {
+        // F5 in the page, or in Agent Desktop's bar above it (the window's last view).
+        const children = BaseWindow.getAllWindows()[0]?.contentView.children ?? [];
+        const bar = (children.at(-1) as Electron.WebContentsView | undefined)?.webContents;
+        const target = which === "f5-bar" ? bar : contents;
+        if (target === undefined || (which === "f5-bar" && target === contents)) {
+          throw new Error("no bar view");
+        }
         const done = loaded();
-        contents.sendInputEvent({ type: "keyDown", keyCode: "F5" });
+        target.sendInputEvent({ type: "keyDown", keyCode: "F5" });
         await done;
       }
       const back = item(["Alt+Left", "Cmd+["]);
@@ -114,6 +121,12 @@ describe("Lazurio App GEN4's Back, Forward and Reload", () => {
   it("reloads the page with F5", async () => {
     const before = answered.get("/second") ?? 0;
     assert.deepStrictEqual(await afterLoad("f5"), { url: second, back: true, forward: false });
+    assert.strictEqual(answered.get("/second"), before + 1);
+  });
+
+  it("reloads the page with F5 while Agent Desktop's bar has the focus", async () => {
+    const before = answered.get("/second") ?? 0;
+    assert.deepStrictEqual(await afterLoad("f5-bar"), { url: second, back: true, forward: false });
     assert.strictEqual(answered.get("/second"), before + 1);
   });
 });

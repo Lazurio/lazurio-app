@@ -407,8 +407,9 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
         })
       : undefined;
   const reloadPage = () => watch?.reload();
-  // F5 reloads the page as View > Reload page does: a menu item has one accelerator.
-  for (const view of [local, remote, waiting]) {
+  // F5 reloads the page as View > Reload page does: a menu item has one accelerator. Every view of
+  // the window, Agent Desktop's bar included: its Stop may hold the focus.
+  for (const view of [local, remote, waiting, options.topBar?.view]) {
     view?.webContents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || input.key !== "F5") return;
       if (input.control || input.alt || input.meta || input.shift) return;
