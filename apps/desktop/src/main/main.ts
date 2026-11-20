@@ -376,6 +376,18 @@ const keystoreOn = (platform: string, development: boolean): NodeKeys.Keystore =
   };
 };
 
+// One restart for the whole run: the network setting (SettingWatch) and Agent Desktop's Screen
+// Recording both start the app again, and a second request while one runs does nothing.
+let restartRequested = false;
+const restartOnce = (args: ReadonlyArray<string>) =>
+  Effect.sync(() => {
+    if (restartRequested) return;
+    restartRequested = true;
+    Electron.app.relaunch({ args: [...args] });
+    Electron.app.quit();
+  });
+const argsWithoutHidden = () => process.argv.slice(1).filter((arg) => arg !== "--hidden");
+
 // macOS's answers about Agent Desktop's permissions (MacPermissions.ts); only a Mac asks them.
 const electronPermissions: MacPermissions.PermissionSystem = {
   // Reading prompts for nothing: isTrustedAccessibilityClient(false), and Screen Recording's status
@@ -414,12 +426,11 @@ const electronPermissions: MacPermissions.PermissionSystem = {
     }),
   // The same end as Quit in the tray: the helpers stop and every switch is off after the start,
   // which opens the Agent Desktop window again.
-  restart: Effect.sync(() => {
-    const args = process.argv.slice(1).filter((arg) => arg !== "--hidden");
-    Electron.app.relaunch({
-      args: args.includes("--show-agent-desktop") ? args : [...args, "--show-agent-desktop"],
-    });
-    Electron.app.quit();
+  restart: Effect.suspend(() => {
+    const args = argsWithoutHidden();
+    return restartOnce(
+      args.includes("--show-agent-desktop") ? args : [...args, "--show-agent-desktop"],
+    );
   }),
 };
 
@@ -953,15 +964,10 @@ const program = Effect.gen(function* () {
       atStart: joining.setting.value,
       read: settingNowOn(yield* HostProcess.Platform),
       agentWorks: () => agentWorksNow(),
-      startAgain: hooks.notice(text.networkFound).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            Electron.app.relaunch({
-              args: process.argv.slice(1).filter((arg) => arg !== "--hidden"),
-            });
-            Electron.app.quit();
-          }),
-        ),
+      startAgain: Effect.suspend(() =>
+        restartRequested
+          ? Effect.void
+          : hooks.notice(text.networkFound).pipe(Effect.andThen(restartOnce(argsWithoutHidden()))),
       ),
     });
   }
