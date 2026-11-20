@@ -76,7 +76,8 @@ const outputLine = (line: string): Promise<void> =>
   });
 
 // Runs a script in the remote page, from the main process, so the page cannot see the test. The
-// remote view loads after the local window, so this waits for the page's own load event.
+// remote view loads after the local window, so this waits until the page has stopped loading
+// (did-stop-loading: isLoading() is still true at did-finish-load).
 const inRemotePage = (script: string): Promise<unknown> =>
   app.evaluate(
     async ({ app: electronApp, webContents }, { url, code }) => {
@@ -86,8 +87,8 @@ const inRemotePage = (script: string): Promise<unknown> =>
         webContents.getAllWebContents().find(loaded) ??
         (await new Promise<Electron.WebContents>((resolve) => {
           const watch = (contents: Electron.WebContents) =>
-            contents.on("did-finish-load", () => {
-              if (contents.getURL() !== url) return;
+            contents.on("did-stop-loading", () => {
+              if (!loaded(contents)) return;
               electronApp.off("web-contents-created", onCreated);
               resolve(contents);
             });
