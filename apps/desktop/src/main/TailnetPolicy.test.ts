@@ -1,9 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import { directoryOf, type PolicySource } from "./TailnetPolicy.ts";
+import { directoryOf, readMac, type MacPort, type PolicySource } from "./TailnetPolicy.ts";
 import type { Directory } from "./TailnetDirectory.ts";
 
 class ReadFailed extends Schema.TaggedError<ReadFailed>()("ReadFailed", {}) {}
@@ -106,5 +107,121 @@ describe("TailnetPolicy.directoryOf", () => {
           assert.deepStrictEqual(tailnetsOf(chosen.directory), ["built-in"]);
         }
       }),
+  );
+});
+
+// A Mac whose managed preference files exist or not, and whose programs answer as a test scripts.
+const mac = (options: {
+  readonly files: ReadonlyArray<string>;
+  readonly answers: Record<string, { readonly output: string; readonly exitCode: number }>;
+}) => {
+  const ran: Array<string> = [];
+  const port: MacPort<never, never> = {
+    exists: (path) => Effect.succeed(options.files.includes(path)),
+    run: (program, args) =>
+      Effect.sync(() => {
+        ran.push([program, ...args].join(" "));
+        return options.answers[program] ?? { output: "", exitCode: 1 };
+      }),
+  };
+  return { ran, port };
+};
+
+const ACCOUNT_POLICY = "/Library/Managed Preferences/klara/io.lazurio.app.plist";
+const COMPUTER_POLICY = "/Library/Managed Preferences/io.lazurio.app.plist";
+
+describe("TailnetPolicy.readMac", () => {
+  it.effect(
+    "reads the account's managed preference before the computer's, without its line break",
+    () =>
+      Effect.gen(function* () {
+        const { ran, port } = mac({
+          files: [ACCOUNT_POLICY, COMPUTER_POLICY],
+          answers: { "/usr/bin/plutil": { output: `${entry("it")}\n`, exitCode: 0 } },
+        });
+        assert.deepStrictEqual(yield* readMac(port, "klara", "machine"), Option.some(entry("it")));
+        assert.deepStrictEqual(ran, [
+          `/usr/bin/plutil -extract Tailnets raw -o - ${ACCOUNT_POLICY}`,
+        ]);
+      }),
+  );
+
+  it.effect("reads the computer's managed preference when the account has none", () =>
+    Effect.gen(function* () {
+      const { ran, port } = mac({
+        files: [COMPUTER_POLICY],
+        answers: { "/usr/bin/plutil": { output: `${entry("it")}\n`, exitCode: 0 } },
+      });
+      assert.deepStrictEqual(yield* readMac(port, "klara", "machine"), Option.some(entry("it")));
+      assert.deepStrictEqual(ran, [
+        `/usr/bin/plutil -extract Tailnets raw -o - ${COMPUTER_POLICY}`,
+      ]);
+    }),
+  );
+
+  it.effect("has no policy without a managed preference file, and runs nothing", () =>
+    Effect.gen(function* () {
+      const { ran, port } = mac({ files: [], answers: {} });
+      assert.isTrue(Option.isNone(yield* readMac(port, "klara", "machine")));
+      assert.deepStrictEqual(ran, []);
+    }),
+  );
+
+  // A managed preference without a string Tailnets keeps the person's setting unread.
+  it.effect("fails on a managed preference file whose Tailnets cannot be read", () =>
+    Effect.gen(function* () {
+      const { port } = mac({
+        files: [COMPUTER_POLICY],
+        answers: { "/usr/bin/plutil": { output: "", exitCode: 1 } },
+      });
+      const result = yield* Effect.result(readMac(port, "klara", "machine"));
+      assert.isTrue(Result.isFailure(result));
+    }),
+  );
+
+  it.effect("reads the person's setting from their defaults", () =>
+    Effect.gen(function* () {
+      const { ran, port } = mac({
+        files: [],
+        answers: { "/usr/bin/defaults": { output: `${entry("person")}\n`, exitCode: 0 } },
+      });
+      assert.deepStrictEqual(yield* readMac(port, "klara", "user"), Option.some(entry("person")));
+      assert.deepStrictEqual(ran, ["/usr/bin/defaults read io.lazurio.app Tailnets"]);
+    }),
+  );
+
+  it.effect("has no setting when defaults has no such key, and fails on any other answer", () =>
+    Effect.gen(function* () {
+      const missing = mac({
+        files: [],
+        answers: { "/usr/bin/defaults": { output: "", exitCode: 1 } },
+      });
+      assert.isTrue(Option.isNone(yield* readMac(missing.port, "klara", "user")));
+      const broken = mac({
+        files: [],
+        answers: { "/usr/bin/defaults": { output: "", exitCode: 2 } },
+      });
+      assert.isTrue(Result.isFailure(yield* Effect.result(readMac(broken.port, "klara", "user"))));
+    }),
+  );
+
+  it.effect("lets a Mac's policy win over the person's setting, as on Windows", () =>
+    Effect.gen(function* () {
+      const { ran, port } = mac({
+        files: [COMPUTER_POLICY],
+        answers: {
+          "/usr/bin/plutil": { output: `${entry("it")}\n`, exitCode: 0 },
+          "/usr/bin/defaults": { output: `${entry("person")}\n`, exitCode: 0 },
+        },
+      });
+      const chosen = yield* directoryOf(
+        (source) => readMac(port, "klara", source),
+        Effect.succeed(BUILT_IN),
+        "Klaras-MacBook",
+      );
+      assert.strictEqual(chosen.source, "policy");
+      assert.deepStrictEqual(tailnetsOf(chosen.directory), ["it"]);
+      assert.isFalse(ran.some((line) => line.startsWith("/usr/bin/defaults")));
+    }),
   );
 });
