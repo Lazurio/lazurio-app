@@ -9,7 +9,7 @@ The content is the same JSON array as on Windows, as one string under the key `T
 1. **IT's policy:** a managed preference, `/Library/Managed Preferences/<account>/io.lazurio.app.plist`, else `/Library/Managed Preferences/io.lazurio.app.plist`.
    - A configuration profile or a device-management tool writes these files, and only an administrator can.
    - A policy always wins. A policy file whose `Tailnets` cannot be read as a string keeps the person's setting unread.
-2. **The person's own setting:** `Tailnets` in their own defaults for `io.lazurio.app`, which `defaults write` sets without an administrator.
+2. **The person's own setting:** `Tailnets` in their own defaults for `io.lazurio.app`, which `defaults write io.lazurio.app Tailnets -string '…'` sets without an administrator. Without `-string`, `defaults` would try to read the JSON as a property list and fail.
    - Lazurio App reads it only when there is no policy file.
    - Any program running with the person's rights can change it, but it can point the app only at Lazurio's own control servers.
 
