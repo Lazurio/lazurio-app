@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadDisplayName</key>
+	<string>Lazurio App (Alpha): network of your Organization</string>
+	<key>PayloadDescription</key>
+	<string>Tells Lazurio App which network of your Organization to join. It grants no access.</string>
+	<key>PayloadIdentifier</key>
+	<string>io.lazurio.app.tailnets</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadUUID</key>
+	<string>{{profile-uuid}}</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadDisplayName</key>
+			<string>Lazurio App network</string>
+			<key>PayloadIdentifier</key>
+			<string>io.lazurio.app.tailnets.preferences</string>
+			<key>PayloadType</key>
+			<string>com.apple.ManagedClient.preferences</string>
+			<key>PayloadUUID</key>
+			<string>{{payload-uuid}}</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadContent</key>
+			<dict>
+				<key>io.lazurio.app</key>
+				<dict>
+					<key>Forced</key>
+					<array>
+						<dict>
+							<key>mcx_preference_settings</key>
+							<dict>
+								<key>Tailnets</key>
+								<string>[{"tailnet":"{{tailnet}}","controlUrl":"https://{{control-server}}","domains":["{{domain}}"]}]</string>
+							</dict>
+						</dict>
+					</array>
+				</dict>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

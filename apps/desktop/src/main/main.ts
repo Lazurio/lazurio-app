@@ -201,9 +201,9 @@ const testHooks = Effect.gen(function* () {
   };
 });
 
-// The tailnets a packaged app joins (ADR 0008): on Windows IT's policy or the person's setting,
-// else the built-in directory where TailnetDirectory.builtInAllowed lets it (not a stable Windows
-// build). Development may set them as JSON in LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
+// The tailnets a packaged app joins (ADR 0008): on Windows and a Mac IT's policy or the person's
+// setting, else the built-in directory where TailnetDirectory.builtInAllowed lets it (not a stable
+// Windows build). Development may set them as JSON in LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
 const packagedDirectory = Effect.gen(function* () {
   const path = yield* Path.Path;
   const builtInFile = path.join(process.resourcesPath, "tailnets", "directory.json");
@@ -212,6 +212,10 @@ const packagedDirectory = Effect.gen(function* () {
   const builtIn = TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform)
     ? TailnetDirectory.fromFile(builtInFile, NodeOS.hostname())
     : Effect.succeed(TailnetDirectory.NO_TAILNETS);
+  // On a Mac, the managed preference and the person's defaults (TailnetPolicy.readMac).
+  if (platform === "darwin") {
+    return yield* TailnetPolicy.directoryOf(readMacSetting, builtIn, NodeOS.hostname());
+  }
   if (platform !== "win32") {
     return { source: "built-in", text: Option.none<string>(), directory: yield* builtIn };
   }
@@ -228,6 +232,17 @@ const readWindowsSetting = (source: TailnetPolicy.PolicySource) =>
       source,
     ),
   );
+
+// The policy or the person's setting on a Mac, read by the system's own programs.
+const readMacSetting = (source: TailnetPolicy.PolicySource) =>
+  TailnetPolicy.readMac(TailnetPolicy.macSystem, NodeOS.userInfo().username, source);
+
+// The setting as SettingWatch reads it again on this system.
+const settingNowOn = Effect.fn("settingNowOn")(function* (platform: string) {
+  return platform === "darwin"
+    ? yield* TailnetPolicy.settingNow(readMacSetting, NodeOS.hostname())
+    : yield* TailnetPolicy.settingNow(readWindowsSetting, NodeOS.hostname());
+});
 
 // The tailnets to join, and whether the Organization's network is missing: a stable build with
 // neither IT's policy nor the person's setting, which joins nothing and says so.
@@ -247,8 +262,11 @@ const tailnetsToJoin = Effect.gen(function* () {
       networkMissing:
         source === "built-in" &&
         !TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform),
-      // On Windows the setting is read again while the app runs (SettingWatch, #81).
-      setting: platform === "win32" ? Option.some(text) : Option.none<Option.Option<string>>(),
+      // On Windows and a Mac the setting is read again while the app runs (SettingWatch, #81).
+      setting:
+        platform === "win32" || platform === "darwin"
+          ? Option.some(text)
+          : Option.none<Option.Option<string>>(),
     };
   }
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
@@ -823,7 +841,7 @@ const program = Effect.gen(function* () {
   if (Option.isSome(joining.setting)) {
     yield* SettingWatch.watch({
       atStart: joining.setting.value,
-      read: TailnetPolicy.settingNow(readWindowsSetting, NodeOS.hostname()),
+      read: settingNowOn(yield* HostProcess.Platform),
       agentWorks: () => agentWorksNow(),
       startAgain: hooks.notice(text.networkFound).pipe(
         Effect.andThen(

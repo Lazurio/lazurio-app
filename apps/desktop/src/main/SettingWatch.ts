@@ -3,8 +3,8 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
 // A network setting written while the app runs was read only at the next start (#81). A packaged
-// app on Windows reads it again every few seconds and starts again once it names another network,
-// so the person restarts nothing; a new start joins it the proven way.
+// app on Windows or a Mac reads it again every few seconds and starts again once it names another
+// network, so the person restarts nothing; a new start joins it the proven way.
 
 // Whether the setting read now makes the app start again: it names at least one network the app
 // would join, and it is not the text the app started with.
