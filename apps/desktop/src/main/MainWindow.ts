@@ -31,6 +31,8 @@ export interface MainWindowOptions {
   // Learns each page the remote view's main frame shows (Agent Desktop offers to add its
   // Environment).
   readonly pageShown: (url: string) => void;
+  // The page's history changed, so the View menu's Back and Forward follow it.
+  readonly historyChanged: () => void;
   // How each navigation of the page ended, for Copy status.
   readonly pageOutcome: (outcome: PageOutcome) => void;
   // Whether a tailnet serves the address (Tailnet.Tailnets.proxyFor): only such a page waits for
@@ -61,6 +63,10 @@ export interface MainWindowControls {
   // Lays the views out again, after the status column or the top bar showed or hid.
   readonly relayout: () => void;
   readonly reloadPage: () => void;
+  // Back and Forward in the page's history, and where it can go (the View menu).
+  readonly goBack: () => void;
+  readonly goForward: () => void;
+  readonly history: () => { readonly canGoBack: boolean; readonly canGoForward: boolean };
   // Loads the page again from the app's page that says why it did not show; settles once the
   // attempt has shown or failed.
   readonly retryPage: () => Promise<void>;
@@ -361,7 +367,11 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   if (Option.isSome(options.remoteUrl)) {
     remote = yield* acquireView(viewOptions({ partition: REMOTE_PARTITION }));
     registerView(remote.webContents, "Lazurio");
-    remote.webContents.on("did-navigate", (_event, url) => options.pageShown(url));
+    remote.webContents.on("did-navigate", (_event, url) => {
+      options.pageShown(url);
+      options.historyChanged();
+    });
+    remote.webContents.on("did-navigate-in-page", options.historyChanged);
     yield* hardenSession(remote.webContents.session);
     window.contentView.addChildView(remote);
     // The app's own page in the remote view's place while a tailnet's page cannot be reached. It
@@ -404,9 +414,34 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
           outcome: options.pageOutcome,
         })
       : undefined;
+  const reloadPage = () => watch?.reload();
+  // F5 reloads the page as View > Reload page does: a menu item has one accelerator. Every view of
+  // the window, Agent Desktop's bar included: its Stop may hold the focus.
+  for (const view of [local, remote, waiting, options.topBar?.view]) {
+    view?.webContents.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown" || input.key !== "F5") return;
+      if (input.control || input.alt || input.meta || input.shift) return;
+      event.preventDefault();
+      reloadPage();
+    });
+  }
   options.controls({
     relayout: layout,
-    reloadPage: () => watch?.reload(),
+    reloadPage,
+    goBack: () => {
+      if (remote !== undefined && remote.webContents.navigationHistory.canGoBack()) {
+        remote.webContents.navigationHistory.goBack();
+      }
+    },
+    goForward: () => {
+      if (remote !== undefined && remote.webContents.navigationHistory.canGoForward()) {
+        remote.webContents.navigationHistory.goForward();
+      }
+    },
+    history: () => ({
+      canGoBack: remote?.webContents.navigationHistory.canGoBack() ?? false,
+      canGoForward: remote?.webContents.navigationHistory.canGoForward() ?? false,
+    }),
     retryPage: () => watch?.retry() ?? Promise.resolve(),
     firstPage: () => watch?.first() ?? Promise.resolve(),
   });

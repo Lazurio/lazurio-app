@@ -93,6 +93,8 @@ export interface MenuText {
   readonly view: string;
   readonly status: string;
   readonly agentDesktop: string;
+  readonly back: string;
+  readonly forward: string;
   readonly reload: string;
   readonly help: string;
   readonly about: string;
@@ -409,6 +411,8 @@ const cs: Text = {
     view: "Zobrazit",
     status: "Stav aplikace",
     agentDesktop: "Agent Desktop…",
+    back: "Zpět",
+    forward: "Vpřed",
     reload: "Znovu načíst stránku",
     help: "Nápověda",
     about: `O aplikaci ${APP_NAME}`,
@@ -612,6 +616,8 @@ const en: Text = {
     view: "View",
     status: "App status",
     agentDesktop: "Agent Desktop…",
+    back: "Back",
+    forward: "Forward",
     reload: "Reload page",
     help: "Help",
     about: `About ${APP_NAME}`,
