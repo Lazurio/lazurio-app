@@ -169,6 +169,9 @@ export interface AuthClientOptions {
 
 export interface AuthClientShape {
   readonly state: Effect.Effect<AuthState>;
+  // The signed-in person's name from the sign-in's ID token (`name`, else `preferred_username`),
+  // when it carried one; none when signed out.
+  readonly accountName: Effect.Effect<Option.Option<string>>;
   // The current state, then every change.
   readonly changes: Stream.Stream<AuthState>;
   // One at a time, within its time limit; a sign-out or an interruption cancels it.
@@ -212,6 +215,8 @@ const IdTokenClaims = Schema.Struct({
   nonce: Schema.optional(Schema.String),
   exp: Schema.Number,
   iat: Schema.Number,
+  name: Schema.optional(Schema.String),
+  preferred_username: Schema.optional(Schema.String),
 });
 const decodeIdTokenClaims = Schema.decodeUnknownOption(Schema.fromJsonString(IdTokenClaims));
 
@@ -235,6 +240,8 @@ const SessionRecord = Schema.Struct({
   clientId: Schema.String,
   refreshToken: Schema.String,
   scope: Schema.String,
+  // The person's name for the window, sealed with the session; sessions before it have none.
+  name: Schema.optional(Schema.String),
 });
 const encodeSessionRecord = Schema.encodeOption(Schema.fromJsonString(SessionRecord));
 const decodeSessionRecord = Schema.decodeUnknownOption(Schema.fromJsonString(SessionRecord));
@@ -301,6 +308,7 @@ interface Endpoints {
 interface Session {
   readonly refreshToken: Redacted.Redacted<string>;
   readonly scope: string;
+  readonly name?: string;
 }
 
 // The return to the loopback address, and its answer, which only the first call sends.
@@ -459,6 +467,7 @@ export const layer = (options: AuthClientOptions) =>
         return Option.some<Session>({
           refreshToken: Redacted.make(opened.value.refreshToken),
           scope: opened.value.scope,
+          ...(opened.value.name === undefined ? {} : { name: opened.value.name }),
         });
       });
 
@@ -470,6 +479,7 @@ export const layer = (options: AuthClientOptions) =>
             clientId: CLIENT_ID,
             refreshToken: Redacted.value(saved.refreshToken),
             scope: saved.scope,
+            ...(saved.name === undefined ? {} : { name: saved.name }),
           });
           if (Option.isNone(text)) return yield* Effect.fail("not encoded");
           const sealed = yield* Effect.try({
@@ -535,7 +545,7 @@ export const layer = (options: AuthClientOptions) =>
         }
         const rotated = tokens.value.refresh_token;
         if (rotated !== undefined) {
-          const next: Session = { refreshToken: Redacted.make(rotated), scope: current.scope };
+          const next: Session = { ...current, refreshToken: Redacted.make(rotated) };
           session = Option.some(next);
           yield* saveSession(next);
         }
@@ -627,7 +637,8 @@ export const layer = (options: AuthClientOptions) =>
         if (claims.value.nonce !== nonce) {
           return yield* new SignInError({ reason: "nonce-mismatch" });
         }
-        return { tokens: tokens.value, refreshToken: tokens.value.refresh_token };
+        const name = claims.value.name ?? claims.value.preferred_username;
+        return { tokens: tokens.value, refreshToken: tokens.value.refresh_token, name };
       });
 
       let signingIn = false;
@@ -674,11 +685,18 @@ export const layer = (options: AuthClientOptions) =>
           return yield* new SignInError({ reason: "invalid-callback" });
         }
 
-        const { tokens, refreshToken } = yield* exchange(found, code, redirectUri, verifier, nonce);
+        const { tokens, refreshToken, name } = yield* exchange(
+          found,
+          code,
+          redirectUri,
+          verifier,
+          nonce,
+        );
         // The sign-in's own access token is not kept: each call asks for a token of its scope.
         const next: Session = {
           refreshToken: Redacted.make(refreshToken),
           scope: tokens.scope ?? ["openid", ...requestedScopes].join(" "),
+          ...(name === undefined || name.trim() === "" ? {} : { name: name.trim() }),
         };
         // A sign-out since the start wins, whenever it came.
         yield* lock.withPermits(1)(
@@ -742,6 +760,9 @@ export const layer = (options: AuthClientOptions) =>
 
       return AuthClient.of({
         state: SubscriptionRef.get(state),
+        accountName: Effect.sync(() =>
+          Option.flatMap(session, (current) => Option.fromNullishOr(current.name)),
+        ),
         changes: SubscriptionRef.changes(state),
         signIn: Effect.suspend(() => {
           if (signingIn) return Effect.fail(new SignInError({ reason: "in-progress" }));

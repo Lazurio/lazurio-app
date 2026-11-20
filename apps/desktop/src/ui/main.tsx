@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { AppStatus } from "../shared/bridge.ts";
 
 import { AgentBar } from "./AgentBar.tsx";
+import { AgentDesktopFixtures } from "./AgentDesktopFixtures.tsx";
 import { AgentDesktopWindow } from "./AgentDesktopWindow.tsx";
 import { App } from "./App.tsx";
 import { viewOf } from "./view.ts";
@@ -25,6 +26,8 @@ function LocalPage() {
       return <AgentBar />;
     case "agent-desktop":
       return <AgentDesktopWindow />;
+    case "agent-desktop-fixtures":
+      return <AgentDesktopFixtures />;
     case "column":
       firstStatus ??= window.lazurio.status();
       return <App status={firstStatus} />;

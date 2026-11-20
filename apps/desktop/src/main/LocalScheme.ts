@@ -55,14 +55,21 @@ const withPolicy = (response: Response): Response => {
   return new Response(response.body, { status: response.status, headers });
 };
 
+// Pages the app serves only to its end-to-end tests: the Agent Desktop panel's sample states.
+const FIXTURE_VIEWS: ReadonlySet<string> = new Set(["agent-desktop-fixtures"]);
+
 const serveAsset = Effect.fn("LocalScheme.serveAsset")(function* (
   request: Request,
   assetDirectory: string,
+  fixtures: boolean,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const url = new URL(request.url);
   if (url.host !== LOCAL_HOST) return new Response(null, { status: 404 });
+  if (!fixtures && FIXTURE_VIEWS.has(url.searchParams.get("view") ?? "")) {
+    return new Response(null, { status: 404 });
+  }
   if (request.method !== "GET" && request.method !== "HEAD") {
     return new Response(null, { status: 405 });
   }
@@ -80,15 +87,19 @@ const serveAsset = Effect.fn("LocalScheme.serveAsset")(function* (
   });
 });
 
-// Serves the files of assetDirectory on lazurio-app://shell for as long as the scope lives.
-export const serve = Effect.fn("LocalScheme.serve")(function* (assetDirectory: string) {
+// Serves the files of assetDirectory on lazurio-app://shell for as long as the scope lives; the
+// fixture pages only with `fixtures` (an unpackaged app under its end-to-end tests).
+export const serve = Effect.fn("LocalScheme.serve")(function* (
+  assetDirectory: string,
+  options: { readonly fixtures: boolean },
+) {
   const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const runPromise = Effect.runPromiseWith(context);
   yield* Effect.acquireRelease(
     Effect.try({
       try: () =>
         Electron.protocol.handle(LOCAL_SCHEME, async (request) =>
-          withPolicy(await runPromise(serveAsset(request, assetDirectory))),
+          withPolicy(await runPromise(serveAsset(request, assetDirectory, options.fixtures))),
         ),
       catch: (cause) => new LocalSchemeError({ cause }),
     }),

@@ -51,6 +51,7 @@ import * as LocalScheme from "./LocalScheme.ts";
 import * as MainWindow from "./MainWindow.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
+import * as ShellNames from "./ShellNames.ts";
 import * as Tailnet from "./Tailnet.ts";
 import * as ReleaseFeed from "./ReleaseFeed.ts";
 import * as SettingWatch from "./SettingWatch.ts";
@@ -97,6 +98,7 @@ const testHooks = Effect.gen(function* () {
       authIssuer: Option.none<string>(),
       openBrowser: openInSystemBrowser,
       helperStarted: (_name: string, _pid: number) => {},
+      fixtures: false,
       notice: systemNotice,
       secondInstance: () => {},
       trayMenu: (_menu: Electron.Menu) => {},
@@ -198,6 +200,8 @@ const testHooks = Effect.gen(function* () {
     authIssuer,
     openBrowser,
     helperStarted,
+    // Agent Desktop's sample states for its screenshots (AgentDesktopFixtures).
+    fixtures: true,
   };
 });
 
@@ -493,7 +497,7 @@ const program = Effect.gen(function* () {
   );
   yield* Hardening.guardAllWebContents(hooks.observer);
   yield* Hardening.hardenSession(Electron.session.defaultSession);
-  yield* LocalScheme.serve(path.join(appPath, "dist-ui"));
+  yield* LocalScheme.serve(path.join(appPath, "dist-ui"), { fixtures: hooks.fixtures });
 
   // The helpers live in a scope of their own, which the updater closes before it installs: on
   // Windows a running helper keeps its .exe locked (docs/adr/0005, point 5).
@@ -574,6 +578,12 @@ const program = Effect.gen(function* () {
           environments: yield* DeviceEnvironments.open(
             path.join(Electron.app.getPath("userData"), "agent-desktop-environments.json"),
           ),
+          // The Environment's names from its Lazurio, read as the main window's page reads them:
+          // with that window's session, so its cookie and its tailnet's proxy, and nothing more.
+          readNames: (origin) =>
+            ShellNames.read(origin, (url, init) =>
+              Electron.session.fromPartition(MainWindow.REMOTE_PARTITION).fetch(url, init),
+            ),
         }),
       )
     : Option.none<DeviceSwitches.DeviceSwitches>();
@@ -812,6 +822,8 @@ const program = Effect.gen(function* () {
         }) as unknown as Array<Electron.MenuItemConstructorOptions>,
       ),
     );
+    // On Windows and Linux that set the menu on the Agent Desktop window too, which has none.
+    if (Option.isSome(devicePanel)) devicePanel.value.removeMenu();
   };
   refreshMenu();
   yield* WindowIpc.serve({

@@ -22,6 +22,13 @@ import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const ENVIRONMENT_HOST = "launchpad.e2e.lazurio.io";
 const ENVIRONMENT = `https://${ENVIRONMENT_HOST}`;
+// The names the Environment's Lazurio gives in shell.json; its address alone would give "E2e".
+const ENVIRONMENT_NAME = "Testovací Prostředí Žofie";
+const ORGANIZATION_NAME = "Ukázková Organizace";
+// The page's session cookie, which the read of shell.json carries as the page's own requests do.
+const SESSION_COOKIE = "lazurio_e2e_session=e2e-cookie-value";
+// Each request for shell.json: its cookie and whether it had an Authorization header.
+const shellReads: Array<{ readonly cookie: string; readonly authorization: boolean }> = [];
 
 let launchpad: NodeHttps.Server;
 let auth: NodeHttp.Server;
@@ -214,7 +221,37 @@ beforeAll(async () => {
   const { cert, key } = selfSigned([ENVIRONMENT_HOST]);
   launchpad = NodeHttps.createServer({ cert, key }, (request, response) => {
     request.resume();
-    response.writeHead(200, { "content-type": "text/html" });
+    if (request.url === "/.lazurio/shell.json") {
+      shellReads.push({
+        cookie: request.headers.cookie ?? "",
+        authorization: request.headers.authorization !== undefined,
+      });
+      response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      response.end(
+        JSON.stringify({
+          schema: "lazurio.shell.v1",
+          current: "env-e2e",
+          environments: [
+            {
+              id: "env-e2e",
+              label: "e2e",
+              kind: "work",
+              organizations: ["ukazkova"],
+              assignee: "e2e-person",
+              name: ENVIRONMENT_NAME,
+            },
+          ],
+          organizations: [
+            { slug: "ukazkova", name: ORGANIZATION_NAME, avatar: null, dashboard: null },
+          ],
+        }),
+      );
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "text/html",
+      "set-cookie": `${SESSION_COOKIE}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+    });
     response.end(`<!doctype html><title>Launchpad</title><p id="launchpad">launchpad</p>`);
   });
   await new Promise<void>((resolve) => launchpad.listen(0, "127.0.0.1", resolve));
@@ -312,6 +349,38 @@ describe("Agent Desktop's switch", () => {
     ]);
   });
 
+  // The Agent Desktop window has no menu (DevicePanel). On Windows and Linux a menu bar sits inside
+  // the window, and Electron's isMenuBarVisible reports it (views: the root view's menu bar); the
+  // app has a menu of its own that would show there. macOS has no menu bar in a window at all.
+  // Read only: removing the menu here would hide what the test looks for.
+  const agentDesktopMenu = async () => {
+    const mac = (await shell.evaluate(() => navigator.platform)).startsWith("Mac");
+    return app.evaluate(({ BaseWindow, Menu }, onMac) => {
+      const window = BaseWindow.getAllWindows().find((each) =>
+        each.contentView.children.some(
+          (child) =>
+            "webContents" in child &&
+            (child as Electron.WebContentsView).webContents.getURL().includes("view=agent-desktop"),
+        ),
+      );
+      if (window === undefined) throw new Error("no Agent Desktop window");
+      return {
+        appMenu: (Menu.getApplicationMenu()?.items.length ?? 0) > 0,
+        menuBar: !onMac && window.isMenuBarVisible() ? "shown" : "none",
+      };
+    }, mac);
+  };
+
+  it("gives the Agent Desktop window no menu, also after the app builds its menu again", async () => {
+    assert.deepStrictEqual(await agentDesktopMenu(), { appMenu: true, menuBar: "none" });
+    // Showing and hiding the status column builds the app's menu again (Menu.setApplicationMenu),
+    // which on Windows and Linux sets it on every window.
+    await column.evaluate(() => window.lazurio.setStatusPanel(true));
+    assert.deepStrictEqual(await agentDesktopMenu(), { appMenu: true, menuBar: "none" });
+    await column.evaluate(() => window.lazurio.setStatusPanel(false));
+    assert.deepStrictEqual(await agentDesktopMenu(), { appMenu: true, menuBar: "none" });
+  });
+
   it("gives the Environment's page no way to the switches", async () => {
     const reached = await inRemotePage(
       `[location.origin, typeof window.lazurio, typeof globalThis.ipcRenderer, typeof globalThis.require, Object.getOwnPropertyNames(window).filter((name) => /lazurio|ipc|electron/iu.test(name))]`,
@@ -319,16 +388,32 @@ describe("Agent Desktop's switch", () => {
     assert.deepStrictEqual(reached, [ENVIRONMENT, "undefined", "undefined", "undefined", []]);
   });
 
-  it("adds the Environment with its switch off", async () => {
+  it("adds the Environment with its switch off, named as its Lazurio names it", async () => {
+    const before = shellReads.length;
     await shell.locator('[data-action="device-add"]').click();
     await inPhase("off", "off");
+    // The app reads shell.json once, as the main window's page does: its cookie, no token.
+    await environmentRow().locator(".ad__env-name strong", { hasText: ENVIRONMENT_NAME }).waitFor();
+    assert.strictEqual(
+      await environmentRow().locator(".ad__env-name small").innerText(),
+      ORGANIZATION_NAME,
+    );
+    assert.deepStrictEqual(shellReads.slice(before), [
+      { cookie: SESSION_COOKIE, authorization: false },
+    ]);
     assert.strictEqual(await shell.locator("[data-device-add]").count(), 0);
     assert.strictEqual(await environmentRow().locator("[data-switch-problem]").count(), 0);
-    // An Off switch says what turning it on does.
+    // An Off switch says so in a word; what turning it on does sits behind the window's "?".
     assert.match(
-      await environmentRow().locator("[data-switch-hint]").innerText(),
-      /no agent from this Environment|agent z tohoto Prostředí/u,
+      await environmentRow().locator("[data-row-state]").innerText(),
+      /^(Off|Vypnuto)$/u,
     );
+    await shell.locator(".ad__head .ad__help summary").click();
+    assert.match(
+      await shell.locator(".ad__head .ad__help p").innerText(),
+      /lets agents|pustí agenty/u,
+    );
+    await shell.locator(".ad__head .ad__help summary").click();
   });
 
   it("signs in in the browser when the switch goes on, then starts the channel with a hand-over", async () => {
@@ -370,9 +455,26 @@ describe("Agent Desktop's switch", () => {
     // No second sign-in: the session from before still holds.
     assert.strictEqual(signIns, 1);
     assert.deepStrictEqual(handOverOrigins, [ENVIRONMENT, ENVIRONMENT, ENVIRONMENT]);
-    const problem = await environmentRow().locator("[data-switch-problem]").innerText();
-    assert.match(problem, /uninstall it|utilitu odinstalujte/u);
-    assert.match(problem, /io\.lazurio\.agent-desktop/u);
+    const problem = environmentRow().locator("[data-switch-problem]");
+    assert.match(
+      await problem.locator(".ad__problem-text").innerText(),
+      /old Lazurio Agent Desktop|starého Lazurio Agent Desktopu/u,
+    );
+    assert.strictEqual(await problem.getAttribute("data-switch-problem"), "agent_desktop_paired");
+    // The outcome of this attempt, with its time: the cause may be gone before the next one.
+    const at = Number(
+      await problem.locator("[data-switch-problem-at]").getAttribute("data-switch-problem-at"),
+    );
+    assert.isTrue(Number.isSafeInteger(at) && at > 0);
+    assert.match(
+      await problem.locator("[data-switch-problem-at]").innerText(),
+      /^(As of|Stav z) \d{1,2}:\d{2}/u,
+    );
+    // How to fix it: three steps, the utility's keychain entries among them.
+    await problem.locator("[data-switch-fix] summary").click();
+    const steps = await problem.locator("[data-switch-fix] ol").innerText();
+    assert.match(steps, /Uninstall|odinstalujte/u);
+    assert.match(steps, /io\.lazurio\.agent-desktop/u);
     await screenshot("integration-section-refused.png");
   });
 
@@ -390,6 +492,7 @@ describe("Agent Desktop's switch", () => {
     await inPhase("off", "off");
     assert.strictEqual(await environmentRow().locator("[data-switch-problem]").count(), 0);
     assert.strictEqual(await shell.locator("[data-device-add]").count(), 0);
+    await environmentRow().locator('[data-action="device-more"]').click();
     await environmentRow().locator('[data-action="device-remove"]').click();
     await shell.locator('[data-device-environments="none"]').waitFor();
     await shell.locator(`[data-device-add="${ENVIRONMENT}"]`).waitFor();
@@ -428,6 +531,11 @@ describe("Agent Desktop's switch", () => {
     await inPhase("channel", "working");
     const bar = await localPage(app, "view=agent-bar");
     await bar.locator('[data-action="device-stop"]').waitFor();
+    // The bar and the window name the Environment as its Lazurio does; the row says nothing of the
+    // work, which the window's head says with Stop.
+    assert.include(await bar.locator("body").innerText(), ENVIRONMENT_NAME);
+    assert.strictEqual(await shell.locator(".ad__working small").innerText(), ENVIRONMENT_NAME);
+    assert.strictEqual(await environmentRow().locator("[data-row-state]").count(), 0);
     const columnShown = () =>
       app.evaluate(({ BaseWindow }) => {
         const local = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null)
@@ -471,6 +579,7 @@ describe("Agent Desktop's switch", () => {
     await column.locator('[data-action="status-hide"]:not([disabled])').click();
     await column.evaluate(() => window.lazurio.status());
     assert.isFalse(await columnShown());
+    await environmentRow().locator('[data-action="device-more"]').click();
     await environmentRow().locator('[data-action="device-remove"]').click();
     await shell.locator('[data-device-environments="none"]').waitFor();
     // The next test signs in again.
@@ -501,7 +610,7 @@ describe("Agent Desktop's switch", () => {
     await inPhase("off");
     assert.isFalse(isAlive(pid));
     const problem = await environmentRow().locator("[data-switch-problem]").innerText();
-    assert.match(problem, /did not confirm|nepotvrdil/u);
+    assert.match(problem, /was ended|byl ukončen/u);
     // The helper cannot be reached any more; it confirmed that every agent's work ended.
     await shell
       .locator('[data-device-state="lost"] [data-device-problem="lost-confirmed"]')

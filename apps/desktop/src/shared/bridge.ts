@@ -145,7 +145,13 @@ export type DeviceSwitchProblem =
 
 // Where an Environment's switch is. It is on in every phase but "off".
 export type DeviceSwitchPhase =
-  | { readonly phase: "off"; readonly problem: DeviceSwitchProblem | null }
+  | {
+      readonly phase: "off";
+      readonly problem: DeviceSwitchProblem | null;
+      // When the switch went off with its problem (milliseconds since the epoch, the app's clock):
+      // the problem is the outcome of that attempt, and the window says from when.
+      readonly at?: number;
+    }
   // The app waits for the person to sign in in the system's browser.
   | { readonly phase: "signing-in" }
   // The app asks Lazurio Auth for a hand-over.
@@ -165,6 +171,10 @@ export interface DeviceSwitchStatus {
   // `https://<host>` of the Environment's Lazurio.
   readonly origin: string;
   readonly host: string;
+  // The names the Environment's Lazurio gave (shell.json), when the app read them; the window
+  // falls back to the name from the address (environmentName.ts).
+  readonly name?: string;
+  readonly organization?: string;
   readonly switch: DeviceSwitchPhase;
   readonly channel: DeviceChannelState;
 }
@@ -180,6 +190,8 @@ export interface DeviceStatus {
   readonly agent: { readonly environmentId: string; readonly label: string } | null | "unknown";
   // The app's own Lazurio account (its sign-in with Lazurio Auth).
   readonly account: "signed-in" | "signed-out";
+  // The account's name from the sign-in's ID token, when it carried one.
+  readonly accountName?: string;
   // The Environments the person added, each with its switch, off after every start.
   readonly switches: ReadonlyArray<DeviceSwitchStatus>;
   // The origin of the Environment the main window shows, when it is not in the list yet.

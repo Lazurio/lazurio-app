@@ -85,7 +85,11 @@ const channelStateOf = (state: ChannelState): DeviceChannelState => {
 // What a channel's start carries (contract v3).
 export interface ChannelStart {
   readonly environmentId: string;
+  // The label the helper gets, from the Environment's address only: the helper may put it in the
+  // tool error an agent of another Environment reads, so no text an Environment chose goes there.
   readonly environmentLabel: string;
+  // The name the app's own windows show, which may come from the Environment's shell.json.
+  readonly displayLabel: string;
   // `wss://<the Environment's Lazurio host>/.lazurio/computers/attach`.
   readonly attachUrl: string;
   // Lazurio Auth's one-time hand-over for this Environment, valid for 60 s. The helper sends it once
@@ -165,7 +169,12 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
         holderId: next.holderEnvironmentId,
         holderLabel: next.holderEnvironmentLabel,
       });
-      if (next.holderEnvironmentId !== "" && next.holderEnvironmentLabel !== "") {
+      // The app's own name for the holder stays; the helper's label is only the fallback.
+      if (
+        next.holderEnvironmentId !== "" &&
+        next.holderEnvironmentLabel !== "" &&
+        !labels.has(next.holderEnvironmentId)
+      ) {
         labels.set(next.holderEnvironmentId, next.holderEnvironmentLabel);
       }
       changed();
@@ -279,7 +288,7 @@ export const run = Effect.fn("DeviceService.run")(function* (options: DeviceServ
     Effect.suspend(() => {
       const host = URL.parse(start.attachUrl)?.hostname ?? "";
       const proxy = options.tailnets.proxyFor(host);
-      labels.set(start.environmentId, start.environmentLabel);
+      labels.set(start.environmentId, start.displayLabel);
       return ask("StartChannel", {
         case: "startChannel",
         value: create(StartChannelSchema, {

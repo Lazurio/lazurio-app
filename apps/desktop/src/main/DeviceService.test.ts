@@ -209,6 +209,7 @@ describe("DeviceService", () => {
       const request = {
         environmentId: "env-a",
         environmentLabel: "Bob's Environment",
+        displayLabel: "Bob's Environment",
         handOver: new TextEncoder().encode("hX7qR2mK9vT4wL1pZ8nB3cF6yJ0sD5gA2eU7iO4kQ9r"),
       };
       yield* service.startChannel({

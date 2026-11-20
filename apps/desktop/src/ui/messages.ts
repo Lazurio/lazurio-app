@@ -119,59 +119,73 @@ export interface TrayText {
 // "{reason}" and "{label}" stand for what the Device helper reports.
 export interface DeviceText {
   readonly title: string;
+  // The window's head and what "?" beside it says.
+  readonly computer: string;
+  readonly computerHelp: string;
   readonly starting: string;
   readonly failed: string;
   // The connection to the helper was lost: whether an agent works is unknown, or the helper had
-  // confirmed that every agent's work ended.
+  // confirmed that every agent's work ended. A short sentence, and the details behind it.
   readonly lost: string;
   readonly lostConfirmed: string;
-  readonly unknown: string;
-  readonly environments: string;
+  readonly lostDetail: string;
+  readonly lostConfirmedDetail: string;
   readonly noEnvironments: string;
-  readonly off: string;
-  readonly connecting: string;
-  readonly connected: string;
-  readonly refused: string;
-  // The channel ended and waits for a new hand-over. "{reason}" stands for the helper's code.
-  readonly needsHandOver: string;
-  // The helper opens no channel while the earlier utility is paired on the computer, or when it
-  // cannot tell.
-  readonly agentDesktopPaired: string;
-  readonly agentDesktopCheckFailed: string;
-  readonly working: string;
+  readonly add: string;
+  // Behind "?" when the main window shows no Environment to add.
+  readonly addHint: string;
+  // One short state per switch (deviceLabel.rowState).
+  readonly states: {
+    readonly off: string;
+    readonly signingIn: string;
+    readonly connecting: string;
+    readonly reconnecting: string;
+    readonly connected: string;
+    readonly working: string;
+    readonly stopping: string;
+    readonly error: string;
+    readonly unknown: string;
+  };
+  // The row of an agent at work, with the application when the helper names one.
+  readonly workingTitle: string;
   readonly workingIn: string;
+  // The bar over the main window's page. "{label}" stands for the Environment's name.
   readonly agentWorking: string;
   readonly stop: string;
   readonly stopFailed: string;
-  // The app's own Lazurio account, and adding the Environment the main window shows.
+  // The account at the window's foot. "{name}" stands for the name in the ID token.
   readonly signedIn: string;
+  readonly signedInAs: string;
   readonly signedOut: string;
   readonly signOut: string;
-  readonly add: string;
-  readonly addHint: string;
+  // A row's own menu: its address and Remove.
+  readonly more: string;
+  readonly address: string;
   readonly remove: string;
   readonly actionFailed: string;
-  // "{host}" stands for the Environment's address.
+  // "{name}" stands for the Environment's name.
   readonly switchLabel: string;
-  // Under a switch that is off with nothing wrong: what turning it on does.
-  readonly switchOffHint: string;
-  // Where a switch that is on is before the helper has its channel.
-  readonly signingIn: string;
-  readonly retryingAuth: string;
-  readonly retryingChannel: string;
-  // The app waits for the helper to confirm that the channel is closed.
-  readonly stopping: string;
+  readonly retry: string;
+  // The paired utility's way out, in three steps behind "How to fix it".
+  readonly howToFix: string;
+  readonly pairedSteps: readonly [string, string, string];
+  readonly technical: string;
+  readonly copy: string;
+  readonly copied: string;
+  // "{code}" stands for the code of a refusal.
+  readonly code: string;
+  // Under a switch's problem: the problem is the outcome of the last attempt, from "{time}" (the
+  // time of day, with the date when it was another day).
+  readonly asOf: string;
   // The column's way into the Agent Desktop window, the bar's button, and the label of "?".
   readonly openWindow: string;
   readonly barOpen: string;
   readonly help: string;
-  // The technical code beside a sentence, for whoever helps the person.
-  readonly code: string;
+  // Why a switch went off by itself: one short sentence, and the details behind it.
   readonly problems: SwitchProblemText;
+  readonly problemDetails: SwitchProblemText;
 }
 
-// Why a switch went off by itself, in a sentence that says what to do. "{status}" and "{reason}"
-// stand for the HTTP status and the code the Device helper reports.
 interface SwitchProblemText {
   readonly signInFailed: string;
   readonly signedOut: string;
@@ -304,76 +318,115 @@ const cs: Text = {
   },
   device: {
     title: "Agent Desktop",
+    computer: "Tento počítač",
+    computerHelp:
+      "Zapnutý vypínač pustí agenty z daného Prostředí ovládat tento počítač: uvidí obrazovku a budou ovládat aplikace. Zastavit je ukončí kdykoli. Vypínače jsou jen v tomto okně; Zastavit je i v oznamovací oblasti. Webové Lazurio stav ukáže, ale nic nezapne. Po každém spuštění aplikace jsou všechny vypnuté.",
     starting: "Spouští se…",
     failed: `Agent Desktop se nespustil. Spusťte ${APP_NAME} znovu.`,
-    lost: `Spojení s Agent Desktop se přerušilo. Nevíme, jestli na tomto počítači ještě pracuje agent. Aktualizace se do té doby neinstaluje. Ukončete ${APP_NAME} a spusťte ji znovu.`,
-    lostConfirmed: `Spojení s Agent Desktop se přerušilo. Předtím potvrdil, že práce každého agenta skončila. Aktualizace se neinstaluje, dokud ${APP_NAME} neukončíte a nespustíte znovu.`,
-    unknown: "Stav agenta neznámý",
-    environments: "Prostředí",
-    noEnvironments: "Zatím žádné Prostředí.",
-    off: "Vypnuto",
-    connecting: "Připojuje se",
-    connected: "Připojeno",
-    refused: "Prostředí připojení odmítlo",
-    needsHandOver: "Připojuje se znovu…",
-    agentDesktopPaired: "Na tomto počítači je spárovaná utilita Lazurio Agent Desktop.",
-    agentDesktopCheckFailed:
-      "Nepodařilo se ověřit, jestli je na tomto počítači spárovaná utilita Lazurio Agent Desktop.",
-    working: "Pracuje agent: {tool}",
-    workingIn: "Pracuje agent: {tool} v {application}",
+    lost: "Nevíme, jestli agent ještě pracuje.",
+    lostConfirmed: `Agent Desktop neodpovídá. Spusťte ${APP_NAME} znovu.`,
+    lostDetail: `Spojení s Agent Desktop se přerušilo. Nevíme, jestli na tomto počítači ještě pracuje agent. Aktualizace se do té doby neinstaluje. Ukončete ${APP_NAME} a spusťte ji znovu.`,
+    lostConfirmedDetail: `Spojení s Agent Desktop se přerušilo. Předtím potvrdil, že práce každého agenta skončila. Aktualizace se neinstaluje, dokud ${APP_NAME} neukončíte a nespustíte znovu.`,
+    noEnvironments: "Zatím žádné Prostředí",
+    add: "Přidat toto Prostředí",
+    addHint:
+      "Otevřete v hlavním okně Lazurio svého Prostředí. Tady se pak objeví tlačítko Přidat toto Prostředí.",
+    states: {
+      off: "Vypnuto",
+      signingIn: "Přihlaste se v prohlížeči",
+      connecting: "Připojuje se",
+      reconnecting: "Připojuje se znovu",
+      connected: "Připojeno",
+      working: "Agent pracuje",
+      stopping: "Vypíná se",
+      error: "Chyba",
+      unknown: "Neznámý stav",
+    },
+    workingTitle: "Agent pracuje",
+    workingIn: "Agent pracuje v aplikaci {application}",
     agentWorking: "Agent z Prostředí {label} pracuje na tomto počítači.",
     stop: "Zastavit",
     stopFailed: "Agenta se nepodařilo zastavit. Zkuste to znovu.",
-    signedIn: "Přihlášeno k Lazurio účtu.",
-    signedOut: "Po zapnutí vypínače se přihlásíte k Lazurio účtu v prohlížeči.",
+    signedIn: "Přihlášeno",
+    signedInAs: "Přihlášeno jako {name}",
+    signedOut: "Nepřihlášeno, přihlásíte se při zapnutí",
     signOut: "Odhlásit",
-    add: "Přidat toto Prostředí",
-    addHint:
-      "Otevřete v tomto okně Lazurio svého Prostředí a přidejte ho sem. Agent Desktop pak zapnete vypínačem.",
-    remove: "Odebrat",
+    more: "Další akce",
+    address: "Adresa",
+    remove: "Odebrat Prostředí",
     actionFailed: "To se nepovedlo. Zkuste to znovu.",
-    switchLabel: "Agent Desktop pro {host}",
-    switchOffHint:
-      "Vypnuto: agent z tohoto Prostředí tento počítač neovládá. Zapněte, když na něm má pracovat.",
-    signingIn: "Přihlaste se v prohlížeči.",
-    retryingAuth: "Lazurio teď neodpovídá. Zkusí se to znovu.",
-    retryingChannel: "Spojení skončilo. Připojuje se znovu…",
-    stopping: "Vypíná se…",
+    switchLabel: "Agenti z Prostředí {name} na tomto počítači",
+    retry: "Zkusit znovu",
+    howToFix: "Jak to opravit",
+    pairedSteps: [
+      "Ve starém Lazurio Agent Desktopu odeberte všechna Prostředí.",
+      "Starý Lazurio Agent Desktop odinstalujte.",
+      "Pokud už je pryč, smažte záznamy io.lazurio.agent-desktop ve Správci pověření (Windows) nebo v Klíčence (Mac). Pak vypínač zapněte znovu.",
+    ],
+    technical: "Technické podrobnosti",
+    copy: "Kopírovat",
+    copied: "Zkopírováno",
+    code: "Kód: {code}",
+    asOf: "Stav z {time}",
     openWindow: "Otevřít Agent Desktop",
     barOpen: "Agent Desktop",
     help: "Nápověda",
-    code: "Kód: {code}",
     problems: {
-      signInFailed: "Přihlášení se nedokončilo. Zapněte vypínač znovu a přihlaste se v prohlížeči.",
-      signedOut: "Přihlášení k Lazurio účtu skončilo. Zapněte vypínač znovu a přihlaste se.",
+      signInFailed: "Přihlášení se nedokončilo.",
+      signedOut: "Přihlášení k Lazurio účtu skončilo.",
+      unknownEnvironment: "Lazurio toto Prostředí pro ovládání počítače nezná.",
+      notPermitted: "Toto Prostředí není přiřazené vám.",
+      environmentStateConflict: "Prostředí se teď mění. Zkuste to později.",
+      rejected: "Lazurio připojení odmítlo.",
+      helperUnavailable: `Agent Desktop neodpovídá. Spusťte ${APP_NAME} znovu.`,
+      stopNotConfirmed: `Agent Desktop byl ukončen. Zapnete ho po novém spuštění ${APP_NAME}.`,
+      agentDesktopPaired: "Na tomto počítači zůstalo spárování starého Lazurio Agent Desktopu.",
+      agentDesktopCheckFailed: "Nepodařilo se ověřit starý Lazurio Agent Desktop.",
+      handOverRefused: "Prostředí nepřijalo povolení k připojení.",
+      computerNotPermitted: "Prostředí tento počítač nepřijalo.",
+      badToken: "Prostředí nepřijalo ověření od Lazuria.",
+      contractMismatch: `Prostředí potřebuje novější ${APP_NAME}.`,
+      alreadyAttached: "Počítač má k Prostředí ještě jiné spojení.",
+      upgradeRefused: "Prostředí připojení odmítlo.",
+      invalidAttachUrl: "Adresa Prostředí není platná. Odeberte ho a přidejte znovu.",
+      other: "Prostředí připojení odmítlo.",
+    },
+    problemDetails: {
+      signInFailed:
+        "Přihlášení v prohlížeči se nedokončilo nebo ho Lazurio nepřijalo. Zapněte vypínač znovu a přihlaste se v prohlížeči.",
+      signedOut:
+        "Lazurio už nepřijímá přihlášení této aplikace, například proto, že skončila platnost nebo jste se odhlásili jinde. Zapněte vypínač znovu a přihlaste se.",
       // Auth answers 404 both for an Environment it does not know and for one that has not moved to
       // the new sign-in to Environments yet; the app cannot tell them apart, so the text fits both.
       unknownEnvironment:
-        "Lazurio toto Prostředí pro ovládání počítače nezná. Buď ještě nepřešlo na nové přihlášení do Prostředí, nebo tato adresa žádnému Prostředí nepatří. Nechte vypínač vypnutý a zeptejte se Admina své Organizace, co z toho platí.",
+        "Buď toto Prostředí ještě nepřešlo na nové přihlášení do Prostředí, nebo tato adresa žádnému Prostředí nepatří. Nechte vypínač vypnutý a zeptejte se Admina své Organizace, co z toho platí.",
       notPermitted:
-        "Toto Prostředí není přiřazené vám, a proto s ním tento počítač propojit nejde. Agent Desktop jde zapnout jen pro vaše Prostředí.",
+        "Lazurio toto Prostředí vede jako přiřazené někomu jinému, a proto s ním tento počítač propojit nejde. Agent Desktop jde zapnout jen pro vaše Prostředí.",
       environmentStateConflict:
-        "Prostředí teď počítač připojit nemůže, například proto, že se zrovna mění. Zapněte vypínač znovu později.",
+        "Prostředí teď počítač připojit nemůže, například proto, že se zrovna mění nebo aktualizuje. Zapněte vypínač znovu později.",
       rejected:
-        "Lazurio připojení odmítlo. Zapněte vypínač znovu. Když se to opakuje, odhlaste se a přihlaste znovu.",
-      helperUnavailable: `Agent Desktop připojení nepřevzal. Ukončete ${APP_NAME} a spusťte ji znovu.`,
+        "Lazurio připojení odmítlo z jiného důvodu. Zapněte vypínač znovu. Když se to opakuje, odhlaste se a přihlaste znovu.",
+      helperUnavailable: `Pomocný proces Agent Desktop připojení nepřevzal. Ukončete ${APP_NAME} a spusťte ji znovu.`,
       stopNotConfirmed: `Agent Desktop nepotvrdil vypnutí, a proto ho ${APP_NAME} ukončila i se všemi připojeními. Žádný agent teď na tomto počítači nepracuje. Agent Desktop znovu zapnete, až ${APP_NAME} ukončíte a spustíte znovu.`,
       agentDesktopPaired:
-        "Na tomto počítači je spárovaná utilita Lazurio Agent Desktop. V utilitě odeberte všechna Prostředí a utilitu odinstalujte. Pokud už je odinstalovaná, smažte záznamy io.lazurio.agent-desktop ve Správci pověření (Windows) nebo v Klíčence (Mac). Pak vypínač zapněte znovu.",
+        "Dřívější utilita Lazurio Agent Desktop nechala v úložišti klíčů záznamy io.lazurio.agent-desktop, a dokud tam jsou, aplikace se k žádnému Prostředí nepřipojí.",
       agentDesktopCheckFailed:
-        "Nepodařilo se ověřit, jestli je na tomto počítači spárovaná utilita Lazurio Agent Desktop. Na Macu odemkněte Klíčenku a vypínač zapněte znovu.",
-      handOverRefused: "Prostředí nepřijalo povolení k připojení. Zapněte vypínač znovu.",
+        "Nepodařilo se ověřit, jestli je na tomto počítači spárovaná dřívější utilita Lazurio Agent Desktop (záznamy io.lazurio.agent-desktop v úložišti klíčů). Na Macu odemkněte Klíčenku a vypínač zapněte znovu.",
+      handOverRefused:
+        "Brána Prostředí nepřijala jednorázové povolení k připojení (HTTP 401), například proto, že mezitím vypršelo. Zapněte vypínač znovu.",
       computerNotPermitted:
-        "Prostředí tento počítač nepřijalo. Počítač musí být schválené zařízení vaší Organizace a Prostředí musí být přiřazené vám.",
-      badToken: "Prostředí nepřijalo ověření od Lazurio. Zapněte vypínač znovu.",
-      contractMismatch: `Prostředí se připojuje jinou verzí než ${APP_NAME}. Aktualizujte ${APP_NAME} a vypínač zapněte znovu.`,
+        "Brána Prostředí tento počítač nepřijala (HTTP 403). Počítač musí být schválené zařízení vaší Organizace a Prostředí musí být přiřazené vám. Schválení zařízení vyřídí Admin vaší Organizace.",
+      badToken:
+        "Prostředí nepřijalo ověření, které mu poslala brána od Lazuria. Zapněte vypínač znovu.",
+      contractMismatch: `Prostředí odpovídá jinou verzí připojení, než zná tato aplikace. Aktualizujte ${APP_NAME} a vypínač zapněte znovu.`,
       alreadyAttached:
-        "Prostředí má z tohoto počítače ještě jiné spojení. Počkejte minutu a vypínač zapněte znovu.",
+        "Prostředí ještě obsluhuje předchozí spojení z tohoto počítače, které skončí samo do minuty. Počkejte minutu a vypínač zapněte znovu.",
       upgradeRefused:
-        "Prostředí připojení odmítlo. Zapněte vypínač později znovu. Když se to opakuje, pošlete Adminovi své Organizace kód níže.",
-      invalidAttachUrl: "Adresa tohoto Prostředí není platná. Odeberte ho a přidejte znovu.",
+        "Prostředí odmítlo připojení s kódem uvedeným níže. Zapněte vypínač později znovu. Když se to opakuje, pošlete kód Adminovi své Organizace.",
+      invalidAttachUrl:
+        "Adresa tohoto Prostředí není ta, ke které se Agent Desktop připojuje. Odeberte ho a přidejte znovu ze stránky jeho Lazuria.",
       other:
-        "Prostředí připojení odmítlo. Když se to opakuje, pošlete Adminovi své Organizace kód níže.",
+        "Prostředí odmítlo připojení s kódem uvedeným níže. Když se to opakuje, pošlete kód Adminovi své Organizace.",
     },
   },
   tray: {
@@ -507,77 +560,113 @@ const en: Text = {
   },
   device: {
     title: "Agent Desktop",
+    computer: "This computer",
+    computerHelp:
+      "A switch that is on lets agents from that Environment use this computer: they see the screen and work in its apps. Stop ends their work at any time. The switches are only in this window; Stop is also in the notification area. The web Lazurio shows their state but turns nothing on. Every switch is off after each start of the app.",
     starting: "Starting…",
     failed: `Agent Desktop did not start. Start ${APP_NAME} again.`,
-    lost: `The connection to Agent Desktop was lost. It is not known whether an agent is still working on this computer. Updates do not install until then. Quit ${APP_NAME} and start it again.`,
-    lostConfirmed: `The connection to Agent Desktop was lost. Before that it confirmed that every agent's work had ended. Updates do not install until you quit ${APP_NAME} and start it again.`,
-    unknown: "Agent's state unknown",
-    environments: "Environments",
-    noEnvironments: "No Environment yet.",
-    off: "Off",
-    connecting: "Connecting",
-    connected: "Connected",
-    refused: "The Environment refused the connection",
-    needsHandOver: "Reconnecting…",
-    agentDesktopPaired: "The utility Lazurio Agent Desktop is paired on this computer.",
-    agentDesktopCheckFailed:
-      "Could not check whether the utility Lazurio Agent Desktop is paired on this computer.",
-    working: "An agent is working: {tool}",
-    workingIn: "An agent is working: {tool} in {application}",
+    lost: "It is not known whether an agent is still working.",
+    lostConfirmed: `Agent Desktop is not answering. Start ${APP_NAME} again.`,
+    lostDetail: `The connection to Agent Desktop was lost. It is not known whether an agent is still working on this computer. Updates do not install until then. Quit ${APP_NAME} and start it again.`,
+    lostConfirmedDetail: `The connection to Agent Desktop was lost. Before that it confirmed that every agent's work had ended. Updates do not install until you quit ${APP_NAME} and start it again.`,
+    noEnvironments: "No Environment yet",
+    add: "Add this Environment",
+    addHint:
+      "Open your Environment's Lazurio in the main window. The button Add this Environment then shows here.",
+    states: {
+      off: "Off",
+      signingIn: "Sign in in your browser",
+      connecting: "Connecting",
+      reconnecting: "Reconnecting",
+      connected: "Connected",
+      working: "Agent working",
+      stopping: "Turning off",
+      error: "Error",
+      unknown: "State unknown",
+    },
+    workingTitle: "An agent is working",
+    workingIn: "An agent is working in {application}",
     agentWorking: "An agent from the Environment {label} is working on this computer.",
     stop: "Stop",
     stopFailed: "The agent could not be stopped. Try again.",
-    signedIn: "Signed in to your Lazurio account.",
-    signedOut: "When you turn a switch on, you sign in to your Lazurio account in your browser.",
+    signedIn: "Signed in",
+    signedInAs: "Signed in as {name}",
+    signedOut: "Not signed in; you sign in when you turn a switch on",
     signOut: "Sign out",
-    add: "Add this Environment",
-    addHint:
-      "Open your Environment's Lazurio in this window and add it here. Then turn Agent Desktop on with its switch.",
-    remove: "Remove",
+    more: "More actions",
+    address: "Address",
+    remove: "Remove Environment",
     actionFailed: "That did not work. Try again.",
-    switchLabel: "Agent Desktop for {host}",
-    switchOffHint:
-      "Off: no agent from this Environment can use this computer. Turn it on when one should work on it.",
-    signingIn: "Sign in in your browser.",
-    retryingAuth: "Lazurio is not answering. Trying again.",
-    retryingChannel: "The connection ended. Reconnecting…",
-    stopping: "Turning off…",
+    switchLabel: "Agents from the Environment {name} on this computer",
+    retry: "Try again",
+    howToFix: "How to fix it",
+    pairedSteps: [
+      "In the old Lazurio Agent Desktop, remove every Environment.",
+      "Uninstall the old Lazurio Agent Desktop.",
+      "If it is already gone, delete the io.lazurio.agent-desktop entries in Credential Manager (Windows) or Keychain Access (Mac). Then turn the switch on again.",
+    ],
+    technical: "Technical details",
+    copy: "Copy",
+    copied: "Copied",
+    code: "Code: {code}",
+    asOf: "As of {time}",
     openWindow: "Open Agent Desktop",
     barOpen: "Agent Desktop",
     help: "Help",
-    code: "Code: {code}",
     problems: {
+      signInFailed: "The sign-in did not finish.",
+      signedOut: "Your sign-in to your Lazurio account ended.",
+      unknownEnvironment: "Lazurio does not know this Environment for using a computer.",
+      notPermitted: "This Environment is not assigned to you.",
+      environmentStateConflict: "The Environment is changing. Try again later.",
+      rejected: "Lazurio refused the connection.",
+      helperUnavailable: `Agent Desktop is not answering. Start ${APP_NAME} again.`,
+      stopNotConfirmed: `Agent Desktop was ended. Turn it on after ${APP_NAME} starts again.`,
+      agentDesktopPaired: "A pairing of the old Lazurio Agent Desktop is left on this computer.",
+      agentDesktopCheckFailed: "Could not check for the old Lazurio Agent Desktop.",
+      handOverRefused: "The Environment did not accept the permission to connect.",
+      computerNotPermitted: "The Environment did not accept this computer.",
+      badToken: "The Environment did not accept Lazurio's confirmation.",
+      contractMismatch: `The Environment needs a newer ${APP_NAME}.`,
+      alreadyAttached: "This computer still has another connection to the Environment.",
+      upgradeRefused: "The Environment refused the connection.",
+      invalidAttachUrl: "The Environment's address is not valid. Remove it and add it again.",
+      other: "The Environment refused the connection.",
+    },
+    problemDetails: {
       signInFailed:
-        "The sign-in did not finish. Turn the switch on again and sign in in your browser.",
+        "The sign-in in your browser did not finish, or Lazurio did not accept it. Turn the switch on again and sign in in your browser.",
       signedOut:
-        "Your sign-in to your Lazurio account ended. Turn the switch on again and sign in.",
+        "Lazurio no longer accepts this app's sign-in, for example because it expired or you signed out elsewhere. Turn the switch on again and sign in.",
       unknownEnvironment:
-        "Lazurio does not know this Environment for using this computer. Either it has not moved to the new sign-in to Environments yet, or this address belongs to no Environment. Leave the switch off and ask your Organization's Admin which one applies.",
+        "Either this Environment has not moved to the new sign-in to Environments yet, or this address belongs to no Environment. Leave the switch off and ask your Organization's Admin which one it is.",
       notPermitted:
-        "This Environment is not assigned to you, so this computer cannot be connected to it. Agent Desktop can be turned on only for your own Environments.",
+        "Lazurio has this Environment assigned to someone else, so this computer cannot be connected to it. Agent Desktop can be turned on only for your own Environments.",
       environmentStateConflict:
-        "The Environment cannot connect a computer right now, for example because it is changing. Turn the switch on again later.",
+        "The Environment cannot connect a computer right now, for example because it is changing or updating. Turn the switch on again later.",
       rejected:
-        "Lazurio refused the connection. Turn the switch on again. If it keeps happening, sign out and sign in again.",
-      helperUnavailable: `Agent Desktop did not take the connection. Quit ${APP_NAME} and start it again.`,
+        "Lazurio refused the connection for another reason. Turn the switch on again. If it keeps happening, sign out and sign in again.",
+      helperUnavailable: `Agent Desktop's helper process did not take the connection. Quit ${APP_NAME} and start it again.`,
       stopNotConfirmed: `Agent Desktop did not confirm that it turned off, so ${APP_NAME} ended it with every connection. No agent is working on this computer now. To turn Agent Desktop on again, quit ${APP_NAME} and start it again.`,
       agentDesktopPaired:
-        "The utility Lazurio Agent Desktop is paired on this computer. Remove every Environment in the utility and uninstall it. If it is already uninstalled, delete the io.lazurio.agent-desktop entries in Credential Manager (Windows) or Keychain Access (Mac). Then turn the switch on again.",
+        "The earlier utility Lazurio Agent Desktop keeps entries of io.lazurio.agent-desktop in the system's keystore, and while it does, the app connects to no Environment.",
       agentDesktopCheckFailed:
-        "Could not check whether the utility Lazurio Agent Desktop is paired on this computer. On a Mac, unlock the Keychain and turn the switch on again.",
+        "Could not check whether the old Lazurio Agent Desktop is paired on this computer (io.lazurio.agent-desktop entries in the keystore). On a Mac, unlock the Keychain and turn the switch on again.",
       handOverRefused:
-        "The Environment did not accept the permission to connect. Turn the switch on again.",
+        "The Environment's gateway did not accept the one-time permission to connect (HTTP 401), for example because it expired meanwhile. Turn the switch on again.",
       computerNotPermitted:
-        "The Environment did not accept this computer. The computer must be an approved device of your Organization, and the Environment must be assigned to you.",
-      badToken: "The Environment did not accept Lazurio's confirmation. Turn the switch on again.",
-      contractMismatch: `The Environment connects with another version than ${APP_NAME}. Update ${APP_NAME} and turn the switch on again.`,
+        "The Environment's gateway did not accept this computer (HTTP 403). The computer must be an approved device of your Organization, and the Environment must be assigned to you. Your Organization's Admin approves devices.",
+      badToken:
+        "The Environment did not accept the confirmation the gateway sent it from Lazurio. Turn the switch on again.",
+      contractMismatch: `The Environment answers with another version of the connection than this app knows. Update ${APP_NAME} and turn the switch on again.`,
       alreadyAttached:
-        "The Environment still has another connection from this computer. Wait a minute and turn the switch on again.",
+        "The Environment still serves an earlier connection from this computer, which ends by itself within a minute. Wait a minute and turn the switch on again.",
       upgradeRefused:
-        "The Environment refused the connection. Turn the switch on again later. If it keeps happening, send the code below to your Organization's Admin.",
-      invalidAttachUrl: "The address of this Environment is not valid. Remove it and add it again.",
+        "The Environment refused the connection with the code below. Turn the switch on again later. If it keeps happening, send the code to your Organization's Admin.",
+      invalidAttachUrl:
+        "This Environment's address is not one Agent Desktop connects to. Remove it and add it again from its Lazurio page.",
       other:
-        "The Environment refused the connection. If it keeps happening, send the code below to your Organization's Admin.",
+        "The Environment refused the connection with the code below. If it keeps happening, send the code to your Organization's Admin.",
     },
   },
   tray: {

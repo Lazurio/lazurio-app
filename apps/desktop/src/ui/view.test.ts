@@ -7,6 +7,10 @@ describe("viewOf", () => {
     assert.strictEqual(viewOf("", ""), "column");
     assert.strictEqual(viewOf("?view=agent-bar", ""), "agent-bar");
     assert.strictEqual(viewOf("?view=agent-desktop", ""), "agent-desktop");
+    assert.strictEqual(
+      viewOf("?view=agent-desktop-fixtures&state=empty", ""),
+      "agent-desktop-fixtures",
+    );
     assert.strictEqual(viewOf("", "#waiting"), "waiting");
   });
 
