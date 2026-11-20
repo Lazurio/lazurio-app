@@ -61,7 +61,7 @@ export const readWindows = Effect.fn("TailnetPolicy.readWindows")(function* (
 
 // The same on a Mac (#36, 2026-11-20), through system programs at fixed paths. IT's policy is a
 // managed preference of io.lazurio.app under /Library/Managed Preferences, which only an
-// administrator or a profile writes; the person's setting is the same key in their own defaults.
+// administrator writes; the person's setting is the same key in their own defaults.
 const MAC_DOMAIN = "io.lazurio.app";
 const MAC_KEY = "Tailnets";
 const MANAGED_PREFERENCES = "/Library/Managed Preferences";

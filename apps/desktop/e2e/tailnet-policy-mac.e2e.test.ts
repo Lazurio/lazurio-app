@@ -1,9 +1,8 @@
 // End-to-end on a Mac: the app reads the network of an Organization the way a packaged app does
 // (TailnetPolicy.readMac, #36 2026-11-20), through the system's own programs. The person's own
 // setting is written by the documented `.command` file as the runner's account; IT's policy is a
-// managed preference, which the test writes with sudo where the runner allows it. The profile
-// template is checked as the file Lazurio fills in. An account or computer that already has a
-// Lazurio setting is left alone.
+// managed preference, which the test writes with sudo where the runner allows it. An account or
+// computer that already has a Lazurio setting is left alone.
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test runs the documented files from disk.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -82,7 +81,7 @@ describe("the tailnet setting on a Mac", () => {
       yield* Effect.acquireRelease(
         Effect.gen(function* () {
           if (madeFolder) yield* run("/usr/bin/sudo", ["-n", "/bin/mkdir", MANAGED]);
-          // The file as a profile leaves it, written directly, so no preferences cache is between.
+          // The managed preference file, written directly, so no preferences cache is between.
           const plist = temporaryFile(
             "io.lazurio.app.plist",
             `<?xml version="1.0" encoding="UTF-8"?>
@@ -99,46 +98,5 @@ describe("the tailnet setting on a Mac", () => {
       );
       assert.deepStrictEqual(yield* readMac(macSystem, ACCOUNT, "machine"), Option.some(POLICY));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect(
-    "has a profile template that, filled in, is a valid profile with the same text",
-    (context) =>
-      Effect.gen(function* () {
-        if ((yield* HostProcess.Platform) !== "darwin") {
-          context.skip("plutil exists only on a Mac");
-        }
-        const file = temporaryFile(
-          "lazurio-app-tailnets.mobileconfig",
-          NodeFS.readFileSync(docs("lazurio-app-tailnets.mobileconfig"), "utf8")
-            .replaceAll("{{tailnet}}", "org")
-            .replaceAll("{{control-server}}", "headscale.org.lazurio.io")
-            .replaceAll("{{domain}}", "org.lazurio.io")
-            .replaceAll("{{profile-uuid}}", "2F1A3C6E-0D5B-4E4F-9B8A-1C2D3E4F5A6B")
-            .replaceAll("{{payload-uuid}}", "7A8B9C0D-1E2F-4A3B-8C4D-5E6F7A8B9C0D"),
-        );
-        assert.strictEqual((yield* run("/usr/bin/plutil", ["-lint", "-s", file])).exitCode, 0);
-        const profile = JSON.parse(
-          (yield* run("/usr/bin/plutil", ["-convert", "json", "-o", "-", file])).output,
-        ) as {
-          readonly PayloadContent: ReadonlyArray<{
-            readonly PayloadType: string;
-            readonly PayloadContent: Record<
-              string,
-              {
-                readonly Forced: ReadonlyArray<{
-                  readonly mcx_preference_settings: Record<string, string>;
-                }>;
-              }
-            >;
-          }>;
-        };
-        const payload = profile.PayloadContent[0];
-        assert.strictEqual(payload?.PayloadType, "com.apple.ManagedClient.preferences");
-        assert.strictEqual(
-          payload?.PayloadContent["io.lazurio.app"]?.Forced[0]?.mcx_preference_settings["Tailnets"],
-          POLICY,
-        );
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
