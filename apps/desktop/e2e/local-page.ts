@@ -32,11 +32,23 @@ export const localPage = async (
     },
     [part, exact] as const,
   );
-  const page = app
-    .windows()
-    .find((candidate) => (exact ? candidate.url() === part : candidate.url().includes(part)));
-  if (page === undefined) throw new Error(`no page of ${part}`);
-  return page;
+  const fits = (url: string) => (exact ? url === part : url.includes(part));
+  const page = app.windows().find((candidate) => fits(candidate.url()));
+  if (page !== undefined) return page;
+  // Playwright learns of a page and its address over a connection of its own, which may lag behind
+  // the main process: the page is then one Playwright knows by an older address, or one to come.
+  const reaches = (candidate: Page) =>
+    candidate.waitForURL((url) => fits(url.href), { waitUntil: "commit" }).then(() => candidate);
+  return Promise.any([
+    ...app.windows().map(reaches),
+    app.waitForEvent("window", {
+      predicate: (candidate) =>
+        reaches(candidate).then(
+          () => true,
+          () => false,
+        ),
+    }),
+  ]);
 };
 
 // The status column's page. Other local pages (the bar, the Agent Desktop window, the waiting page)
