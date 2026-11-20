@@ -87,7 +87,9 @@ export const directoryOf = Effect.fn("TailnetPolicy.directoryOf")(function* <E, 
   computer: string,
 ) {
   const chosen = yield* choose(read);
-  if (Option.isNone(chosen)) return { source: "built-in" as const, directory: yield* builtIn };
+  if (Option.isNone(chosen)) {
+    return { source: "built-in" as const, text: Option.none<string>(), directory: yield* builtIn };
+  }
   const { source, text } = chosen.value;
   const directory = yield* TailnetDirectory.fromText(text, computer).pipe(
     Effect.tapError((error) =>
@@ -95,5 +97,20 @@ export const directoryOf = Effect.fn("TailnetPolicy.directoryOf")(function* <E, 
     ),
     Effect.orElseSucceed((): TailnetDirectory.Directory => ({ tailnets: [], refused: [] })),
   );
-  return { source, directory };
+  return { source, text: Option.some(text), directory };
+});
+
+// The chosen text now, policy or the person's setting, and whether it names any network to join:
+// what SettingWatch reads again while the app runs (#81).
+export const settingNow = Effect.fn("TailnetPolicy.settingNow")(function* <E, R>(
+  read: (source: PolicySource) => Effect.Effect<Option.Option<string>, E, R>,
+  computer: string,
+) {
+  const chosen = yield* choose(read);
+  if (Option.isNone(chosen)) return { text: Option.none<string>(), joinsAny: false };
+  const joinsAny = yield* TailnetDirectory.fromText(chosen.value.text, computer).pipe(
+    Effect.map((directory) => directory.tailnets.length > 0),
+    Effect.orElseSucceed(() => false),
+  );
+  return { text: Option.some(chosen.value.text), joinsAny };
 });

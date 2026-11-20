@@ -5,6 +5,8 @@ export type PageProblem =
   // A tailnet's page its node cannot reach yet: the app loads it again by itself.
   | { readonly kind: "waiting"; readonly code: number; readonly host: string }
   | { readonly kind: "failed"; readonly code: number; readonly host: string }
+  // A load failed while the Organization's network is not set up (#81): that is the reason.
+  | { readonly kind: "network"; readonly code: number; readonly host: string }
   // The tailnet helper's proxy refused the page's tunnel (HTTP 407).
   | { readonly kind: "proxy"; readonly host: string }
   // The app does not open the address, or opened it in the system's browser instead.
@@ -15,7 +17,7 @@ export type PageProblem =
 export const problemQuery = (problem: PageProblem): string => {
   const query = new URLSearchParams({ problem: problem.kind });
   if (problem.kind !== "crashed") query.set("host", problem.host);
-  if (problem.kind === "failed" || problem.kind === "waiting") {
+  if (problem.kind === "failed" || problem.kind === "waiting" || problem.kind === "network") {
     query.set("code", String(problem.code));
   }
   return `?${query.toString()}`;
@@ -27,7 +29,8 @@ export const problemOf = (search: string): PageProblem | undefined => {
   const kind = query.get("problem");
   switch (kind) {
     case "waiting":
-    case "failed": {
+    case "failed":
+    case "network": {
       const code = Number(query.get("code"));
       return Number.isInteger(code) ? { kind, code, host } : undefined;
     }

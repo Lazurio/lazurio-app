@@ -23,7 +23,10 @@ export function Waiting() {
     <main className="waiting" data-problem={problem?.kind ?? "waiting"}>
       <h1>{words.title}</h1>
       <p>{words.lead}</p>
-      {problem === undefined || problem.kind === "waiting" || problem.kind === "browser" ? null : (
+      {problem === undefined ||
+      problem.kind === "waiting" ||
+      problem.kind === "browser" ||
+      problem.kind === "network" ? null : (
         <p>{text.page.persists}</p>
       )}
       {words.code === undefined ? null : <p className="waiting__code">{words.code}</p>}
@@ -84,6 +87,12 @@ const wordsOf = (
       return { title: page.refusedTitle, lead: withHost(page.refusedLead, problem.host) };
     case "browser":
       return { title: page.browserTitle, lead: withHost(page.browserLead, problem.host) };
+    case "network":
+      return {
+        title: page.networkTitle,
+        lead: text.networkMissing,
+        code: page.code.replace("{code}", String(problem.code)),
+      };
     case "crashed":
       return { title: page.crashedTitle, lead: page.crashedLead };
   }

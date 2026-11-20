@@ -53,6 +53,7 @@ import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
 import * as Tailnet from "./Tailnet.ts";
 import * as ReleaseFeed from "./ReleaseFeed.ts";
+import * as SettingWatch from "./SettingWatch.ts";
 import * as TailnetDirectory from "./TailnetDirectory.ts";
 import * as TailnetPolicy from "./TailnetPolicy.ts";
 import * as Tray from "./Tray.ts";
@@ -211,22 +212,28 @@ const packagedDirectory = Effect.gen(function* () {
   const builtIn = TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform)
     ? TailnetDirectory.fromFile(builtInFile, NodeOS.hostname())
     : Effect.succeed(TailnetDirectory.NO_TAILNETS);
-  if (platform !== "win32") return { source: "built-in", directory: yield* builtIn };
+  if (platform !== "win32") {
+    return { source: "built-in", text: Option.none<string>(), directory: yield* builtIn };
+  }
   // The packaged tailnet helper reads the policy and the person's setting through the registry's
   // API; the setting counts only where the helper confirms there is no policy (TailnetPolicy).
-  const helper = path.join(process.resourcesPath, "helpers", "lazurio-tailnet.exe");
-  return yield* TailnetPolicy.directoryOf(
-    (source) => TailnetPolicy.readWindows(helper, source),
-    builtIn,
-    NodeOS.hostname(),
-  );
+  return yield* TailnetPolicy.directoryOf(readWindowsSetting, builtIn, NodeOS.hostname());
 });
+
+// The policy or the person's setting, read by the packaged tailnet helper on Windows.
+const readWindowsSetting = (source: TailnetPolicy.PolicySource) =>
+  Effect.flatMap(Path.Path, (path) =>
+    TailnetPolicy.readWindows(
+      path.join(process.resourcesPath, "helpers", "lazurio-tailnet.exe"),
+      source,
+    ),
+  );
 
 // The tailnets to join, and whether the Organization's network is missing: a stable build with
 // neither IT's policy nor the person's setting, which joins nothing and says so.
 const tailnetsToJoin = Effect.gen(function* () {
   if (Electron.app.isPackaged) {
-    const { source, directory } = yield* packagedDirectory;
+    const { source, text, directory } = yield* packagedDirectory;
     for (const refused of directory.refused) {
       yield* Effect.logWarning("tailnet refused", { source, ...refused });
     }
@@ -234,17 +241,24 @@ const tailnetsToJoin = Effect.gen(function* () {
       source,
       tailnets: directory.tailnets.map((tailnet) => tailnet.tailnet),
     });
+    const platform = yield* HostProcess.Platform;
     return {
       tailnets: directory.tailnets,
       networkMissing:
         source === "built-in" &&
-        !TailnetDirectory.builtInAllowed(Electron.app.getVersion(), yield* HostProcess.Platform),
+        !TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform),
+      // On Windows the setting is read again while the app runs (SettingWatch, #81).
+      setting: platform === "win32" ? Option.some(text) : Option.none<Option.Option<string>>(),
     };
   }
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
   return {
     tailnets: Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [],
-    networkMissing: false,
+    // End-to-end tests only (testHooks): a stable build without the Organization's network.
+    networkMissing: yield* Config.Boolean("LAZURIO_APP_E2E_NETWORK_MISSING").pipe(
+      Config.withDefault(false),
+    ),
+    setting: Option.none<Option.Option<string>>(),
   };
 });
 
@@ -795,6 +809,25 @@ const program = Effect.gen(function* () {
   // ended, the status column with Stop or its warning shows by itself and stays in view
   // (docs/adr/0006), until Agent Desktop has a bar of its own.
   agentWorksNow = () => deviceControls.current().agent !== null;
+  // The network setting written while the app runs starts it again, so the person restarts
+  // nothing (SettingWatch, #81); the new start shows the window, even after one with --hidden.
+  if (Option.isSome(joining.setting)) {
+    yield* SettingWatch.watch({
+      atStart: joining.setting.value,
+      read: TailnetPolicy.settingNow(readWindowsSetting, NodeOS.hostname()),
+      agentWorks: () => agentWorksNow(),
+      startAgain: hooks.notice(text.networkFound).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            Electron.app.relaunch({
+              args: process.argv.slice(1).filter((arg) => arg !== "--hidden"),
+            });
+            Electron.app.quit();
+          }),
+        ),
+      ),
+    });
+  }
   let agentWorked = false;
   const showWhileAgentWorks = () => {
     const works = agentWorksNow();
@@ -863,6 +896,7 @@ const program = Effect.gen(function* () {
         page = outcome;
         broadcastStatus();
       },
+      networkMissing: () => joining.networkMissing,
       servedByTailnet: (address) => {
         const url = URL.parse(address);
         return url !== null && Option.isSome(tailnets.proxyFor(url.hostname));
