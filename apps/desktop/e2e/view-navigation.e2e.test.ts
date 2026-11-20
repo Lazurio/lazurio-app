@@ -65,10 +65,25 @@ const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5" | "f5-ba
         | undefined;
       if (remote === undefined) throw new Error("no remote view");
       const contents = remote.webContents;
+      // Resolves once the page stopped loading, whether it loaded or failed; a failed main-frame
+      // load rejects with its code, so a test says why instead of waiting until its timeout.
       const loaded = () =>
-        new Promise<void>((resolve) =>
-          contents.once("did-finish-load", () => setImmediate(resolve)),
-        );
+        new Promise<void>((resolve, reject) => {
+          const failed = (
+            _event: Electron.Event,
+            code: number,
+            description: string,
+            address: string,
+            isMainFrame: boolean,
+          ) => {
+            if (isMainFrame) reject(new Error(`${address} did not load: ${code} ${description}`));
+          };
+          contents.on("did-fail-load", failed);
+          contents.once("did-stop-loading", () => {
+            contents.off("did-fail-load", failed);
+            setImmediate(resolve);
+          });
+        });
       const viewItems = () =>
         Menu.getApplicationMenu()?.items.flatMap((item) => item.submenu?.items ?? []) ?? [];
       const item = (accelerators: ReadonlyArray<string>) => {
@@ -79,6 +94,7 @@ const afterLoad = (step: "start" | "second" | "back" | "forward" | "f5" | "f5-ba
         return found;
       };
       if (which === "start") {
+        // The first page may have loaded before this runs, or may still wait for its start.
         while (contents.getURL() !== firstAddress || contents.isLoading()) await loaded();
       } else if (which === "second") {
         const done = loaded();
