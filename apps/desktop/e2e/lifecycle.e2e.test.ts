@@ -44,17 +44,24 @@ const launch = async (userData: string, args: ReadonlyArray<string> = []): Promi
   });
   const child = app.process();
   child.stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
-  const shell = await columnPage(app);
-  // The column's page is ready once live (#71): on a Windows runner its view may not count as
-  // visible yet, and a later step that needs it visible waits for that itself.
-  await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
-  await shell
-    .locator('[data-helper="lazurio-tailnet"][data-state="ready"]')
-    .waitFor({ state: "attached" });
-  await shell
-    .locator('[data-helper="lazurio-device"][data-state="ready"]')
-    .waitFor({ state: "attached" });
-  return { app, child, shell, output };
+  // A start that fails here ends the app before the error goes on: no suite holds it, and on
+  // Windows its running processes keep the data folder from being deleted (EPERM).
+  try {
+    const shell = await columnPage(app);
+    // The column's page is ready once live (#71): on a Windows runner its view may not count as
+    // visible yet, and a later step that needs it visible waits for that itself.
+    await shell.locator('main[data-status="live"]').waitFor({ state: "attached" });
+    await shell
+      .locator('[data-helper="lazurio-tailnet"][data-state="ready"]')
+      .waitFor({ state: "attached" });
+    await shell
+      .locator('[data-helper="lazurio-device"][data-state="ready"]')
+      .waitFor({ state: "attached" });
+    return { app, child, shell, output };
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
 };
 
 // Resolves once the app has written the line, including earlier output.
