@@ -99,6 +99,7 @@ const testHooks = Effect.gen(function* () {
       notice: systemNotice,
       secondInstance: () => {},
       trayMenu: (_menu: Electron.Menu) => {},
+      trayIcon: (_image: Electron.NativeImage) => {},
       startGate: Effect.void,
       quitHeld: () => {},
     };
@@ -159,6 +160,9 @@ const testHooks = Effect.gen(function* () {
   const trayMenu = (menu: Electron.Menu) => {
     Reflect.set(globalThis, "lazurioAppE2eTrayMenu", menu);
   };
+  const trayIcon = (image: Electron.NativeImage) => {
+    Reflect.set(globalThis, "lazurioAppE2eTrayIcon", image);
+  };
   // The start waits here, right before its own quit is ready, until the gate's file exists, so a
   // test can quit the app while it starts.
   const gate = yield* Config.option(Config.String("LAZURIO_APP_E2E_START_GATE"));
@@ -183,6 +187,7 @@ const testHooks = Effect.gen(function* () {
     notice,
     secondInstance,
     trayMenu,
+    trayIcon,
     startGate,
     quitHeld,
     observer,
@@ -732,6 +737,11 @@ const program = Effect.gen(function* () {
       agentWorking: () => workingAgent(deviceControls.current()) !== null,
       changes: deviceControls.subscribe,
       menuBuilt: hooks.trayMenu,
+      // Packaged under resources/icons (electron-builder.yml), in development from build/.
+      iconPath: Electron.app.isPackaged
+        ? path.join(process.resourcesPath, "icons", "icon.png")
+        : path.join(appPath, "build", "icon.png"),
+      iconBuilt: hooks.trayIcon,
     });
   }
   // The window's menu in the app's language instead of Electron's English default (AppMenu.ts).

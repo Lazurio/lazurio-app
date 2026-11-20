@@ -16,6 +16,10 @@ files:
   - package.json
 asar: true
 extraResources:
+  # Lazurio's icon for the notification area (Tray.ts): Windows gives an .exe's generic icon to
+  # app.getFileIcon, not the one inside it (#80).
+  - from: build/icon.png
+    to: icons/icon.png
   - from: ../../helpers/tailnet/bin
     to: helpers
     filter:
