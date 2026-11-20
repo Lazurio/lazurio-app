@@ -46,15 +46,16 @@ describe("environmentName", () => {
       namedEnvironment(origin, { name: "Bob Dvořák", organization: "Ukázková Organizace" }),
       { name: "Bob Dvořák", organization: "Ukázková Organizace" },
     );
+    // An Organization without its own name shows no line, never the address's label.
     assert.deepStrictEqual(namedEnvironment(origin, { name: "Bob Dvořák" }), {
       name: "Bob Dvořák",
-      organization: "Lazurioexampleorganization",
+      organization: null,
     });
     assert.deepStrictEqual(namedEnvironment(origin, { organization: "Ukázková Organizace" }), {
       name: "Bob",
       organization: "Ukázková Organizace",
     });
-    assert.deepStrictEqual(namedEnvironment(origin, {}), environmentName(origin));
+    assert.deepStrictEqual(namedEnvironment(origin, {}), { name: "Bob", organization: null });
   });
 });
 
@@ -64,7 +65,7 @@ describe("a name that only repeats the address", () => {
   it("counts for nothing, so the name from the address shows", () => {
     assert.deepStrictEqual(
       namedEnvironment(ORIGIN, { name: "lazurio-bob", organization: "lazurioexampleorganization" }),
-      { name: "Bob", organization: "Lazurioexampleorganization" },
+      { name: "Bob", organization: null },
     );
     assert.strictEqual(namedEnvironment(ORIGIN, { name: "Lazurio Bob" }).name, "Bob");
   });
