@@ -807,6 +807,7 @@ const program = Effect.gen(function* () {
         at: DateTime.formatIso(now),
       }),
     ),
+    signInAddress: tailnets.signInAddress,
     retryPage: Effect.promise(() =>
       Option.isSome(windowControls) ? windowControls.value.retryPage() : Promise.resolve(),
     ),

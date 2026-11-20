@@ -112,6 +112,19 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
                       {label.detail.after === undefined ? null : <p>{label.detail.after}</p>}
                     </div>
                   )}
+                  {/* The sign-in address, for a person who finishes the sign-in elsewhere: it
+                      reaches only the clipboard, never this window. */}
+                  {tailnet.state === "needs-login" && tailnet.canCopySignIn ? (
+                    <div className="shell__copy shell__sign-in">
+                      <button
+                        type="button"
+                        data-action="tailnet-copy-sign-in"
+                        onClick={() => void window.lazurio.copyTailnetSignIn(tailnet.tailnet)}
+                      >
+                        {text.browser.copy}
+                      </button>
+                    </div>
+                  ) : null}
                 </li>
               );
             })}

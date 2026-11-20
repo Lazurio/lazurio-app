@@ -90,7 +90,7 @@ describe("tailnetLabel", () => {
       { state: "Connected", addresses: ["100.64.0.9"] },
     );
     assert.deepStrictEqual(
-      tailnetLabel({ tailnet: "example", state: "needs-login" }, messages.cs),
+      tailnetLabel({ tailnet: "example", state: "needs-login", canCopySignIn: true }, messages.cs),
       {
         state: "Čeká na přihlášení",
       },

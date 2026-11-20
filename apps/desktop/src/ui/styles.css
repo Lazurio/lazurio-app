@@ -308,6 +308,18 @@ body {
   margin: 6px 0 0;
 }
 
+/* Copy address below a tailnet that waits for sign-in: a smaller, secondary Copy. */
+.shell__sign-in {
+  grid-column: 1 / -1;
+}
+
+.shell__sign-in button {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+}
+
 /* The helper programs and other technical facts, folded unless the person opens them. */
 .shell__details {
   margin-top: 16px;

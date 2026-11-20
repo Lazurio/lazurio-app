@@ -9,7 +9,7 @@ import * as NodeHttps from "node:https";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the app on disk.
 import * as NodePath from "node:path";
 
-import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
+import { afterAll, assert, beforeAll, describe, expect, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
@@ -17,6 +17,9 @@ import { removeUserData, temporaryUserData } from "./user-data.ts";
 import { columnPage } from "./local-page.ts";
 
 const PAGE = "https://launchpad.e2e.lazurio.io/";
+const CONTROL = "https://headscale.e2e.lazurio.invalid";
+// The sign-in address the fake tailnet helper reports (fake-tailnet-helper.ts).
+const SIGN_IN = `${CONTROL}/register/e2e`;
 
 const running = Promise.withResolvers<void>();
 let pageRequests = 0;
@@ -74,7 +77,7 @@ beforeAll(async () => {
       LAZURIO_APP_DEV_TAILNETS: JSON.stringify([
         {
           tailnet: "e2e",
-          controlUrl: "https://headscale.e2e.lazurio.invalid",
+          controlUrl: CONTROL,
           hostname: "e2e-app",
           domains: ["e2e.lazurio.io"],
         },
@@ -115,6 +118,11 @@ const remoteViewState = (): Promise<{ readonly url: string; readonly loading: bo
       .find((child): child is Electron.WebContentsView => "webContents" in child)?.webContents;
     return { url: contents?.getURL() ?? "", loading: contents?.isLoading() ?? false };
   });
+
+const readClipboard = (): Promise<string> => app.evaluate(({ clipboard }) => clipboard.readText());
+
+const writeClipboard = (text: string): Promise<void> =>
+  app.evaluate(({ clipboard }, value) => clipboard.writeText(value), text);
 
 // The remote view's address once it shows the page with the title, not an error page at its
 // address, and has stopped loading.
@@ -157,9 +165,27 @@ describe("Lazurio App GEN4 first page", () => {
     assert.strictEqual(pageRequests, 0);
   });
 
+  it("copies the node's sign-in address on request, and Copy status leaves it out", async () => {
+    await writeClipboard("before");
+    await shell
+      .locator(
+        '[data-tailnet="e2e"][data-state="needs-login"] [data-action="tailnet-copy-sign-in"]',
+      )
+      .click();
+    await expect.poll(readClipboard).toBe(SIGN_IN);
+    await shell.locator('[data-action="status-copy"]').click();
+    await shell.locator('[data-copy-state="copied"]').waitFor();
+    const status = await readClipboard();
+    assert.include(status, "e2e: needs-login");
+    assert.notInclude(status, "/register/");
+    assert.notInclude(status, CONTROL);
+  });
+
   it("loads it through the node once the node runs, also after a failed first tunnel", async () => {
     running.resolve();
     await shell.locator('[data-tailnet="e2e"][data-state="running"]').waitFor();
+    // A node that runs has no sign-in address to copy any more.
+    assert.strictEqual(await shell.locator('[data-action="tailnet-copy-sign-in"]').count(), 0);
     assert.strictEqual(await remoteShows(PAGE, "Launchpad"), PAGE);
     assert.strictEqual(pageRequests, 1);
   });
