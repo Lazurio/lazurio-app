@@ -1,12 +1,19 @@
 import { StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 
+import type { AppStatus } from "../shared/bridge.ts";
+
 import { AgentBar } from "./AgentBar.tsx";
 import { AgentDesktopWindow } from "./AgentDesktopWindow.tsx";
 import { App } from "./App.tsx";
 import { viewOf } from "./view.ts";
 import { Waiting } from "./Waiting.tsx";
 import "./styles.css";
+
+// The column's first status, asked once. A promise made in render is new at each render, so `use`
+// suspended on each one again: the column asked 17 times before it showed on Linux, and took
+// more than 3 s on a Windows runner.
+let firstStatus: Promise<AppStatus> | undefined;
 
 // One bundle for every local view; its address picks the page (view.ts).
 function LocalPage() {
@@ -19,7 +26,8 @@ function LocalPage() {
     case "agent-desktop":
       return <AgentDesktopWindow />;
     case "column":
-      return <App status={window.lazurio.status()} />;
+      firstStatus ??= window.lazurio.status();
+      return <App status={firstStatus} />;
   }
 }
 
