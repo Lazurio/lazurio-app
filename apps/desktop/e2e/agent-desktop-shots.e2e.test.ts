@@ -169,7 +169,7 @@ describe("Agent Desktop's panel in its sample states", () => {
   });
 
   // The window has no menu of its own (DevicePanel.removeMenu): Chromium's editing keys still copy.
-  it("copies the technical details with Copy and with Ctrl+C", async () => {
+  it("copies the technical details with Copy and with the copy keys", async () => {
     const page = await localPage(app, "view=agent-desktop");
     await show("error-paired", "en", "light");
     const problem = page.locator("[data-switch-problem]");
@@ -180,7 +180,8 @@ describe("Agent Desktop's panel in its sample states", () => {
     assert.include(copied, "io.lazurio.agent-desktop");
     await app.evaluate(({ clipboard }) => clipboard.writeText(""));
     await problem.locator(".ad__copyable pre").selectText();
-    await page.keyboard.press("Control+C");
+    // The platform's own copy keys: Cmd+C on a Mac, through the app menu's Edit role.
+    await page.keyboard.press("ControlOrMeta+C");
     assert.include(
       await app.evaluate(({ clipboard }) => clipboard.readText()),
       "agent_desktop_paired",
