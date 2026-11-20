@@ -21,18 +21,40 @@ export interface TrayOptions {
   readonly changes: (listener: () => void) => () => void;
   // Each menu the tray shows, for the end-to-end tests.
   readonly menuBuilt: (menu: Electron.Menu) => void;
+  // Lazurio's own icon (build/icon.png, packaged under resources/icons), and the image the tray
+  // shows, for the end-to-end tests.
+  readonly iconPath: string;
+  readonly iconBuilt: (image: Electron.NativeImage) => void;
 }
 
-// The package carries no image of its own (electron-builder.yml names no icon), so the tray takes
-// the icon of the app's own executable: on Windows the one inside Lazurio App.exe. Where the system
-// gives none, the icon is empty and the tray still works.
-const executableIcon = Effect.tryPromise({
-  try: () => Electron.app.getFileIcon(process.execPath, { size: "small" }),
-  catch: () => "no icon",
-}).pipe(Effect.orElseSucceed(() => Electron.nativeImage.createEmpty()));
+// Lazurio's icon at the notification area's size, 16 pixels, and 32 for a display scaled 200 %.
+// Not the executable's icon: on Windows app.getFileIcon gives the generic icon of an .exe (#80).
+// Where the file is missing, the image is empty and the tray still works.
+const TRAY_SIZES: ReadonlyArray<{ readonly scaleFactor: number; readonly size: number }> = [
+  { scaleFactor: 1, size: 16 },
+  { scaleFactor: 1.5, size: 24 },
+  { scaleFactor: 2, size: 32 },
+];
+
+const trayIcon = (iconPath: string): Electron.NativeImage => {
+  const source = Electron.nativeImage.createFromPath(iconPath);
+  if (source.isEmpty()) return source;
+  const image = Electron.nativeImage.createEmpty();
+  for (const { scaleFactor, size } of TRAY_SIZES) {
+    image.addRepresentation({
+      scaleFactor,
+      width: size,
+      height: size,
+      buffer: source.resize({ width: size, height: size, quality: "best" }).toPNG(),
+    });
+  }
+  return image;
+};
 
 export const serve = Effect.fn("Tray.serve")(function* (options: TrayOptions) {
-  const icon = yield* executableIcon;
+  const icon = trayIcon(options.iconPath);
+  options.iconBuilt(icon);
+  yield* Effect.logInfo("tray icon", { empty: icon.isEmpty(), scales: icon.getScaleFactors() });
   const tray = yield* Effect.acquireRelease(
     Effect.sync(() => new Electron.Tray(icon)),
     (tray) =>

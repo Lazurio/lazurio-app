@@ -178,6 +178,26 @@ describe("Lazurio App's life outside its window", () => {
     }),
   );
 
+  // Lazurio's own icon at the tray's sizes, not the executable's: Windows gives an .exe's generic
+  // icon to app.getFileIcon (#80). Whether Windows shows it, only a screenshot proves.
+  it.effect("shows Lazurio's own icon in the notification area", () =>
+    withTray(async (hasTray) => {
+      if (!hasTray) return;
+      const icon = await first.app.evaluate(() => {
+        const image = Reflect.get(globalThis, "lazurioAppE2eTrayIcon") as
+          | Electron.NativeImage
+          | undefined;
+        if (image === undefined) return undefined;
+        return { empty: image.isEmpty(), scales: image.getScaleFactors(), size: image.getSize() };
+      });
+      assert.deepStrictEqual(icon, {
+        empty: false,
+        scales: [1, 1.5, 2],
+        size: { width: 16, height: 16 },
+      });
+    }),
+  );
+
   it.effect(
     "opens the window again from the tray (the Dock on a Mac), and says nothing the second time it hides",
     () =>
