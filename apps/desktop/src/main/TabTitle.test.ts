@@ -70,4 +70,13 @@ describe("a tab's name from its address", () => {
       place: "env",
     });
   });
+
+  it("names a module after a property of every object as a module, in a state a window can take", () => {
+    for (const module of ["constructor", "tostring", "hasownproperty", "valueof"]) {
+      const title = tabTitleOf(`https://${module}.env.example.lazurio.io/`);
+      assert.deepStrictEqual(title, { app: "module", module, place: "env" });
+      // The strip receives it over IPC, which clones it.
+      assert.deepStrictEqual(structuredClone(title), title);
+    }
+  });
 });

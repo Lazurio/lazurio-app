@@ -388,6 +388,8 @@ interface Tab {
   readonly scope: Scope.Closeable;
   watch: PageWatch | undefined;
   cover: string | undefined;
+  // How the tab's last navigation ended, for Copy status once the tab comes to the front.
+  outcome: PageOutcome;
 }
 
 export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowOptions) {
@@ -444,13 +446,18 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   const firstAddress = Option.getOrUndefined(options.remoteUrl);
 
   const front = (): Tab | undefined => (list === undefined ? undefined : tabs.get(list.active));
+  // A tab's page while it lives: a view whose page was destroyed has no web contents any more.
+  const pageOf = (tab: Tab | undefined): Electron.WebContents | undefined => {
+    const contents: Electron.WebContents | undefined = tab?.view.webContents;
+    return contents === undefined || contents.isDestroyed() ? undefined : contents;
+  };
   const tabsView = (): TabsView => {
-    const shown = front()?.view.webContents;
+    const shown = pageOf(front());
     return {
       tabs: (list?.order ?? []).flatMap((id) => {
         const tab = tabs.get(id);
-        if (tab === undefined || tab.view.webContents.isDestroyed()) return [];
-        const contents = tab.view.webContents;
+        const contents = pageOf(tab);
+        if (contents === undefined) return [];
         return [{ id, title: tabTitleOf(contents.getURL()), loading: contents.isLoading() }];
       }),
       active: list?.active ?? 0,
@@ -511,8 +518,10 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   const frontChanged = () => {
     showFront();
     const shown = front();
-    if (shown !== undefined && !shown.view.webContents.isDestroyed()) {
-      options.pageShown(shown.view.webContents.getURL());
+    const contents = pageOf(shown);
+    if (shown !== undefined && contents !== undefined) {
+      options.pageOutcome(shown.outcome);
+      options.pageShown(contents.getURL());
     }
     options.historyChanged();
     publish();
@@ -522,7 +531,14 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     list = next;
     if (next.active === before) return;
     frontChanged();
-    front()?.view.webContents.focus();
+    pageOf(front())?.focus();
+  };
+
+  // A tab leaves the window: its view, and its scope with its page and watch.
+  const removeTab = (tab: Tab) => {
+    tabs.delete(tab.id);
+    window.contentView.removeChildView(tab.view);
+    runFork(Scope.close(tab.scope, Exit.void));
   };
 
   const closeTab = (id: number) => {
@@ -536,12 +552,10 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     if (tab === undefined) return;
     const before = list.active;
     list = closed(list, id);
-    tabs.delete(id);
-    window.contentView.removeChildView(tab.view);
-    runFork(Scope.close(tab.scope, Exit.void));
+    removeTab(tab);
     if (list.active !== before) {
       frontChanged();
-      front()?.view.webContents.focus();
+      pageOf(front())?.focus();
     } else publish();
   };
 
@@ -596,7 +610,14 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
         }),
       ),
     );
-    const tab: Tab = { id, view, scope, watch: undefined, cover: undefined };
+    const tab: Tab = {
+      id,
+      view,
+      scope,
+      watch: undefined,
+      cover: undefined,
+      outcome: { outcome: "none" },
+    };
     tabs.set(id, tab);
     const isFront = () => list?.active === id;
     contents.on("did-navigate", () => {
@@ -612,9 +633,25 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     catchKeys(contents);
     onOpenTab(contents, openFromPage);
     // A page closes its own tab (window.close() of a window it opened), as in a browser.
+    // The window's last tab gives its place to a new tab with the window's first page, so the
+    // window never keeps a tab without a page (review of #96). After the page is gone: Chromium
+    // makes no new page while it tears one down.
     contents.on("destroyed", () => {
-      if (ending || window.isDestroyed() || tabs.get(id) !== tab) return;
-      if (list !== undefined && canClose(list)) closeTab(id);
+      if (ending) return;
+      runFork(
+        Effect.yieldNow.pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              if (window.isDestroyed() || tabs.get(id) !== tab || list === undefined) return;
+              if (canClose(list)) return closeTab(id);
+              // The new tab takes the dead one's place in the list (Tabs.opened puts it first).
+              removeTab(tab);
+              list = { order: [], active: id };
+              newTab();
+            }),
+          ),
+        ),
+      );
     });
     const index = strip === undefined ? -1 : window.contentView.children.indexOf(strip);
     if (index === -1) window.contentView.addChildView(view);
@@ -629,6 +666,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
           networkMissing: options.networkMissing,
           // Copy status tells how the front tab's page ended.
           outcome: (outcome) => {
+            tab.outcome = outcome;
             if (isFront()) options.pageOutcome(outcome);
           },
           coverChanged: (address) => {
@@ -729,11 +767,11 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     if (view !== undefined) catchKeys(view.webContents);
   }
   function goBack(): void {
-    const history = front()?.view.webContents.navigationHistory;
+    const history = pageOf(front())?.navigationHistory;
     if (history?.canGoBack() === true) history.goBack();
   }
   function goForward(): void {
-    const history = front()?.view.webContents.navigationHistory;
+    const history = pageOf(front())?.navigationHistory;
     if (history?.canGoForward() === true) history.goForward();
   }
   options.controls({
@@ -742,7 +780,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     goBack,
     goForward,
     history: () => {
-      const history = front()?.view.webContents.navigationHistory;
+      const history = pageOf(front())?.navigationHistory;
       return {
         canGoBack: history?.canGoBack() ?? false,
         canGoForward: history?.canGoForward() ?? false,
@@ -755,11 +793,12 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   });
   // A BaseWindow does not close its views' pages; they close here or with the scope.
   window.on("closed", () => {
-    const pages = [...tabs.values()].map((tab) => tab.view);
+    const pages = [...tabs.values()].map(pageOf);
     tabs.clear();
-    for (const view of [local, waiting, strip, ...pages]) {
-      if (view !== undefined && !view.webContents.isDestroyed()) view.webContents.close();
+    for (const contents of [local, waiting, strip].map((view) => view?.webContents)) {
+      if (contents !== undefined && !contents.isDestroyed()) contents.close();
     }
+    for (const contents of pages) contents?.close();
   });
 
   yield* Effect.promise(() => local.webContents.loadURL(LOCAL_ENTRY));

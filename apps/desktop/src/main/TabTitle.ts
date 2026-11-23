@@ -4,12 +4,13 @@ import { isSignInHost } from "./Navigation.ts";
 // A tab's name from its address alone (shared/tabTitle.ts says what it holds).
 
 // The names of an Environment's own services (its handover's entry), below
-// `<environment>.<organization>.lazurio.io`.
-const SERVICES: Readonly<Record<string, TabApp>> = {
-  launchpad: "apps",
-  t3code: "chat",
-  mausbot: "automations",
-};
+// `<environment>.<organization>.lazurio.io`. A Map, so a module named like a property of every
+// object (`constructor`, `toString`) is a module (review of #96).
+const SERVICES: ReadonlyMap<string, TabApp> = new Map([
+  ["launchpad", "apps"],
+  ["t3code", "chat"],
+  ["mausbot", "automations"],
+]);
 
 export const tabTitleOf = (address: string): TabTitle => {
   const url = URL.parse(address);
@@ -29,7 +30,7 @@ export const tabTitleOf = (address: string): TabTitle => {
   if (labels.length === 4) return { app: "sign-in", place: first };
   // <service or module>.<environment>.<organization>.lazurio.io.
   if (labels.length === 5) {
-    const known = SERVICES[first];
+    const known = SERVICES.get(first);
     if (known === "apps" && /^\/settings(?:\/|$)/u.test(url.pathname)) {
       return { app: "settings", place: second };
     }

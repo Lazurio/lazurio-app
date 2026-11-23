@@ -17,15 +17,21 @@ import * as Effect from "effect/Effect";
 import { _electron, type ElectronApplication } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
+import { columnPage } from "./local-page.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
 
 const LAUNCHPAD = "https://launchpad.env.example.lazurio.io/";
 const STAGING = "https://notes.env.example.lazurio.io/";
 const PROD = "https://notes.example.lazurio.app/";
+// A module named like a property of every object (review of #96).
+const CONSTRUCTOR = "https://constructor.env.example.lazurio.io/";
+// A module whose name resolves nowhere, so its page fails.
+const BROKEN = "https://broken.env.example.lazurio.io/";
 const HOSTS = [
   "launchpad.env.example.lazurio.io",
   "notes.env.example.lazurio.io",
   "notes.example.lazurio.app",
+  "constructor.env.example.lazurio.io",
 ];
 const COOKIE = "__Secure-lazurio-workspace=e2e";
 
@@ -188,13 +194,19 @@ const stripHas = (count: number) =>
     })`);
   }, count);
 
-// Sends a key to the front page, as a person types it there.
+// Sends a key to the front page, as a person types it there; the views catch the tabs' keys.
 const press = (keyCode: string, modifiers: ReadonlyArray<"control" | "shift" | "meta">) =>
   app.evaluate(
     ({ BaseWindow }, [key, keys]) => {
       const front = (BaseWindow.getAllWindows()[0]?.contentView.children ?? [])
         .filter((child): child is Electron.WebContentsView => "webContents" in child)
-        .find((view) => view.getVisible() && !view.webContents.getURL().startsWith("lazurio-app:"));
+        // The page in front, or the app's page in its place while it cannot show.
+        .find(
+          (view) =>
+            view.getVisible() &&
+            (!view.webContents.getURL().startsWith("lazurio-app:") ||
+              view.webContents.getURL().endsWith("#waiting")),
+        );
       if (front === undefined) throw new Error("no page in front");
       front.webContents.sendInputEvent({ type: "keyDown", keyCode: key, modifiers: [...keys] });
     },
@@ -421,5 +433,96 @@ describe("Lazurio App GEN4's tabs", () => {
       "notes · env",
       "Apps · env",
     ]);
+  });
+
+  it.effect("names a module called constructor in the strip", () =>
+    withCommandKey(async (command) => {
+      await press("1", [command]);
+      const opened = await openFromPage(
+        `window.open(${JSON.stringify(CONSTRUCTOR)}, "_blank"); "opened"`,
+        CONSTRUCTOR,
+      );
+      assert.strictEqual(opened.url, CONSTRUCTOR);
+      await stripHas(4);
+      assert.include((await shown()).strip.titles, "constructor · env");
+    }),
+  );
+
+  it.effect("tells Copy status how the tab in front ended, after every switch", () =>
+    withCommandKey(async (command) => {
+      // The column's bridge reads the status that Copy status writes out.
+      const column = await columnPage(app);
+      const outcome = async () =>
+        (await column.evaluate(() => window.lazurio.status())).page.outcome;
+      await press("1", [command]);
+      assert.strictEqual(await outcome(), "shown");
+      // A tab whose page fails, in front.
+      const failed = app.evaluate(({ app: electron }) => {
+        return new Promise<void>((resolve) => {
+          electron.once("web-contents-created", (_event, contents) => {
+            contents.once("did-fail-load", () => setImmediate(resolve));
+          });
+        });
+      });
+      await app.evaluate(async ({ BaseWindow }, broken) => {
+        const front = (BaseWindow.getAllWindows()[0]?.contentView.children ?? [])
+          .filter((child): child is Electron.WebContentsView => "webContents" in child)
+          .find((view) => view.getVisible() && view.webContents.getURL().startsWith("https://"));
+        await front?.webContents.executeJavaScript(
+          `window.open(${JSON.stringify(broken)}); "opened"`,
+          true,
+        );
+      }, BROKEN);
+      await failed;
+      await stripHas(5);
+      assert.strictEqual(await outcome(), "failed");
+      await press("1", [command]);
+      assert.strictEqual(await outcome(), "shown");
+      await press("2", [command]);
+      assert.strictEqual(await outcome(), "failed");
+    }),
+  );
+
+  it("gives the window's first page the place of a last tab whose page closed itself", async () => {
+    // Only the tab of the module called constructor stays, which a page opened.
+    await app.evaluate(async ({ BaseWindow }) => {
+      const strip = (BaseWindow.getAllWindows()[0]?.contentView.children ?? [])
+        .filter((child): child is Electron.WebContentsView => "webContents" in child)
+        .find((view) => view.webContents.getURL().includes("view=tabs"));
+      await strip?.webContents.executeJavaScript(`(async () => {
+        const state = await window.lazurio.tabs.getState();
+        const keep = state.tabs.find((tab) => tab.title.module === "constructor");
+        for (const tab of state.tabs) {
+          if (tab !== keep) await window.lazurio.tabs.command({ _tag: "Close", id: tab.id });
+        }
+      })()`);
+    });
+    await stripHas(1);
+    assert.deepStrictEqual((await shown()).strip.titles, ["constructor · env"]);
+    const replaced = app.evaluate(({ app: electron }, launchpad) => {
+      return new Promise<string>((resolve) => {
+        electron.once("web-contents-created", (_event, contents) => {
+          contents.on("did-navigate", (_navigation, url) => {
+            if (url === launchpad) contents.once("did-stop-loading", () => resolve(url));
+          });
+        });
+      });
+    }, LAUNCHPAD);
+    await app.evaluate(async ({ BaseWindow }) => {
+      const front = (BaseWindow.getAllWindows()[0]?.contentView.children ?? [])
+        .filter((child): child is Electron.WebContentsView => "webContents" in child)
+        .find((view) => view.getVisible() && view.webContents.getURL().startsWith("https://"));
+      // The page closes after this answers, so the call itself returns.
+      await front?.webContents.executeJavaScript(
+        "setTimeout(() => window.close()); 'closing'",
+        true,
+      );
+    });
+    assert.strictEqual(await replaced, LAUNCHPAD);
+    await stripHas(1);
+    assert.deepStrictEqual(await shown(), {
+      pages: [{ url: LAUNCHPAD, visible: true }],
+      strip: { titles: ["Apps · env"], active: 0, canClose: false },
+    });
   });
 });
