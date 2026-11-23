@@ -54,11 +54,18 @@ export function TabStrip() {
     void window.lazurio.tabs.getState().then(setView);
     return stop;
   }, []);
-  // The tab in front stays in view, however many tabs there are.
+  // The tab in front stays in view, however many tabs there are and however narrow the window.
   useEffect(() => {
-    strip.current
-      ?.querySelector<HTMLElement>(`[data-tab="${view?.active ?? 0}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const element = strip.current;
+    if (element === null) return;
+    const reveal = () =>
+      element
+        .querySelector<HTMLElement>(`[data-tab="${view?.active ?? 0}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    reveal();
+    const observer = new ResizeObserver(reveal);
+    observer.observe(element);
+    return () => observer.disconnect();
   }, [view]);
   const text = messages[localeOf(navigator.language)].tabs;
   const command = window.lazurio.tabs.command;
