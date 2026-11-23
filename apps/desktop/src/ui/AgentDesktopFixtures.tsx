@@ -40,13 +40,18 @@ const row = (
   channel,
 });
 
-// A switch that went off with a problem, a while ago: the window says from when.
+// A switch that went off with a problem, a while ago: the window says from when. A problem of
+// today stays after local midnight, so the window shows only its time whenever the page is made.
 const MINUTE = 60_000;
-const failed = (problem: DeviceSwitchProblem, minutesAgo = 47): DeviceSwitchStatus["switch"] => ({
-  phase: "off",
-  problem,
-  at: DateTime.toEpochMillis(DateTime.nowUnsafe()) - minutesAgo * MINUTE,
-});
+const failed = (problem: DeviceSwitchProblem, minutesAgo = 47): DeviceSwitchStatus["switch"] => {
+  const nowUtc = DateTime.nowUnsafe();
+  const now = DateTime.toEpochMillis(nowUtc);
+  const midnight = DateTime.toEpochMillis(
+    DateTime.startOf(DateTime.setZone(nowUtc, DateTime.zoneMakeLocal()), "day"),
+  );
+  const at = now - minutesAgo * MINUTE;
+  return { phase: "off", problem, at: minutesAgo < 24 * 60 ? Math.max(at, midnight) : at };
+};
 
 const status = (
   switches: ReadonlyArray<DeviceSwitchStatus>,
