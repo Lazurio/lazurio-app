@@ -1,4 +1,4 @@
-# Trial only (#105, not for merge): builds of the pull request's head for a person's trial by hand
+# Trial only (#105 on main with #109, not for merge): builds of the pull request's head for a person's trial by hand
 # on a Mac (Apple silicon) and on Windows, as a run's artifacts. Nothing is signed beyond the ad hoc
 # signature a Mac needs to start, nothing is tagged and nothing is published. The version carries
 # -nightly, so a Windows build joins the built-in network as a nightly does; its update feed is on
@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TRIAL_VERSION: 0.1.5-nightly.20261123.901
+  TRIAL_VERSION: 0.1.5-nightly.20261124.902
 
 jobs:
   windows:
