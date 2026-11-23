@@ -32,7 +32,7 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
   }, []);
   const text = messages[localeOf(navigator.language)];
   // Whether an agent holds the computer now, or may (the helper was lost unconfirmed): Agent
-  // Desktop's section, with Stop or its warning, then comes first and the column stays.
+  // Desktop's section, with Stop or its warning, then comes first in the column, if it shows.
   const agentWorks = device !== null && device.agent !== null;
   const [copyState, setCopyState] = useState<"copied" | "failed" | null>(null);
   const copyStatus = () => {
@@ -50,18 +50,12 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
             type="button"
             className="shell__link"
             data-action="status-hide"
-            disabled={agentWorks}
             onClick={() => void window.lazurio.setStatusPanel(false)}
           >
             {text.status.hide}
           </button>
         </div>
         <p className="shell__subtitle">{text.status.title}</p>
-        {agentWorks ? (
-          <p className="shell__subtitle" data-status-stays="">
-            {text.status.hideWhileAgentWorks}
-          </p>
-        ) : null}
         <dl className="shell__facts">
           <dt>{text.version}</dt>
           <dd>{current.appVersion}</dd>

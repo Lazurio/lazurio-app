@@ -218,16 +218,15 @@ describe("Lazurio App GEN4", () => {
     process.kill(pid, "SIGKILL");
     const problem = agentDesktop.locator('[data-device-state="lost"] [data-device-problem="lost"]');
     await problem.waitFor();
-    // The unconfirmed state opens the column, keeps it and the window in view, and Hide is off.
+    // The unconfirmed state keeps the window in view and says it in the Agent Desktop window; the
+    // status column, a surface for support, stays hidden (Matěj, 2026-11-23).
     const inView = () =>
       app.evaluate(({ BaseWindow }) => {
         const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
         const local = window?.contentView.children[0];
-        return window?.isVisible() === true && local?.getVisible() === true;
+        return window?.isVisible() === true && local?.getVisible() !== true;
       });
     assert.isTrue(await inView());
-    assert.isTrue(await shell.locator('[data-action="status-hide"]').isDisabled());
-    await shell.evaluate(() => window.lazurio.setStatusPanel(false));
     // Hidden, the window shows again; one that never does fails the test by its timeout.
     const shownAgain = await app.evaluate(async ({ BaseWindow }) => {
       const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
