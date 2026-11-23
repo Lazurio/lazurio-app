@@ -26,6 +26,7 @@ import { APP_NAME } from "../shared/appName.ts";
 import {
   STATUS_CHANGED_CHANNEL,
   type AppStatus,
+  type DeviceStatus,
   type PageOutcome,
   type UpdatesOffReason,
 } from "../shared/bridge.ts";
@@ -980,17 +981,17 @@ const program = Effect.gen(function* () {
       ),
     });
   }
-  let agentWorked = false;
+  let agentBefore: DeviceStatus["agent"] = null;
   // The bar with Stop says that an agent works; the status column never opens for it. A helper lost
-  // unconfirmed has no bar, so its warning shows in the Agent Desktop window instead.
+  // unconfirmed has no bar, so on entering that state, also in the middle of an agent's work, its
+  // warning shows in the Agent Desktop window instead.
   const showWhileAgentWorks = () => {
     const agent = deviceControls.current().agent;
-    const works = agent !== null;
-    if (works && !agentWorked && agent === "unknown") {
+    if (agent === "unknown" && agentBefore !== "unknown") {
       showWindow();
       openAgentDesktop();
-    } else if (works) keepWindowInView();
-    agentWorked = works;
+    } else if (agent !== null) keepWindowInView();
+    agentBefore = agent;
   };
   // Agent Desktop's bar over the page while an agent holds the computer (src/ui/AgentBar.tsx): a
   // local view with the bridge, laid out again whenever Agent Desktop's state changes. It is made

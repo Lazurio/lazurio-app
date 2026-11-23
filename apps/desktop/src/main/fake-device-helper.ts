@@ -1,7 +1,8 @@
 // Tests only: lazurio-device. After Shutdown "stop" exits, "linger" never exits, "crash" exits after
 // Ping, "mute" closes its output. "v3": StartChannel gets Connecting, then the next of
 // LAZURIO_FAKE_DEVICE_OUTCOMES (connected, working, needs-hand-over, refused:<reason>); FAKE_DEVICE_STOP
-// =silent ignores StopChannel; once FAKE_DEVICE_AGENT_FILE exists, its "<id>|<label>" holds the computer.
+// =silent ignores StopChannel; once FAKE_DEVICE_AGENT_FILE exists, its "<id>|<label>" holds the computer,
+// and after StopAgent once it is written again.
 // LAZURIO_FAKE_DEVICE_EXIT_AFTER_READY=true exits after DeviceReady without DeviceStopped.
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A fixture outside Effect: a file that appears.
 import * as NodeFS from "node:fs";
@@ -122,6 +123,9 @@ const v3 = (requestId: bigint, request: AppKind): boolean => {
         case: "lockState",
         value: { idle: true, sequence: idle, holderEnvironmentId: "", holderEnvironmentLabel: "" },
       });
+      // Stopped, the agent takes the computer again once the test writes the file anew.
+      if (agentFile !== undefined) NodeFS.rmSync(agentFile, { force: true });
+      holdWhenTold();
       return true;
     default:
       return false;

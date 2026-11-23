@@ -197,4 +197,45 @@ describe.each([
     assert.include(stderr.join(""), "lazurio-fake-device stop-agent");
     assert.strictEqual(await barBounds(app), 0);
   });
+
+  // Last: it ends the Device helper. Lost in the middle of an agent's work, with the Agent Desktop
+  // window closed, the warning still shows there, since the bar goes with the agent.
+  it("opens the Agent Desktop window with the warning when the helper is lost while an agent works", async () => {
+    const bar = await localPage(app, "view=agent-bar");
+    const file = NodePath.join(userData, "agent");
+    NodeFS.writeFileSync(`${file}.new`, `${ENVIRONMENT}|Bob`);
+    NodeFS.renameSync(`${file}.new`, file);
+    await bar.locator(`[data-agent-bar="${ENVIRONMENT}"]`).waitFor();
+    await app.evaluate(async ({ BaseWindow }) => {
+      const panels = BaseWindow.getAllWindows().filter((each) => each.getParentWindow() !== null);
+      await Promise.all(
+        panels.map(
+          (each) =>
+            new Promise<void>((resolve) => {
+              each.once("closed", () => resolve());
+              each.close();
+            }),
+        ),
+      );
+    });
+    const pid: unknown = await app.evaluate(() =>
+      Reflect.get(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}, "lazurio-device"),
+    );
+    if (typeof pid !== "number") return assert.fail("the app named no PID of its Device helper");
+    process.kill(pid, "SIGKILL");
+    const panel = await localPage(app, "view=agent-desktop");
+    await panel.locator('[data-device-state="lost"] [data-device-problem="lost"]').waitFor();
+    await bar.locator('[data-agent-bar="none"]').waitFor({ state: "attached" });
+    const shown = await app.evaluate(({ BaseWindow }) => {
+      const main = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
+      return {
+        window: main?.isVisible() === true,
+        column: main?.contentView.children[0]?.getVisible() === true,
+        panel: BaseWindow.getAllWindows().some(
+          (each) => each.getParentWindow() !== null && each.isVisible(),
+        ),
+      };
+    });
+    assert.deepStrictEqual(shown, { window: true, column: false, panel: true });
+  });
 });
