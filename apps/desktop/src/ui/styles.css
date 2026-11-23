@@ -966,3 +966,143 @@ body {
   flex: none;
   white-space: nowrap;
 }
+
+/* The strip of the main window's tabs, 40 px over the page (MainWindow.STRIP_HEIGHT, #82). Tabs
+   shrink to a minimum width and the strip then scrolls; nothing animates, tabs change all day. */
+.tabs {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 13px;
+  user-select: none;
+}
+
+.tabs__nav {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.tabs__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tabs__icon:disabled {
+  color: var(--muted);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tabs__strip {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.tabs__tab {
+  display: flex;
+  flex: 1 1 200px;
+  align-items: center;
+  min-width: 96px;
+  max-width: 220px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.tabs__tab.is-active {
+  background: var(--line);
+  color: var(--text);
+}
+
+.tabs__main {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.tabs__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+}
+
+.tabs__dot[data-loading="true"] {
+  background: var(--ok);
+  opacity: 1;
+}
+
+.tabs__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabs__place {
+  color: var(--muted);
+}
+
+.tabs__close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-inline-end: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tabs__icon:not(:disabled):hover,
+  .tabs__close:hover,
+  .tabs__tab:not(.is-active):hover {
+    background: color-mix(in srgb, var(--line) 60%, transparent);
+  }
+}
+
+.tabs__icon:focus-visible,
+.tabs__main:focus-visible,
+.tabs__close:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}

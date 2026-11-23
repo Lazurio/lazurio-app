@@ -9,6 +9,10 @@ const actions = (calls: Array<string>) => ({
   reloadPage: () => calls.push("reload"),
   goBack: () => calls.push("back"),
   goForward: () => calls.push("forward"),
+  newTab: () => calls.push("new-tab"),
+  closeTab: () => calls.push("close-tab"),
+  nextTab: () => calls.push("next-tab"),
+  previousTab: () => calls.push("previous-tab"),
   about: () => calls.push("about"),
 });
 
@@ -24,6 +28,7 @@ describe("AppMenu.menuTemplate", () => {
       statusShown: false,
       canGoBack: true,
       canGoForward: false,
+      tabsOpen: false,
       actions: actions(calls),
     });
     assert.deepStrictEqual(labels(menu), ["Úpravy", "Zobrazit", "Nápověda"]);
@@ -61,6 +66,7 @@ describe("AppMenu.menuTemplate", () => {
       statusShown: true,
       canGoBack: false,
       canGoForward: false,
+      tabsOpen: false,
       actions: actions([]),
     });
     assert.deepStrictEqual(labels(menu), ["Lazurio App (Alpha)", "Edit", "View"]);
@@ -74,5 +80,31 @@ describe("AppMenu.menuTemplate", () => {
       menu[2]?.submenu?.slice(3, 5).map((item) => item.accelerator),
       ["Cmd+[", "Cmd+]"],
     );
+  });
+
+  it("lists the tabs' items with their keys once the window has tabs", () => {
+    const calls: Array<string> = [];
+    const menu = menuTemplate({
+      text: messages.cs.menu,
+      appName: "Lazurio App (Alpha)",
+      platform: "linux",
+      statusShown: false,
+      canGoBack: false,
+      canGoForward: false,
+      tabsOpen: true,
+      actions: actions(calls),
+    });
+    const tabs = (menu[1]?.submenu ?? []).slice(-4);
+    assert.deepStrictEqual(
+      tabs.map((item) => [item.label, item.accelerator, item.registerAccelerator]),
+      [
+        ["Nová záložka", "CmdOrCtrl+T", false],
+        ["Zavřít záložku", "CmdOrCtrl+W", false],
+        ["Další záložka", "Ctrl+Tab", false],
+        ["Předchozí záložka", "Ctrl+Shift+Tab", false],
+      ],
+    );
+    for (const item of tabs) item.click?.();
+    assert.deepStrictEqual(calls, ["new-tab", "close-tab", "next-tab", "previous-tab"]);
   });
 });

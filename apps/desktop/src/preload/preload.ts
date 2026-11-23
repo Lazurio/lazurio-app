@@ -20,9 +20,13 @@ import {
   STATUS_PANEL_CHANNEL,
   STATUS_CHANGED_CHANNEL,
   STATUS_CHANNEL,
+  TAB_COMMAND_CHANNEL,
+  TABS_CHANGED_CHANNEL,
+  TABS_CHANNEL,
   type AppStatus,
   type DeviceStatus,
   type LazurioBridge,
+  type TabsView,
 } from "../shared/bridge.ts";
 
 // Only the app's local windows get this preload. It exposes the bridge and nothing else: no
@@ -90,6 +94,19 @@ const bridge: LazurioBridge = {
     },
     restartApp: async () => {
       await Electron.ipcRenderer.invoke(DEVICE_RESTART_APP_CHANNEL);
+    },
+  },
+  tabs: {
+    getState: () => Electron.ipcRenderer.invoke(TABS_CHANNEL) as Promise<TabsView>,
+    subscribe: (listener) => {
+      const receive = (_event: Electron.IpcRendererEvent, view: TabsView) => listener(view);
+      Electron.ipcRenderer.on(TABS_CHANGED_CHANNEL, receive);
+      return () => {
+        Electron.ipcRenderer.removeListener(TABS_CHANGED_CHANNEL, receive);
+      };
+    },
+    command: async (command) => {
+      await Electron.ipcRenderer.invoke(TAB_COMMAND_CHANNEL, command);
     },
   },
 };

@@ -1,3 +1,5 @@
+import type { TabTitle } from "./tabTitle.ts";
+
 // The one contract between the app's local windows and its main process. Remote pages never see
 // it: only the local windows get the preload that exposes it.
 
@@ -32,6 +34,10 @@ export const RETRY_PAGE_CHANNEL = "lazurio:retry-page";
 export const FIRST_PAGE_CHANNEL = "lazurio:first-page";
 // Opens the Agent Desktop window (DevicePanel.ts), from the bar that says an agent works.
 export const DEVICE_OPEN_WINDOW_CHANNEL = "lazurio:device-open-window";
+// The main window's tabs (#82): their state, every change of it, and what the strip asks for.
+export const TABS_CHANNEL = "lazurio:tabs";
+export const TABS_CHANGED_CHANNEL = "lazurio:tabs-changed";
+export const TAB_COMMAND_CHANNEL = "lazurio:tab-command";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -229,6 +235,31 @@ export interface AppStatus {
   readonly page: PageOutcome;
 }
 
+// The strip of the main window's tabs, as the main process gives it: no address, only each
+// tab's name from its address (tabTitle.ts).
+export interface TabsView {
+  readonly tabs: ReadonlyArray<{
+    readonly id: number;
+    readonly title: TabTitle;
+    readonly loading: boolean;
+  }>;
+  readonly active: number;
+  // Whether a tab can close; the window keeps one tab at least.
+  readonly canClose: boolean;
+  // Where the tab in front can go in its history.
+  readonly canGoBack: boolean;
+  readonly canGoForward: boolean;
+}
+
+// What the strip asks for; the main process decodes it (TabCommandSchema in MainWindow).
+export type TabCommand =
+  | { readonly _tag: "Activate"; readonly id: number }
+  | { readonly _tag: "Close"; readonly id: number }
+  | { readonly _tag: "New" }
+  | { readonly _tag: "Back" }
+  | { readonly _tag: "Forward" }
+  | { readonly _tag: "Reload" };
+
 export interface LazurioBridge {
   readonly status: () => Promise<AppStatus>;
   // Calls the listener with the whole status after every change; the result stops it.
@@ -249,6 +280,14 @@ export interface LazurioBridge {
   readonly firstPage: () => Promise<void>;
   // Agent Desktop. Only the app's local windows have it, never a remote page.
   readonly device: DeviceBridge;
+  readonly tabs: TabsBridge;
+}
+
+interface TabsBridge {
+  readonly getState: () => Promise<TabsView>;
+  // Calls the listener with the whole state after every change; the result stops it.
+  readonly subscribe: (listener: (view: TabsView) => void) => () => void;
+  readonly command: (command: TabCommand) => Promise<void>;
 }
 
 interface DeviceBridge {

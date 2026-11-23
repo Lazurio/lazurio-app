@@ -50,6 +50,7 @@ import * as Lifecycle from "./Lifecycle.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MacPermissions from "./MacPermissions.ts";
 import * as MainWindow from "./MainWindow.ts";
+import type * as Tabs from "./Tabs.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
 import * as ShellNames from "./ShellNames.ts";
@@ -894,6 +895,9 @@ const program = Effect.gen(function* () {
       iconBuilt: hooks.trayIcon,
     });
   }
+  const tabKey = (key: Tabs.TabKey) => {
+    if (Option.isSome(windowControls)) windowControls.value.tabKey(key);
+  };
   // The window's menu in the app's language instead of Electron's English default (AppMenu.ts).
   refreshMenu = () => {
     Electron.Menu.setApplicationMenu(
@@ -906,6 +910,7 @@ const program = Effect.gen(function* () {
           ...(Option.isSome(windowControls)
             ? windowControls.value.history()
             : { canGoBack: false, canGoForward: false }),
+          tabsOpen: Option.isSome(windowControls) && windowControls.value.tabs().open,
           actions: {
             toggleStatus: () => setStatusShown(!statusShown),
             openAgentDesktop,
@@ -918,6 +923,10 @@ const program = Effect.gen(function* () {
             goForward: () => {
               if (Option.isSome(windowControls)) windowControls.value.goForward();
             },
+            newTab: () => tabKey({ _tag: "New" }),
+            closeTab: () => tabKey({ _tag: "Close" }),
+            nextTab: () => tabKey({ _tag: "Step", by: 1 }),
+            previousTab: () => tabKey({ _tag: "Step", by: -1 }),
             about: () => {
               void Electron.dialog.showMessageBox({
                 type: "info",

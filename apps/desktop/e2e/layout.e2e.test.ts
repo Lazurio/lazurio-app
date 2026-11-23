@@ -62,20 +62,34 @@ const remoteBounds = () =>
     const window = BaseWindow.getAllWindows()[0];
     const local = window?.contentView.children[0];
     const view = window?.contentView.children[1];
+    // The strip of tabs over the page (#82).
+    const strip = window?.contentView.children
+      .filter((child): child is Electron.WebContentsView => "webContents" in child)
+      .find((child) => child.webContents.getURL().includes("view=tabs"));
     const { width = 0, height = 0 } = window?.contentView.getBounds() ?? {};
-    return { local: local?.getBounds(), view: view?.getBounds(), width, height };
+    return {
+      local: local?.getBounds(),
+      view: view?.getBounds(),
+      strip: strip?.getBounds(),
+      width,
+      height,
+    };
   });
 
 describe("Lazurio App GEN4 with a remote page", () => {
   it("keeps the tailnets' status and the update controls beside the page and usable", async () => {
-    const { local, view, width, height } = await remoteBounds();
+    const { local, view, strip, width, height } = await remoteBounds();
     if (view === undefined) throw new Error("no remote view");
     if (local === undefined) throw new Error("no local view");
+    if (strip === undefined) throw new Error("no strip of tabs");
     // Side by side: the local view ends where the remote one starts, and nothing lies under it.
     assert.deepStrictEqual(local, { x: 0, y: 0, width: view.x, height });
     assert.isAbove(view.width, 0);
     assert.strictEqual(view.x + view.width, width);
-    assert.strictEqual(view.height, height);
+    // The strip of tabs spans the page's width over it, and the page takes the rest.
+    assert.deepStrictEqual(strip, { x: view.x, y: 0, width: view.width, height: 40 });
+    assert.strictEqual(view.y, 40);
+    assert.strictEqual(view.height, height - 40);
     for (const selector of [
       'section[aria-label="Síť Organizace"], section[aria-label="Organization networks"]',
       "section[data-updates-phase]",

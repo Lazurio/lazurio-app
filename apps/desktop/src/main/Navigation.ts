@@ -53,6 +53,12 @@ const isGitHubSignInPath = (path: string): boolean =>
 // A name may end with the root's dot and is still the same name.
 const nameOf = (hostname: string): string => hostname.replace(/\.+$/u, "");
 
+// Lazurio Auth or GitHub, whose pages a tab names a sign-in (TabTitle.ts); a lower-case name.
+export const isSignInHost = (hostname: string): boolean => {
+  const name = nameOf(hostname);
+  return name === LAZURIO_AUTH_HOST || name === GITHUB_HOST;
+};
+
 // The domain itself or a name below it, never a look-alike such as `evil-lazurio.io`.
 const isUnder = (name: string, domain: string): boolean =>
   name === domain || name.endsWith(`.${domain}`);
@@ -144,6 +150,18 @@ export const mayLoad = (view: ViewState | undefined, address: string, frame: Fra
   if (frame === "sub" && isEmptyFrame(address)) return true;
   if (destinationOf(address)._tag === view.kind) return true;
   return frame === "main" && view.kind === "Lazurio" && view.signingIn && isGitHubSignIn(address);
+};
+
+// A window a page opens (#82): a tab for a page of Lazurio, or an empty tab its page navigates
+// under the tab's own guard (the Launchpad's start of an app); the system's browser for any other
+// page; nothing else. Inside a sign-in no page opens a tab (ADR 0002).
+export type WindowOpen = "Tab" | "SystemBrowser" | "Refused";
+
+export const windowOpenOf = (opener: ViewState | undefined, address: string): WindowOpen => {
+  const destination = destinationOf(address)._tag;
+  if (destination === "SystemBrowser") return "SystemBrowser";
+  if (opener?.kind !== "Lazurio" || opener.signingIn) return "Refused";
+  return destination === "Lazurio" || address === "about:blank" ? "Tab" : "Refused";
 };
 
 // The view after its main frame was allowed to go to the address. A sign-in starts on Lazurio

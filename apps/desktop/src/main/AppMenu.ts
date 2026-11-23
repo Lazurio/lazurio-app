@@ -12,6 +12,11 @@ export interface AppMenuActions {
   // by a person, 2026-11-20): functions at hand before the window gets buttons of its own (#82).
   readonly goBack: () => void;
   readonly goForward: () => void;
+  // The window's tabs (#82): their keys act in the views (Tabs.tabKeyOf), the menu shows them.
+  readonly newTab: () => void;
+  readonly closeTab: () => void;
+  readonly nextTab: () => void;
+  readonly previousTab: () => void;
   readonly about: () => void;
 }
 
@@ -23,6 +28,8 @@ export interface MenuItem {
   readonly checked?: boolean;
   readonly enabled?: boolean;
   readonly accelerator?: string;
+  // Shown but not registered: the views catch the key themselves.
+  readonly registerAccelerator?: boolean;
   readonly click?: () => void;
   readonly submenu?: ReadonlyArray<MenuItem>;
 }
@@ -38,6 +45,8 @@ export const menuTemplate = (options: {
   // Whether the page has somewhere to go back or forward to.
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
+  // Whether the window has tabs: it has them once it shows a page.
+  readonly tabsOpen: boolean;
   readonly actions: AppMenuActions;
 }): ReadonlyArray<MenuItem> => {
   const { text, actions } = options;
@@ -95,6 +104,35 @@ export const menuTemplate = (options: {
         },
         // F5 as well: MainWindow catches it in the views, since an item has one accelerator.
         { label: text.reload, accelerator: "CmdOrCtrl+R", click: actions.reloadPage },
+        ...(options.tabsOpen
+          ? [
+              separator,
+              {
+                label: text.newTab,
+                accelerator: "CmdOrCtrl+T",
+                registerAccelerator: false,
+                click: actions.newTab,
+              },
+              {
+                label: text.closeTab,
+                accelerator: "CmdOrCtrl+W",
+                registerAccelerator: false,
+                click: actions.closeTab,
+              },
+              {
+                label: text.nextTab,
+                accelerator: "Ctrl+Tab",
+                registerAccelerator: false,
+                click: actions.nextTab,
+              },
+              {
+                label: text.previousTab,
+                accelerator: "Ctrl+Shift+Tab",
+                registerAccelerator: false,
+                click: actions.previousTab,
+              },
+            ]
+          : []),
       ],
     },
     ...(mac ? [] : [{ label: text.help, submenu: [{ label: text.about, click: actions.about }] }]),
