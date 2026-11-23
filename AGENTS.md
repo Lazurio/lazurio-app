@@ -12,6 +12,7 @@ Lazurio App GEN4: a native app on Electron for macOS and Windows that shows the 
   - `e2e` holds the end-to-end tests.
 - `helpers/tailnet`: the tailnet helper in Go: one tsnet node per tailnet and a loopback proxy with a password per start, which sends only a tailnet's own names to its node (`proto/lazurio/app/tailnet/v1`). tsnet is pinned to a commit of tailscale's `main` with the tailnet DNS fix (`96467f7d1642`), because no release has it yet.
 - `helpers/device`: the Device helper in Rust. Its engine `Lazurio/agent-desktop` comes only from the fork release that `helpers/device/engine.lock` pins; `pnpm build:helpers` downloads and verifies it, and `node scripts/pin-engine.ts` pins a new release (docs/adr/0006, point 1).
+  - Trial only: with `LAZURIO_AGENT_DESKTOP_HEADED=1` in the environment of whoever starts the app, the helper starts the engine as `agent-desktop mcp --headed`, so agents may move the cursor, click and drag at coordinates, type and focus windows. Without it, or with any other value, the engine stays strictly headless. No page or Environment sets it, and it is not a decision of ADR 0006.
 - `proto`: the protocol between the main process and the helpers. Its generated code lives in `packages/contracts/src/gen` and `helpers/tailnet/gen`.
 - `packages/contracts`: the generated protocol code and its framing.
 - `packages/shared`: shared Effect references (`HostProcess`).
