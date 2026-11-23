@@ -19,12 +19,30 @@
 //! [`Engine::end`] first closes the engine's input and gives it a grace to exit, then ends the
 //! tree and says whether it is gone. Dropping an [`Engine`] ends the tree too.
 
+use std::ffi::OsStr;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// The variable that lets the engine deliver physical input (`agent-desktop mcp --headed`): move
+/// the cursor, click and drag at coordinates, type with the keyboard and focus windows. Only the
+/// exact value `1` turns it on. Without it the engine keeps its default, strict headless semantic
+/// delivery through accessibility alone. The helper inherits the variable from the app, which
+/// inherits it from whoever starts the app on the computer; no page and no Environment sets it.
+/// Trial only (#82 follow-up): it is not a decision of ADR 0006 and no switch of the window.
+pub const HEADED_VARIABLE: &str = "LAZURIO_AGENT_DESKTOP_HEADED";
+
+/// The engine's arguments: `mcp`, with `--headed` when the variable is exactly `1`.
+fn engine_args(headed: Option<&OsStr>) -> Vec<String> {
+    let mut args = vec!["mcp".to_owned()];
+    if headed == Some(OsStr::new("1")) {
+        args.push("--headed".to_owned());
+    }
+    args
+}
 
 /// How the engine is started.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +58,12 @@ impl EngineSpec {
     /// Windows), started as an MCP server. `None` when the system cannot say where the helper is.
     #[must_use]
     pub fn bundled() -> Option<Self> {
+        Self::bundled_with(std::env::var_os(HEADED_VARIABLE).as_deref())
+    }
+
+    /// [`EngineSpec::bundled`] with the value of [`HEADED_VARIABLE`] given, so tests never change
+    /// the process's environment.
+    fn bundled_with(headed: Option<&OsStr>) -> Option<Self> {
         let helper = std::env::current_exe().ok()?;
         let name = if cfg!(windows) {
             "agent-desktop.exe"
@@ -48,7 +72,7 @@ impl EngineSpec {
         };
         Some(Self {
             program: helper.parent()?.join(name),
-            args: vec!["mcp".to_owned()],
+            args: engine_args(headed),
             env: Vec::new(),
         })
     }
@@ -412,8 +436,22 @@ mod tests {
     }
 
     #[test]
+    fn the_engine_delivers_physical_input_only_with_the_variable_set_to_1() {
+        let args = |value: Option<&str>| {
+            EngineSpec::bundled_with(value.map(OsStr::new))
+                .expect("the test binary has a place")
+                .args
+        };
+        assert_eq!(args(None), ["mcp"]);
+        assert_eq!(args(Some("1")), ["mcp", "--headed"]);
+        for other in ["", "0", "true", "yes", " 1", "1 ", "11"] {
+            assert_eq!(args(Some(other)), ["mcp"], "{other:?}");
+        }
+    }
+
+    #[test]
     fn the_bundled_engine_lies_next_to_the_helper_and_serves_mcp() {
-        let spec = EngineSpec::bundled().expect("the test binary has a place");
+        let spec = EngineSpec::bundled_with(None).expect("the test binary has a place");
         let helper = std::env::current_exe().expect("the test binary");
         assert_eq!(spec.program.parent(), helper.parent());
         let name = spec
