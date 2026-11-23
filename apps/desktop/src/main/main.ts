@@ -26,6 +26,7 @@ import { APP_NAME } from "../shared/appName.ts";
 import {
   STATUS_CHANGED_CHANNEL,
   type AppStatus,
+  type DeviceStatus,
   type PageOutcome,
   type UpdatesOffReason,
 } from "../shared/bridge.ts";
@@ -531,10 +532,11 @@ const program = Effect.gen(function* () {
     const window = mainWindow.value;
     if (window.isMinimized() || !window.isVisible()) showWindow();
   };
+  // Only the person opens or hides the column (menu, tray, --show-status): an agent at work never
+  // does, since the bar with Stop says it (Matěj, 2026-11-23).
   const setStatusShown = (requested: boolean) => {
-    const shown = Lifecycle.statusShownAfter(requested, agentWorksNow());
-    statusShown = shown;
-    if (shown) showWindow();
+    statusShown = requested;
+    if (requested) showWindow();
     if (Option.isSome(windowControls)) windowControls.value.relayout();
     refreshMenu();
   };
@@ -962,9 +964,8 @@ const program = Effect.gen(function* () {
       Option.isSome(windowControls) ? windowControls.value.firstPage() : Promise.resolve(),
     ),
   });
-  // While an agent holds the computer, or the helper was lost and nothing confirmed that its work
-  // ended, the status column with Stop or its warning shows by itself and stays in view
-  // (docs/adr/0006), until Agent Desktop has a bar of its own.
+  // An agent holds the computer, or may (the helper was lost and nothing confirmed that its work
+  // ended): the window stays in view, with the bar and Stop (docs/adr/0006).
   agentWorksNow = () => deviceControls.current().agent !== null;
   // The network setting written while the app runs starts it again, so the person restarts
   // nothing (SettingWatch, #81); the new start shows the window, even after one with --hidden.
@@ -980,12 +981,17 @@ const program = Effect.gen(function* () {
       ),
     });
   }
-  let agentWorked = false;
+  let agentBefore: DeviceStatus["agent"] = null;
+  // The bar with Stop says that an agent works; the status column never opens for it. A helper lost
+  // unconfirmed has no bar, so on entering that state, also in the middle of an agent's work, its
+  // warning shows in the Agent Desktop window instead.
   const showWhileAgentWorks = () => {
-    const works = agentWorksNow();
-    if (works && !agentWorked) setStatusShown(true);
-    else if (works) keepWindowInView();
-    agentWorked = works;
+    const agent = deviceControls.current().agent;
+    if (agent === "unknown" && agentBefore !== "unknown") {
+      showWindow();
+      openAgentDesktop();
+    } else if (agent !== null) keepWindowInView();
+    agentBefore = agent;
   };
   // Agent Desktop's bar over the page while an agent holds the computer (src/ui/AgentBar.tsx): a
   // local view with the bridge, laid out again whenever Agent Desktop's state changes. It is made

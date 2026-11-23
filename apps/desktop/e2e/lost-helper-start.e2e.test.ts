@@ -1,7 +1,7 @@
 // End-to-end: a Device helper lost at the app's start, right after it is ready and without
 // DeviceStopped, so nothing confirms that its engines ended. Even at a hidden start (--hidden,
-// as at the sign-in to Windows) the window and its status column show, with the warning and no
-// Stop (docs/adr/0006).
+// as at the sign-in to Windows) the window shows, and the Agent Desktop window with the warning
+// and no Stop (docs/adr/0006); the status column, a surface for support, stays hidden.
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the app on disk.
 import * as NodePath from "node:path";
 
@@ -9,7 +9,7 @@ import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 
 import { removeUserData, temporaryUserData } from "./user-data.ts";
-import { columnPage } from "./local-page.ts";
+import { columnPage, localPage } from "./local-page.ts";
 
 let userData: string;
 let app: ElectronApplication;
@@ -45,18 +45,21 @@ afterAll(async () => {
 });
 
 describe("Lazurio App with a Device helper lost at its start", () => {
-  it("shows its window and status column with the warning, also after --hidden", async () => {
-    await shell.locator('[data-device-state="lost"] [data-device-problem="lost"]').waitFor({
-      state: "attached",
-    });
+  it("shows its window and the Agent Desktop window with the warning, also after --hidden", async () => {
+    const panel = await localPage(app, "view=agent-desktop");
+    await panel.locator('[data-device-state="lost"]').waitFor();
     // A request after the state's change: the main process answers in order.
     await shell.evaluate(() => window.lazurio.status());
-    const inView = await app.evaluate(({ BaseWindow }) => {
-      const window = BaseWindow.getAllWindows()[0];
-      const local = window?.contentView.children[0];
-      return { window: window?.isVisible() === true, column: local?.getVisible() === true };
+    // The helper may be lost before the main window exists; the window shows once its page loaded.
+    const inView = await app.evaluate(async ({ BaseWindow }) => {
+      const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
+      if (window === undefined) return null;
+      if (!window.isVisible())
+        await new Promise<void>((resolve) => window.once("show", () => resolve()));
+      const local = window.contentView.children[0];
+      return { window: window.isVisible(), column: local?.getVisible() === true };
     });
-    assert.deepStrictEqual(inView, { window: true, column: true });
-    assert.strictEqual(await shell.locator('[data-action="device-stop"]').count(), 0);
+    assert.deepStrictEqual(inView, { window: true, column: false });
+    assert.strictEqual(await panel.locator('[data-action="device-stop"]').count(), 0);
   });
 });

@@ -522,9 +522,9 @@ describe("Agent Desktop's switch", () => {
     }, how);
 
   // It restarts the app with an agent that works as soon as its channel opens: the bar with Stop
-  // shows over the page while the work lasts, and a status column opened meanwhile stays
-  // (docs/adr/0006: Stop is never hidden while an agent works).
-  it("shows the bar with Stop and keeps the status column in view while an agent works", async () => {
+  // shows over the page while the work lasts (docs/adr/0006: Stop is never hidden while an agent
+  // works), and the status column, a surface for support, never opens by itself (Matěj, 2026-11-23).
+  it("shows the bar with Stop while an agent works, and never opens the status column for it", async () => {
     await app.close();
     await launch({ LAZURIO_FAKE_DEVICE_OUTCOMES: "working" });
     await shell.locator('[data-action="device-add"]').click();
@@ -546,23 +546,19 @@ describe("Agent Desktop's switch", () => {
           ?.contentView.children[0];
         return local?.getVisible() === true && (local?.getBounds().width ?? 0) > 0;
       });
-    // The column opens by itself and stays (the safety net of #61), and the bar says that an agent
-    // works, with Stop.
-    assert.isTrue(await columnShown());
-    // Opened while an agent works, it stays: neither Hide nor View → App status hides it.
-    await column.evaluate(() => window.lazurio.setStatusPanel(true));
+    // The bar says that an agent works, with Stop; the column stays hidden.
     await column.evaluate(() => window.lazurio.status());
-    assert.isTrue(await columnShown());
-    // The column's page learns the agent's work by its own message, a moment after the main process.
-    await column.locator('[data-action="status-hide"][disabled]').waitFor({ state: "attached" });
-    await column.evaluate(() => window.lazurio.setStatusPanel(false));
-    assert.isTrue(await columnShown());
+    assert.isFalse(await columnShown());
+    // The person may still open it from View → App status, and hide it again, while the agent works.
     await app.evaluate(({ Menu }) => {
       const items = Menu.getApplicationMenu()?.items.flatMap((item) => item.submenu?.items ?? []);
       items?.find((item) => item.accelerator === "CmdOrCtrl+Shift+D")?.click();
     });
     await column.evaluate(() => window.lazurio.status());
     assert.isTrue(await columnShown());
+    await column.locator('[data-action="status-hide"]:not([disabled])').click();
+    await column.evaluate(() => window.lazurio.status());
+    assert.isFalse(await columnShown());
     // Closing the window, as with its X, keeps it shown while the agent works.
     const shownAfterClose = await app.evaluate(({ BaseWindow }) => {
       const window = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
@@ -570,7 +566,8 @@ describe("Agent Desktop's switch", () => {
       return window?.isVisible() === true;
     });
     assert.isTrue(shownAfterClose);
-    assert.isTrue(await columnShown());
+    assert.isFalse(await columnShown());
+    await bar.locator('[data-action="device-stop"]').waitFor();
     // Hidden or minimized while the agent works, it shows again. Under Xvfb no window manager
     // minimizes a window, so Linux checks the hide only; Windows and macOS check both.
     assert.isTrue(await backInView("hide"));
@@ -580,8 +577,6 @@ describe("Agent Desktop's switch", () => {
     await environmentRow().locator('[data-action="device-switch"]').click();
     await inPhase("off");
     await bar.locator('[data-agent-bar="none"]').waitFor();
-    await column.locator('[data-action="status-hide"]:not([disabled])').click();
-    await column.evaluate(() => window.lazurio.status());
     assert.isFalse(await columnShown());
     await environmentRow().locator('[data-action="device-more"]').click();
     await environmentRow().locator('[data-action="device-remove"]').click();

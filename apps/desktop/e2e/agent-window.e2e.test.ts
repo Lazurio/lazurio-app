@@ -134,15 +134,18 @@ describe.each([
     await bar.locator(`[data-agent-bar="${ENVIRONMENT}"]`).waitFor();
     assert.match(await bar.locator(".agent-bar__text").innerText(), label);
     assert.strictEqual(await barBounds(app), 36);
-    // The status column opens by itself as well (#61's safety net), beside the bar.
-    const columnShown = await app.evaluate(({ BaseWindow }) => {
-      const local = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null)
-        ?.contentView.children[0];
-      return local?.getVisible() === true && (local?.getBounds().width ?? 0) > 0;
-    });
-    assert.isTrue(columnShown);
-    // A window narrower than the status column: the bar still spans the whole width over the
-    // column, so its message, Stop and Agent Desktop stay usable.
+    // The status column does not open for the agent's work (Matěj, 2026-11-23): only the bar says it.
+    const columnShown = () =>
+      app.evaluate(({ BaseWindow }) => {
+        const local = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null)
+          ?.contentView.children[0];
+        return local?.getVisible() === true && (local?.getBounds().width ?? 0) > 0;
+      });
+    assert.isFalse(await columnShown());
+    // Opened by the person, in a window narrower than the column: the bar still spans the whole
+    // width over the column, so its message, Stop and Agent Desktop stay usable.
+    await bar.evaluate(() => window.lazurio.setStatusPanel(true));
+    assert.isTrue(await columnShown());
     const narrow = await app.evaluate(({ BaseWindow, WebContentsView }) => {
       const main = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
       if (main === undefined) return null;
@@ -169,19 +172,21 @@ describe.each([
       main?.setContentSize(1280, 800);
       main?.contentView.emit("bounds-changed");
     });
+    await bar.evaluate(() => window.lazurio.setStatusPanel(false));
+    assert.isFalse(await columnShown());
     await windowShot(app, `adwin61-main-${tag}.png`);
     await screenshot(bar, `adwin61-bar-${tag}.png`);
     await bar.locator('[data-action="device-open-window"]').click();
-    const window = await localPage(app, "view=agent-desktop");
-    await window.locator('section[data-device-state="ready"]').waitFor();
-    await window.locator(`[data-device-agent="${ENVIRONMENT}"]`).waitFor();
+    const panel = await localPage(app, "view=agent-desktop");
+    await panel.locator('section[data-device-state="ready"]').waitFor();
+    await panel.locator(`[data-device-agent="${ENVIRONMENT}"]`).waitFor();
     await bar.locator('[data-action="device-open-window"]').click();
     const titles = await app.evaluate(({ BaseWindow }) =>
       BaseWindow.getAllWindows().map((each) => each.getTitle()),
     );
     assert.lengthOf(titles, 2);
     assert.include(titles, "Agent Desktop");
-    await screenshot(window, `adwin61-window-${tag}.png`);
+    await screenshot(panel, `adwin61-window-${tag}.png`);
   });
 
   it("stops the agent from the bar, and the bar goes", async () => {
@@ -191,5 +196,46 @@ describe.each([
     await bar.locator('[data-agent-bar="none"]').waitFor();
     assert.include(stderr.join(""), "lazurio-fake-device stop-agent");
     assert.strictEqual(await barBounds(app), 0);
+  });
+
+  // Last: it ends the Device helper. Lost in the middle of an agent's work, with the Agent Desktop
+  // window closed, the warning still shows there, since the bar goes with the agent.
+  it("opens the Agent Desktop window with the warning when the helper is lost while an agent works", async () => {
+    const bar = await localPage(app, "view=agent-bar");
+    const file = NodePath.join(userData, "agent");
+    NodeFS.writeFileSync(`${file}.new`, `${ENVIRONMENT}|Bob`);
+    NodeFS.renameSync(`${file}.new`, file);
+    await bar.locator(`[data-agent-bar="${ENVIRONMENT}"]`).waitFor();
+    await app.evaluate(async ({ BaseWindow }) => {
+      const panels = BaseWindow.getAllWindows().filter((each) => each.getParentWindow() !== null);
+      await Promise.all(
+        panels.map(
+          (each) =>
+            new Promise<void>((resolve) => {
+              each.once("closed", () => resolve());
+              each.close();
+            }),
+        ),
+      );
+    });
+    const pid: unknown = await app.evaluate(() =>
+      Reflect.get(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}, "lazurio-device"),
+    );
+    if (typeof pid !== "number") return assert.fail("the app named no PID of its Device helper");
+    process.kill(pid, "SIGKILL");
+    const panel = await localPage(app, "view=agent-desktop");
+    await panel.locator('[data-device-state="lost"] [data-device-problem="lost"]').waitFor();
+    await bar.locator('[data-agent-bar="none"]').waitFor({ state: "attached" });
+    const shown = await app.evaluate(({ BaseWindow }) => {
+      const main = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
+      return {
+        window: main?.isVisible() === true,
+        column: main?.contentView.children[0]?.getVisible() === true,
+        panel: BaseWindow.getAllWindows().some(
+          (each) => each.getParentWindow() !== null && each.isVisible(),
+        ),
+      };
+    });
+    assert.deepStrictEqual(shown, { window: true, column: false, panel: true });
   });
 });
