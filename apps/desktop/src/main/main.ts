@@ -609,8 +609,8 @@ const program = Effect.gen(function* () {
   });
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
   const joining = yield* tailnetsToJoin;
-  // Without the Organization's network the status column opens and says what is missing.
-  if (joining.networkMissing) setStatusShown(true);
+  // Without the Organization's network, a page of it says what is missing in the page's place
+  // (MainWindow, kind "network"); the status column, a surface for support, stays hidden.
   const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
   const tailnets: Tailnet.Tailnets =
     tailnetHelper !== undefined && Option.isSome(tailnetHelper.connection)
