@@ -169,14 +169,21 @@ const viewOptions = (
   },
 });
 
+// A view's page while it lives. A view whose page was destroyed has no web contents any more, and
+// an event of another page may come after that while the app quits: an exception thrown there
+// would stop the quit behind Electron's error dialog (review of #96).
+const liveContents = (
+  view: Electron.WebContentsView | undefined,
+): Electron.WebContents | undefined => {
+  const contents: Electron.WebContents | undefined = view?.webContents;
+  return contents === undefined || contents.isDestroyed() ? undefined : contents;
+};
+
 // A view and its page live as long as the scope; a closed window does not close a view's page.
 const acquireView = (options: Electron.WebContentsViewConstructorOptions) =>
   Effect.acquireRelease(
     Effect.sync(() => new Electron.WebContentsView(options)),
-    (view) =>
-      Effect.sync(() => {
-        if (!view.webContents.isDestroyed()) view.webContents.close();
-      }),
+    (view) => Effect.sync(() => liveContents(view)?.close()),
   );
 
 const loadRemote = Effect.fn("MainWindow.loadRemote")(function* (
@@ -446,11 +453,8 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   const firstAddress = Option.getOrUndefined(options.remoteUrl);
 
   const front = (): Tab | undefined => (list === undefined ? undefined : tabs.get(list.active));
-  // A tab's page while it lives: a view whose page was destroyed has no web contents any more.
-  const pageOf = (tab: Tab | undefined): Electron.WebContents | undefined => {
-    const contents: Electron.WebContents | undefined = tab?.view.webContents;
-    return contents === undefined || contents.isDestroyed() ? undefined : contents;
-  };
+  const pageOf = (tab: Tab | undefined): Electron.WebContents | undefined =>
+    liveContents(tab?.view);
   const tabsView = (): TabsView => {
     const shown = pageOf(front());
     return {
@@ -468,8 +472,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   };
   // The strip learns every change of the tabs, their pages and the front tab's history.
   const publish = () => {
-    if (strip === undefined || strip.webContents.isDestroyed()) return;
-    strip.webContents.send(TABS_CHANGED_CHANNEL, tabsView());
+    liveContents(strip)?.send(TABS_CHANGED_CHANNEL, tabsView());
   };
   // The front tab's page shows, or the app's page in its place once that has loaded, so a previous
   // reason never flashes; every other tab is hidden.
@@ -479,9 +482,9 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     const ready = want !== undefined && coverLoaded === want;
     for (const tab of tabs.values()) tab.view.setVisible(tab === shown && !ready);
     waiting?.setVisible(ready);
-    if (waiting === undefined || want === undefined || ready || coverLoading === want) return;
+    const cover = liveContents(waiting);
+    if (cover === undefined || want === undefined || ready || coverLoading === want) return;
     coverLoading = want;
-    const cover = waiting.webContents;
     const loaded = () => {
       if (coverLoading !== want) return;
       coverLoading = undefined;
@@ -795,9 +798,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   window.on("closed", () => {
     const pages = [...tabs.values()].map(pageOf);
     tabs.clear();
-    for (const contents of [local, waiting, strip].map((view) => view?.webContents)) {
-      if (contents !== undefined && !contents.isDestroyed()) contents.close();
-    }
+    for (const contents of [local, waiting, strip].map(liveContents)) contents?.close();
     for (const contents of pages) contents?.close();
   });
 
