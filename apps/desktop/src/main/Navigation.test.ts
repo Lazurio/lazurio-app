@@ -11,6 +11,7 @@ import {
   type NavigationStep,
   type Tracked,
   type ViewState,
+  windowOpenOf,
 } from "./Navigation.ts";
 
 const tagOf = (address: string) => destinationOf(address)._tag;
@@ -397,5 +398,50 @@ describe("environmentOriginOf", () => {
     ]) {
       assert.isUndefined(environmentOriginOf(address), address);
     }
+  });
+});
+
+describe("windowOpenOf", () => {
+  const lazurio = newView("Lazurio");
+  it("opens a page of Lazurio in a new tab, and an empty tab its page then navigates", () => {
+    assert.strictEqual(windowOpenOf(lazurio, "https://notes.example.lazurio.app/"), "Tab");
+    assert.strictEqual(windowOpenOf(lazurio, "https://notes.env.example.lazurio.io/"), "Tab");
+    assert.strictEqual(windowOpenOf(lazurio, "about:blank"), "Tab");
+  });
+
+  it("sends any other page to the system's browser, as before", () => {
+    assert.strictEqual(windowOpenOf(lazurio, "https://example.com/"), "SystemBrowser");
+    assert.strictEqual(windowOpenOf(lazurio, "https://notes.evil-lazurio.app/"), "SystemBrowser");
+  });
+
+  it("opens nothing else, from nothing else", () => {
+    for (const address of [
+      "javascript:alert(1)",
+      "file:///etc/passwd",
+      "about:srcdoc",
+      "data:,x",
+    ]) {
+      assert.strictEqual(windowOpenOf(lazurio, address), "Refused");
+    }
+    assert.strictEqual(windowOpenOf(lazurio, "lazurio-app://shell/index.html"), "Refused");
+    assert.strictEqual(
+      windowOpenOf(lazurio, "https://user:pass@notes.example.lazurio.app/"),
+      "Refused",
+    );
+    assert.strictEqual(
+      windowOpenOf(newView("Local"), "https://notes.example.lazurio.app/"),
+      "Refused",
+    );
+    assert.strictEqual(windowOpenOf(undefined, "about:blank"), "Refused");
+  });
+
+  it("opens no tab inside a sign-in", () => {
+    const signingIn: ViewState = { kind: "Lazurio", signingIn: true };
+    assert.strictEqual(
+      windowOpenOf(signingIn, "https://launchpad.env.example.lazurio.io/"),
+      "Refused",
+    );
+    assert.strictEqual(windowOpenOf(signingIn, "about:blank"), "Refused");
+    assert.strictEqual(windowOpenOf(signingIn, "https://github.com/settings"), "SystemBrowser");
   });
 });

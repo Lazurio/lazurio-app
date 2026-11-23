@@ -1,19 +1,52 @@
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 
+import * as HostProcess from "@lazurio/app-shared/HostProcess";
 import * as Electron from "electron";
 
 import { APP_NAME } from "../shared/appName.ts";
-import { STATUS_CHANNEL, type AppStatus, type PageOutcome } from "../shared/bridge.ts";
+import {
+  STATUS_CHANNEL,
+  TAB_COMMAND_CHANNEL,
+  TABS_CHANGED_CHANNEL,
+  TABS_CHANNEL,
+  type AppStatus,
+  type PageOutcome,
+  type TabCommand,
+  type TabsView,
+} from "../shared/bridge.ts";
 import { problemQuery, type PageProblem } from "../shared/pageProblem.ts";
-import { hardenSession, hostOf, onMainFrameRefused, registerView } from "./Hardening.ts";
+import {
+  hardenSession,
+  hostOf,
+  onMainFrameRefused,
+  onOpenTab,
+  registerView,
+  type TabRequest,
+} from "./Hardening.ts";
 import { LOCAL_ENTRY } from "./LocalScheme.ts";
+import { tabTitleOf } from "./TabTitle.ts";
 import { destinationOf, isOrganizationHost } from "./Navigation.ts";
+import {
+  activated,
+  atPosition,
+  canClose,
+  closed,
+  opened,
+  single,
+  stepped,
+  tabKeyOf,
+  type TabKey,
+  type TabList,
+} from "./Tabs.ts";
 
-// The main window: the local view with the preload bridge in a column, and beside it at most one
-// remote view for a page of the web Lazurio, without preload and in its own session. The two views
-// of a BaseWindow never overlap, so neither page is laid out under the other.
+// The main window: the local view with the preload bridge in a column, and beside it the tabs of
+// the web Lazurio (#82): a strip the app draws, and under it one remote view per tab, without
+// preload and all in the same session of their own. The views of a BaseWindow never overlap, so
+// no page is laid out under another; only the front tab's view shows.
 
 // The session of every remote view; the tailnet gives it its PAC script (Tailnet.ts).
 export const REMOTE_PARTITION = "persist:lazurio-remote";
@@ -72,6 +105,10 @@ export interface MainWindowControls {
   readonly retryPage: () => Promise<void>;
   // Loads the window's first page, the Overview, instead (#68); settles like retryPage.
   readonly firstPage: () => Promise<void>;
+  // Whether the window has tabs (it has a page), for the menu's tab items.
+  readonly tabs: () => { readonly open: boolean };
+  // What a tab's key or menu item does (Tabs.TabKey).
+  readonly tabKey: (key: TabKey) => void;
 }
 
 // The first remote page loads again after these failures, which a network that changed or a
@@ -189,15 +226,22 @@ interface PageWatch {
 // The page never stays blank (#36): an unreachable tailnet's page waits and loads again every few
 // seconds (task 648); any other failed load, refused redirect, proxy 407 or gone renderer shows
 // the reason and Retry. Each outcome is logged (host and code) and kept for Copy status (code).
+// One watch per tab; the window shows the app's page in the tab's place (coverChanged).
 const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
   readonly remote: Electron.WebContentsView;
-  readonly cover: Electron.WebContentsView;
+  // Where Retry goes while the tab has shown no page yet.
+  readonly startAddress: string;
+  // The window's first page, the Overview.
   readonly firstAddress: string;
   readonly servedByTailnet: (address: string) => boolean;
   readonly networkMissing: () => boolean;
   readonly outcome: (outcome: PageOutcome) => void;
+  // The app's page that says why the page does not show, to show in its place; none for the page.
+  readonly coverChanged: (address: string | undefined) => void;
+  // A tab that a page opened went to the system's browser before it showed any page.
+  readonly leftForBrowser?: () => void;
 }) {
-  const { remote, cover } = options;
+  const { remote } = options;
   const contents = remote.webContents;
   const log = Effect.runForkWith(yield* Effect.context<never>());
   // A tailnet's address that waits to become reachable.
@@ -210,20 +254,11 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
 
   const uncover = () => {
     covered = undefined;
-    cover.setVisible(false);
-    remote.setVisible(true);
+    options.coverChanged(undefined);
   };
-  // It shows once its page has loaded, so a previous reason never flashes, unless the page
-  // showed meanwhile.
   const showCover = (address: string) => {
     covered = address;
-    const show = () => {
-      if (covered !== address) return;
-      cover.setVisible(true);
-      remote.setVisible(false);
-    };
-    if (cover.webContents.getURL() === address) show();
-    else void cover.webContents.loadURL(address).then(show, show);
+    options.coverChanged(address);
   };
   const showProblem = (problem: PageProblem, outcome: PageOutcome, retry: string) => {
     pending = undefined;
@@ -235,13 +270,17 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
   // of nothing or of the app's page (a Retry refused, review of #66) the reason must show.
   onMainFrameRefused(contents, (refused) => {
     const inBrowser = destinationOf(refused.address)._tag === "SystemBrowser";
+    if (lastShown === undefined && inBrowser && options.leftForBrowser !== undefined) {
+      options.outcome({ outcome: "refused", inBrowser });
+      return options.leftForBrowser();
+    }
     if (lastShown !== undefined && covered === undefined) {
       return options.outcome({ outcome: "refused", inBrowser });
     }
     showProblem(
       { kind: inBrowser ? "browser" : "refused", host: hostOf(refused.address) },
       { outcome: "refused", inBrowser },
-      lastShown ?? options.firstAddress,
+      lastShown ?? options.startAddress,
     );
   });
   contents.on("did-navigate", (_event, address, responseCode) => {
@@ -285,7 +324,7 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
     showProblem(
       { kind: "crashed" },
       { outcome: "crashed", reason: details.reason },
-      lastShown ?? options.firstAddress,
+      lastShown ?? options.startAddress,
     );
   });
   // One attempt at a time: the next waits until the previous load has finished or failed, so a
@@ -306,7 +345,7 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
   );
   const retry = async () => {
     if (contents.isDestroyed()) return;
-    const address = retryAddress ?? (contents.getURL() || options.firstAddress);
+    const address = retryAddress ?? (contents.getURL() || options.startAddress);
     await contents.loadURL(address).catch(() => undefined);
   };
   return {
@@ -327,8 +366,37 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
   } satisfies PageWatch;
 });
 
+// The strip of tabs over the page (#82, variant A): Back, Forward, Reload, the tabs and a new tab.
+const STRIP_HEIGHT = 40;
+
+// What the strip asks for, decoded before it acts (every value from outside goes through Schema).
+const TabCommandSchema = Schema.Union([
+  Schema.TaggedStruct("Activate", { id: Schema.Number }),
+  Schema.TaggedStruct("Close", { id: Schema.Number }),
+  Schema.TaggedStruct("New", {}),
+  Schema.TaggedStruct("Back", {}),
+  Schema.TaggedStruct("Forward", {}),
+  Schema.TaggedStruct("Reload", {}),
+]);
+const decodeTabCommand = Schema.decodeUnknownEffect(TabCommandSchema);
+
+// One tab: its page's view, the scope its page and watch live in, and the app's page that shows
+// in its place while the page cannot.
+interface Tab {
+  readonly id: number;
+  readonly view: Electron.WebContentsView;
+  readonly scope: Scope.Closeable;
+  watch: PageWatch | undefined;
+  cover: string | undefined;
+}
+
 export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowOptions) {
   yield* serveStatus(options.status);
+  const context = yield* Effect.context<Scope.Scope>();
+  const runSync = Effect.runSyncWith(context);
+  const runFork = Effect.runForkWith(context);
+  const windowScope = yield* Scope.Scope;
+  const mac = (yield* HostProcess.Platform) === "darwin";
   const window = yield* Effect.acquireRelease(
     Effect.sync(
       () =>
@@ -362,92 +430,334 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   registerView(local.webContents, "Local");
   window.contentView.addChildView(local);
 
-  let remote: Electron.WebContentsView | undefined;
+  // The tabs, by id, and their order with the one in front (Tabs.ts). The first tab's page is the
+  // window's first page; its view comes right after the column, the app's page for a page that
+  // cannot show after it, then every other tab, the strip and Agent Desktop's bar.
+  const tabs = new Map<number, Tab>();
+  let list: TabList | undefined;
+  let nextId = 1;
   let waiting: Electron.WebContentsView | undefined;
-  if (Option.isSome(options.remoteUrl)) {
-    remote = yield* acquireView(viewOptions({ partition: REMOTE_PARTITION }));
-    registerView(remote.webContents, "Lazurio");
-    remote.webContents.on("did-navigate", (_event, url) => {
-      options.pageShown(url);
-      options.historyChanged();
-    });
-    remote.webContents.on("did-navigate-in-page", options.historyChanged);
-    yield* hardenSession(remote.webContents.session);
-    window.contentView.addChildView(remote);
-    // The app's own page in the remote view's place while a tailnet's page cannot be reached. It
-    // has the bridge, so it can open the status column.
-    waiting = yield* acquireView(viewOptions({ preload: options.preloadPath }));
-    waiting.setBackgroundColor(WINDOW_BACKGROUND);
-    registerView(waiting.webContents, "Local");
-    waiting.setVisible(false);
-    window.contentView.addChildView(waiting);
-  }
-  if (options.topBar !== undefined) window.contentView.addChildView(options.topBar.view);
-  // The status column, when shown, and the page side by side, with the top bar over the page;
-  // without a page the local view takes the window.
+  let strip: Electron.WebContentsView | undefined;
+  // The address the app's page in a tab's place has loaded, and the one it loads now.
+  let coverLoaded: string | undefined;
+  let coverLoading: string | undefined;
+  const firstAddress = Option.getOrUndefined(options.remoteUrl);
+
+  const front = (): Tab | undefined => (list === undefined ? undefined : tabs.get(list.active));
+  const tabsView = (): TabsView => {
+    const shown = front()?.view.webContents;
+    return {
+      tabs: (list?.order ?? []).flatMap((id) => {
+        const tab = tabs.get(id);
+        if (tab === undefined || tab.view.webContents.isDestroyed()) return [];
+        const contents = tab.view.webContents;
+        return [{ id, title: tabTitleOf(contents.getURL()), loading: contents.isLoading() }];
+      }),
+      active: list?.active ?? 0,
+      canClose: list !== undefined && canClose(list),
+      canGoBack: shown?.navigationHistory.canGoBack() ?? false,
+      canGoForward: shown?.navigationHistory.canGoForward() ?? false,
+    };
+  };
+  // The strip learns every change of the tabs, their pages and the front tab's history.
+  const publish = () => {
+    if (strip === undefined || strip.webContents.isDestroyed()) return;
+    strip.webContents.send(TABS_CHANGED_CHANNEL, tabsView());
+  };
+  // The front tab's page shows, or the app's page in its place once that has loaded, so a previous
+  // reason never flashes; every other tab is hidden.
+  const showFront = () => {
+    const shown = front();
+    const want = shown?.cover;
+    const ready = want !== undefined && coverLoaded === want;
+    for (const tab of tabs.values()) tab.view.setVisible(tab === shown && !ready);
+    waiting?.setVisible(ready);
+    if (waiting === undefined || want === undefined || ready || coverLoading === want) return;
+    coverLoading = want;
+    const cover = waiting.webContents;
+    const loaded = () => {
+      if (coverLoading !== want) return;
+      coverLoading = undefined;
+      coverLoaded = want;
+      showFront();
+    };
+    if (cover.getURL() === want) loaded();
+    else void cover.loadURL(want).then(loaded, loaded);
+  };
+
   const layout = () => {
     // The content view's own size: on Linux the menu bar takes part of the content size.
     const { width, height } = window.contentView.getBounds();
-    const shown = remote === undefined || options.statusShown();
-    const column = remote === undefined ? width : shown ? Math.min(LOCAL_COLUMN_WIDTH, width) : 0;
+    const hasPage = list !== undefined;
+    const shown = !hasPage || options.statusShown();
+    const column = !hasPage ? width : shown ? Math.min(LOCAL_COLUMN_WIDTH, width) : 0;
     // The bar spans the whole width over the column and the page, so its message, Stop and Agent
     // Desktop stay usable in a narrow window and without a remote page (review of #62).
     const bar = Math.min(options.topBar?.height() ?? 0, height);
     options.topBar?.view.setBounds({ x: 0, y: 0, width, height: bar });
     local.setVisible(shown);
     local.setBounds({ x: 0, y: bar, width: column, height: height - bar });
-    const page = { x: column, y: bar, width: Math.max(0, width - column), height: height - bar };
-    remote?.setBounds(page);
+    const pageWidth = Math.max(0, width - column);
+    const stripHeight = strip === undefined ? 0 : Math.min(STRIP_HEIGHT, height - bar);
+    strip?.setBounds({ x: column, y: bar, width: pageWidth, height: stripHeight });
+    const top = bar + stripHeight;
+    const page = { x: column, y: top, width: pageWidth, height: Math.max(0, height - top) };
+    for (const tab of tabs.values()) tab.view.setBounds(page);
     waiting?.setBounds(page);
   };
-  layout();
-  // The content view changes size with the window and, on Linux, when the menu bar appears.
-  window.contentView.on("bounds-changed", layout);
-  const watch =
-    remote !== undefined && waiting !== undefined && Option.isSome(options.remoteUrl)
-      ? yield* watchPage({
-          remote,
-          cover: waiting,
-          firstAddress: options.remoteUrl.value,
-          servedByTailnet: options.servedByTailnet,
-          networkMissing: options.networkMissing,
-          outcome: options.pageOutcome,
-        })
-      : undefined;
-  const reloadPage = () => watch?.reload();
-  // F5 reloads the page as View > Reload page does: a menu item has one accelerator. Every view of
-  // the window, Agent Desktop's bar included: its Stop may hold the focus.
-  for (const view of [local, remote, waiting, options.topBar?.view]) {
-    view?.webContents.on("before-input-event", (event, input) => {
+
+  // The front tab changed, or its page: the window shows it, the menu follows its history, Agent
+  // Desktop learns its page (its offer to add the Environment) and the strip redraws.
+  const frontChanged = () => {
+    showFront();
+    const shown = front();
+    if (shown !== undefined && !shown.view.webContents.isDestroyed()) {
+      options.pageShown(shown.view.webContents.getURL());
+    }
+    options.historyChanged();
+    publish();
+  };
+  const activate = (next: TabList) => {
+    const before = list?.active;
+    list = next;
+    if (next.active === before) return;
+    frontChanged();
+    front()?.view.webContents.focus();
+  };
+
+  const closeTab = (id: number) => {
+    if (list === undefined) return;
+    // The window keeps one tab at least: closing the last one closes the window, which hides it.
+    if (!canClose(list)) {
+      window.close();
+      return;
+    }
+    const tab = tabs.get(id);
+    if (tab === undefined) return;
+    const before = list.active;
+    list = closed(list, id);
+    tabs.delete(id);
+    window.contentView.removeChildView(tab.view);
+    runFork(Scope.close(tab.scope, Exit.void));
+    if (list.active !== before) {
+      frontChanged();
+      front()?.view.webContents.focus();
+    } else publish();
+  };
+
+  const tabKey = (key: TabKey) => {
+    if (list === undefined) return;
+    switch (key._tag) {
+      case "New":
+        return newTab();
+      case "Close":
+        return closeTab(list.active);
+      case "Step":
+        return activate(stepped(list, key.by));
+      case "Position":
+        return activate(atPosition(list, key.position));
+    }
+  };
+  const reloadPage = () => front()?.watch?.reload();
+  // F5 reloads the page as View > Reload page does, and the tabs' keys act (Tabs.tabKeyOf): a menu
+  // item has one accelerator, and a page holds the focus. Every view of the window, Agent
+  // Desktop's bar included: its Stop may hold the focus.
+  const catchKeys = (contents: Electron.WebContents) => {
+    contents.on("before-input-event", (event, input) => {
+      const key = tabKeyOf(input, mac);
+      if (key !== undefined && list !== undefined) {
+        event.preventDefault();
+        tabKey(key);
+        return;
+      }
       if (input.type !== "keyDown" || input.key !== "F5") return;
       if (input.control || input.alt || input.meta || input.shift) return;
       event.preventDefault();
       reloadPage();
     });
+  };
+
+  // A tab for the view: registered as a page of Lazurio before it loads anything, with a watch of
+  // its page in a scope of its own that closes with the tab or with the window.
+  const addTab = (view: Electron.WebContentsView, startAddress: string, fromPage: boolean): Tab => {
+    const id = nextId++;
+    const contents = view.webContents;
+    registerView(contents, "Lazurio");
+    const scope = runSync(Scope.fork(windowScope, "sequential"));
+    // Set once the app itself closes the tab's page: only a page that closed itself (a window it
+    // opened, closed by window.close()) closes its tab.
+    let ending = false;
+    runSync(
+      Scope.addFinalizer(
+        scope,
+        Effect.sync(() => {
+          ending = true;
+          if (!contents.isDestroyed()) contents.close();
+        }),
+      ),
+    );
+    const tab: Tab = { id, view, scope, watch: undefined, cover: undefined };
+    tabs.set(id, tab);
+    const isFront = () => list?.active === id;
+    contents.on("did-navigate", () => {
+      if (isFront()) frontChanged();
+      else publish();
+    });
+    contents.on("did-navigate-in-page", () => {
+      if (isFront()) options.historyChanged();
+      publish();
+    });
+    contents.on("did-start-loading", publish);
+    contents.on("did-stop-loading", publish);
+    catchKeys(contents);
+    onOpenTab(contents, openFromPage);
+    // A page closes its own tab (window.close() of a window it opened), as in a browser.
+    contents.on("destroyed", () => {
+      if (ending || window.isDestroyed() || tabs.get(id) !== tab) return;
+      if (list !== undefined && canClose(list)) closeTab(id);
+    });
+    const index = strip === undefined ? -1 : window.contentView.children.indexOf(strip);
+    if (index === -1) window.contentView.addChildView(view);
+    else window.contentView.addChildView(view, index);
+    tab.watch = runSync(
+      Scope.provide(scope)(
+        watchPage({
+          remote: view,
+          startAddress,
+          firstAddress: firstAddress ?? startAddress,
+          servedByTailnet: options.servedByTailnet,
+          networkMissing: options.networkMissing,
+          // Copy status tells how the front tab's page ended.
+          outcome: (outcome) => {
+            if (isFront()) options.pageOutcome(outcome);
+          },
+          coverChanged: (address) => {
+            tab.cover = address;
+            if (isFront()) showFront();
+          },
+          ...(fromPage ? { leftForBrowser: () => closeTab(id) } : {}),
+        }),
+      ),
+    );
+    return tab;
+  };
+
+  // A page of Lazurio opened a window (Hardening.onOpenTab): a new tab after the one in front,
+  // which Chromium loads with the page's address, or leaves empty for the page to navigate.
+  function openFromPage(request: TabRequest): Electron.WebContents {
+    // Electron passes the page's new web contents in the options, beside their preferences; its
+    // types leave the web contents out.
+    const given: Electron.BrowserWindowConstructorOptions & {
+      readonly webContents?: Electron.WebContents;
+    } = request.options;
+    const view = new Electron.WebContentsView({
+      ...(given.webContents === undefined ? {} : { webContents: given.webContents }),
+      ...(given.webPreferences === undefined ? {} : { webPreferences: given.webPreferences }),
+    });
+    const start = request.address === "about:blank" ? (firstAddress ?? "") : request.address;
+    const tab = addTab(view, start, true);
+    if (list !== undefined) {
+      const next = opened(list, tab.id, request.background);
+      list = next;
+      layout();
+      if (request.background) {
+        showFront();
+        publish();
+      } else {
+        frontChanged();
+        view.webContents.focus();
+      }
+    }
+    return view.webContents;
+  }
+
+  // A new tab of the person's own (Ctrl/Cmd+T, the strip's +): the window's first page.
+  function newTab(): void {
+    if (list === undefined || firstAddress === undefined) return;
+    const view = new Electron.WebContentsView(viewOptions({ partition: REMOTE_PARTITION }));
+    const tab = addTab(view, firstAddress, false);
+    list = opened(list, tab.id, false);
+    layout();
+    frontChanged();
+    view.webContents.focus();
+    runFork(loadRemote(window, view, firstAddress, options.whenReachable));
+  }
+
+  let first: Tab | undefined;
+  if (firstAddress !== undefined) {
+    const remote = new Electron.WebContentsView(viewOptions({ partition: REMOTE_PARTITION }));
+    first = addTab(remote, firstAddress, false);
+    list = single(first.id);
+    yield* hardenSession(remote.webContents.session);
+    // The app's own page in a tab's place while its page cannot show. It has the bridge, so it can
+    // open the status column.
+    waiting = yield* acquireView(viewOptions({ preload: options.preloadPath }));
+    waiting.setBackgroundColor(WINDOW_BACKGROUND);
+    registerView(waiting.webContents, "Local");
+    waiting.setVisible(false);
+    window.contentView.addChildView(waiting);
+    strip = yield* acquireView(viewOptions({ preload: options.preloadPath }));
+    strip.setBackgroundColor(WINDOW_BACKGROUND);
+    registerView(strip.webContents, "Local");
+    window.contentView.addChildView(strip);
+    yield* serveTabs({
+      view: tabsView,
+      command: (command) => {
+        if (list === undefined) return;
+        switch (command._tag) {
+          case "Activate":
+            return activate(activated(list, command.id));
+          case "Close":
+            return closeTab(command.id);
+          case "New":
+            return newTab();
+          case "Back":
+            return goBack();
+          case "Forward":
+            return goForward();
+          case "Reload":
+            return reloadPage();
+        }
+      },
+    });
+  }
+  if (options.topBar !== undefined) window.contentView.addChildView(options.topBar.view);
+  layout();
+  // The content view changes size with the window and, on Linux, when the menu bar appears.
+  window.contentView.on("bounds-changed", layout);
+  for (const view of [local, waiting, strip, options.topBar?.view]) {
+    if (view !== undefined) catchKeys(view.webContents);
+  }
+  function goBack(): void {
+    const history = front()?.view.webContents.navigationHistory;
+    if (history?.canGoBack() === true) history.goBack();
+  }
+  function goForward(): void {
+    const history = front()?.view.webContents.navigationHistory;
+    if (history?.canGoForward() === true) history.goForward();
   }
   options.controls({
     relayout: layout,
     reloadPage,
-    goBack: () => {
-      if (remote !== undefined && remote.webContents.navigationHistory.canGoBack()) {
-        remote.webContents.navigationHistory.goBack();
-      }
+    goBack,
+    goForward,
+    history: () => {
+      const history = front()?.view.webContents.navigationHistory;
+      return {
+        canGoBack: history?.canGoBack() ?? false,
+        canGoForward: history?.canGoForward() ?? false,
+      };
     },
-    goForward: () => {
-      if (remote !== undefined && remote.webContents.navigationHistory.canGoForward()) {
-        remote.webContents.navigationHistory.goForward();
-      }
-    },
-    history: () => ({
-      canGoBack: remote?.webContents.navigationHistory.canGoBack() ?? false,
-      canGoForward: remote?.webContents.navigationHistory.canGoForward() ?? false,
-    }),
-    retryPage: () => watch?.retry() ?? Promise.resolve(),
-    firstPage: () => watch?.first() ?? Promise.resolve(),
+    retryPage: () => front()?.watch?.retry() ?? Promise.resolve(),
+    firstPage: () => front()?.watch?.first() ?? Promise.resolve(),
+    tabs: () => ({ open: list !== undefined }),
+    tabKey,
   });
   // A BaseWindow does not close its views' pages; they close here or with the scope.
   window.on("closed", () => {
-    for (const view of [local, remote, waiting]) {
+    const pages = [...tabs.values()].map((tab) => tab.view);
+    tabs.clear();
+    for (const view of [local, waiting, strip, ...pages]) {
       if (view !== undefined && !view.webContents.isDestroyed()) view.webContents.close();
     }
   });
@@ -456,10 +766,39 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   if (waiting !== undefined) {
     const view = waiting;
     yield* Effect.promise(() => view.webContents.loadURL(`${LOCAL_ENTRY}#waiting`));
+    coverLoaded = `${LOCAL_ENTRY}#waiting`;
+  }
+  if (strip !== undefined) {
+    const view = strip;
+    yield* Effect.promise(() => view.webContents.loadURL(`${LOCAL_ENTRY}?view=tabs`));
   }
   if (options.showOnLoad()) window.show();
-  if (remote !== undefined && Option.isSome(options.remoteUrl)) {
-    yield* loadRemote(window, remote, options.remoteUrl.value, options.whenReachable);
+  if (first !== undefined && firstAddress !== undefined) {
+    yield* loadRemote(window, first.view, firstAddress, options.whenReachable);
   }
   return window;
 });
+
+// The strip's requests: the tabs' state, and what it asks for. Only a frame of the app's own
+// files may ask (isLocalSender).
+const serveTabs = (handlers: {
+  readonly view: () => TabsView;
+  readonly command: (command: TabCommand) => void;
+}) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      Electron.ipcMain.handle(TABS_CHANNEL, (event) => {
+        if (!isLocalSender(event)) throw new Error("refused: not a local window of the app");
+        return handlers.view();
+      });
+      Electron.ipcMain.handle(TAB_COMMAND_CHANNEL, async (event, argument: unknown) => {
+        if (!isLocalSender(event)) throw new Error("refused: not a local window of the app");
+        handlers.command(await Effect.runPromise(decodeTabCommand(argument)));
+      });
+    }),
+    () =>
+      Effect.sync(() => {
+        Electron.ipcMain.removeHandler(TABS_CHANNEL);
+        Electron.ipcMain.removeHandler(TAB_COMMAND_CHANNEL);
+      }),
+  );

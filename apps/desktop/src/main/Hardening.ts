@@ -13,10 +13,12 @@ import {
   type NavigationStep,
   type Tracked,
   type ViewKind,
+  windowOpenOf,
 } from "./Navigation.ts";
 
 // Pages hold no power (decision 0248). Every permission is refused unless a later decision names
-// it, no page opens a window, every frame of a view stays on what the view is for (with GitHub's
+// it, no page opens a window of its own (a page of Lazurio opens a tab of the main window, #82),
+// every frame of a view stays on what the view is for (with GitHub's
 // sign-in of ADR 0002), and an address outside Lazurio goes to the system's browser.
 
 export interface NavigationObserver {
@@ -64,6 +66,27 @@ export interface MainFrameRefusal {
 }
 const refusalListeners = new WeakMap<Electron.WebContents, (refusal: MainFrameRefusal) => void>();
 
+// Who opens a tab for a window a view's page opens (MainWindow). Electron gives the new page's
+// web contents in the options, already created and so already guarded; the opener puts it in a
+// view of its own and registers it as a page of Lazurio before it loads anything.
+export interface TabRequest {
+  readonly address: string;
+  // A middle click opens the tab behind the one in front.
+  readonly background: boolean;
+  readonly options: Electron.BrowserWindowConstructorOptions;
+}
+const tabOpeners = new WeakMap<
+  Electron.WebContents,
+  (request: TabRequest) => Electron.WebContents
+>();
+
+export const onOpenTab = (
+  contents: Electron.WebContents,
+  opener: (request: TabRequest) => Electron.WebContents,
+): void => {
+  tabOpeners.set(contents, opener);
+};
+
 export const onMainFrameRefused = (
   contents: Electron.WebContents,
   listener: (refusal: MainFrameRefusal) => void,
@@ -93,9 +116,18 @@ export const hardenSession = (session: Electron.Session): Effect.Effect<void> =>
   });
 
 const guard = (observer: NavigationObserver) => (contents: Electron.WebContents) => {
-  contents.setWindowOpenHandler(({ url }) => {
-    if (destinationOf(url)._tag === "SystemBrowser") observer.openExternally(url);
-    return { action: "deny" };
+  contents.setWindowOpenHandler(({ url, disposition }) => {
+    const open = windowOpenOf(views.get(contents)?.shown, url);
+    if (open === "SystemBrowser") observer.openExternally(url);
+    const opener = tabOpeners.get(contents);
+    if (open !== "Tab" || opener === undefined) return { action: "deny" };
+    return {
+      action: "allow",
+      // The tab lives on when its opener's tab closes, as in a browser.
+      outlivesOpener: true,
+      createWindow: (options) =>
+        opener({ address: url, background: disposition === "background-tab", options }),
+    };
   });
   const frameOf = (isMainFrame: boolean): Frame => (isMainFrame ? "main" : "sub");
   // Moves the view's state on by one of Electron's reports and says whether it may proceed.

@@ -7,6 +7,7 @@ import { AgentBar } from "./AgentBar.tsx";
 import { AgentDesktopFixtures } from "./AgentDesktopFixtures.tsx";
 import { AgentDesktopWindow } from "./AgentDesktopWindow.tsx";
 import { App } from "./App.tsx";
+import { TabStrip } from "./TabStrip.tsx";
 import { viewOf } from "./view.ts";
 import { Waiting } from "./Waiting.tsx";
 import "./styles.css";
@@ -28,6 +29,8 @@ function LocalPage() {
       return <AgentDesktopWindow />;
     case "agent-desktop-fixtures":
       return <AgentDesktopFixtures />;
+    case "tabs":
+      return <TabStrip />;
     case "column":
       firstStatus ??= window.lazurio.status();
       return <App status={firstStatus} />;

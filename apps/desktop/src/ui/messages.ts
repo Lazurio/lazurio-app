@@ -3,6 +3,7 @@
 
 import { APP_NAME } from "../shared/appName.ts";
 import type { FailureReason } from "../shared/pageProblem.ts";
+import type { TabApp } from "../shared/tabTitle.ts";
 
 // What to do about a node that did not start (ADR 0003): the lead before the files it names, and
 // what follows.
@@ -44,6 +45,8 @@ export interface Text {
   // The app's status column, hidden by default, and its actions.
   readonly status: StatusText;
   readonly menu: MenuText;
+  // The strip of the main window's tabs (Tabs.tsx).
+  readonly tabs: TabsText;
   // The system could not open an address in the browser.
   readonly browser: { readonly failed: string; readonly copy: string; readonly close: string };
 }
@@ -82,6 +85,19 @@ interface StatusText {
 }
 
 // The window's menu (AppMenu.ts).
+// {module} is a module's name in its address. A tab's place (its Environment or Organization)
+// follows its app's name.
+export interface TabsText {
+  readonly strip: string;
+  readonly back: string;
+  readonly forward: string;
+  readonly reload: string;
+  readonly newTab: string;
+  // {title} is the tab's whole name.
+  readonly close: string;
+  readonly apps: Readonly<Record<Exclude<TabApp, "module">, string>>;
+}
+
 export interface MenuText {
   readonly edit: string;
   readonly undo: string;
@@ -96,6 +112,10 @@ export interface MenuText {
   readonly back: string;
   readonly forward: string;
   readonly reload: string;
+  readonly newTab: string;
+  readonly closeTab: string;
+  readonly nextTab: string;
+  readonly previousTab: string;
   readonly help: string;
   readonly about: string;
   readonly aboutDetail: string;
@@ -475,6 +495,24 @@ const cs: Text = {
     copy: "Kopírovat adresu",
     close: "Zavřít",
   },
+  tabs: {
+    strip: "Záložky",
+    back: "Zpět",
+    forward: "Vpřed",
+    reload: "Obnovit",
+    newTab: "Nová záložka",
+    close: "Zavřít záložku {title}",
+    apps: {
+      apps: "Aplikace",
+      settings: "Nastavení",
+      chat: "Chat",
+      automations: "Automatizace",
+      overview: "Přehled Organizace",
+      "sign-in": "Přihlášení",
+      new: "Nová záložka",
+      lazurio: "Lazurio",
+    },
+  },
   menu: {
     edit: "Úpravy",
     undo: "Zpět",
@@ -489,6 +527,10 @@ const cs: Text = {
     back: "Zpět",
     forward: "Vpřed",
     reload: "Znovu načíst stránku",
+    newTab: "Nová záložka",
+    closeTab: "Zavřít záložku",
+    nextTab: "Další záložka",
+    previousTab: "Předchozí záložka",
     help: "Nápověda",
     about: `O aplikaci ${APP_NAME}`,
     aboutDetail: "Verze {version}. Stav aplikace ukáže Zobrazit → Stav aplikace (Ctrl+Shift+D).",
@@ -726,6 +768,24 @@ const en: Text = {
     copy: "Copy address",
     close: "Close",
   },
+  tabs: {
+    strip: "Tabs",
+    back: "Back",
+    forward: "Forward",
+    reload: "Reload",
+    newTab: "New tab",
+    close: "Close tab {title}",
+    apps: {
+      apps: "Apps",
+      settings: "Settings",
+      chat: "Chat",
+      automations: "Automations",
+      overview: "Organization overview",
+      "sign-in": "Sign-in",
+      new: "New tab",
+      lazurio: "Lazurio",
+    },
+  },
   menu: {
     edit: "Edit",
     undo: "Undo",
@@ -740,6 +800,10 @@ const en: Text = {
     back: "Back",
     forward: "Forward",
     reload: "Reload page",
+    newTab: "New tab",
+    closeTab: "Close tab",
+    nextTab: "Next tab",
+    previousTab: "Previous tab",
     help: "Help",
     about: `About ${APP_NAME}`,
     aboutDetail: "Version {version}. View → App status (Ctrl+Shift+D) shows the app's status.",
