@@ -1005,10 +1005,11 @@ impl Worker {
                         if lock.stopping(environment_id) {
                             return Err(Busy::Stopped);
                         }
-                        // A Stop this channel never saw with an engine of its own came after the
-                        // agent sent this call, which may have waited meanwhile: it is refused.
+                        // A Stop this channel never saw with an engine of its own may have come after
+                        // the agent sent this call, and others still unread: this one is refused,
+                        // and the session ends below, so none of them reaches an engine.
                         if self.control.see_stops(lock.stop_generation(environment_id)) {
-                            return Err(Busy::Stopped);
+                            return Err(Busy::MissedStop);
                         }
                         if !ready {
                             return Err(Busy::Ending);
@@ -1034,6 +1035,12 @@ impl Worker {
                     }
                     Err(busy) => {
                         send(socket, tap::tool_error(&id, &busy.message()))?;
+                        if matches!(busy, Busy::MissedStop) {
+                            // The messages still in the socket were sent before that Stop, or
+                            // cannot be told apart from them: the session ends unread, and the
+                            // channel connects again with a new hand-over.
+                            return Err(SessionEnded);
+                        }
                     }
                 }
             }

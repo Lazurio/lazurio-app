@@ -2063,16 +2063,16 @@ mod tests {
         assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
     }
 
-    /// Stop while the same Environment's new channel has not begun to start its engine, with its
-    /// agent's call already sent, and the old engine then ends: Stop cannot wait for an engine
-    /// that does not exist yet, so the hold ends, but the new channel never saw that Stop, and
-    /// it refuses the call that was sent before it.
+    /// Stop while the same Environment's new channel has not begun to start its engine, with two
+    /// of its agent's calls already sent, and the old engine then ends: Stop cannot wait for an
+    /// engine that does not exist yet, so the hold ends, but the new channel never saw that Stop.
+    /// It refuses the first call and ends its session, so neither call reaches an engine.
     #[test]
     #[allow(
         clippy::too_many_lines,
         reason = "one story: Stop before a new channel's engine start, with its call queued"
     )]
-    fn a_channel_that_missed_a_stop_refuses_the_call_sent_before_it() {
+    fn a_channel_that_missed_a_stop_runs_none_of_the_calls_sent_before_it() {
         use crate::lazurio::app::device::v1::Working;
         use crate::testkit::{
             EngineEvent, Event, FakeEngines, FakeUtility, Order, PauseAt, arm_engine_start_pause,
@@ -2136,11 +2136,13 @@ mod tests {
         start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
         wait_engine_start_paused();
         message(&new, initialize("n0"));
-        message(
-            &new,
-            json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-                   "params": {"name": "desktop_wait", "arguments": {}}}),
-        );
+        for id in [7, 8] {
+            message(
+                &new,
+                json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                       "params": {"name": "desktop_wait", "arguments": {}}}),
+            );
+        }
 
         // Stop, and the old engine ends: nothing is left to wait for, so the hold ends.
         device.answer(&app_message::Kind::StopAgent(StopAgent {}));
@@ -2155,7 +2157,8 @@ mod tests {
         );
         release_engine_start();
 
-        // The new channel starts its engine and refuses the call sent before the Stop.
+        // The new channel starts its engine, refuses the first call sent before the Stop and
+        // ends its session, so the second one is never read.
         let answer = loop {
             if let Event::Text(message) = environment.next()
                 && message.get("id") == Some(&json!(7))
@@ -2163,10 +2166,29 @@ mod tests {
                 break message;
             }
         };
+        loop {
+            match environment.next() {
+                Event::Text(message) => assert_ne!(
+                    message.get("id"),
+                    Some(&json!(8)),
+                    "the second call was read: {message}"
+                ),
+                Event::Closed => break,
+                _ => {}
+            }
+        }
         assert_eq!(
             answer["result"],
             json!({"content": [{"type": "text", "text": crate::tap::STOPPED}], "isError": true}),
             "the call sent before the Stop was refused: {answer}"
+        );
+        let reached: Vec<EngineEvent> = engines.events.try_iter().collect();
+        assert!(
+            !reached.iter().any(|event| matches!(
+                event,
+                EngineEvent::Got { engine, tool, .. } if *engine != 1 && tool == "desktop_wait"
+            )),
+            "a call reached an engine after Stop: {reached:?}"
         );
         let after_stop: Vec<ChannelState> = states.try_iter().collect();
         assert!(

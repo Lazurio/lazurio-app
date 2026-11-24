@@ -49,6 +49,9 @@ pub enum Busy {
     Ending,
     /// The person pressed Stop while the call waited for that engine: it never reaches an engine.
     Stopped,
+    /// A Stop came that this channel never handled with an engine of its own: the call, and any
+    /// other the session got before that Stop, never reach an engine.
+    MissedStop,
 }
 
 impl Busy {
@@ -64,7 +67,7 @@ impl Busy {
             Self::Updating => "Lazurio App se právě aktualizuje. Zkuste to za chvíli. (Lazurio App is updating. Try again in a moment.)".to_owned(),
             Self::Unconfirmed => "Agent Desktop nemohl potvrdit, že zastavený nástroj skončil. Restartujte Lazurio App. (Agent Desktop could not confirm that a stopped tool ended. Restart Lazurio App.)".to_owned(),
             Self::Ending => "Předchozí spojení tohoto Prostředí ještě končí. Zkuste to za chvíli. (The previous connection of this Environment is still ending. Try again in a moment.)".to_owned(),
-            Self::Stopped => crate::tap::STOPPED.to_owned(),
+            Self::Stopped | Self::MissedStop => crate::tap::STOPPED.to_owned(),
         }
     }
 }
