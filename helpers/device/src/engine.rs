@@ -1,4 +1,4 @@
-//! The engine `agent-desktop mcp` of one session (ADR 0006 points 1 and 8).
+//! The engine `agent-desktop mcp --headed` of one session (ADR 0006 points 1 and 8).
 //!
 //! The engine lies next to the helper's binary; the helper never builds or downloads it. A
 //! session starts it after `ready` and speaks newline-delimited JSON-RPC with it over its standard
@@ -18,6 +18,11 @@
 //!
 //! [`Engine::end`] first closes the engine's input and gives it a grace to exit, then ends the
 //! tree and says whether it is gone. Dropping an [`Engine`] ends the tree too.
+//!
+//! The switch of Agent Desktop means full control of the computer: the engine delivers physical
+//! input (`--headed`), so it moves the real pointer, clicks and types. A tree ended in the middle
+//! of a drag never releases the mouse button it pressed, so the channel whose Environment holds
+//! the computer releases the left button once its engine's tree is gone ([`release_pointer`]).
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -33,6 +38,8 @@ pub struct EngineSpec {
     pub args: Vec<String>,
     /// Variables added to the helper's environment; none for the bundled engine.
     pub env: Vec<(String, String)>,
+    /// Whether the engine delivers physical input, so its end may leave a mouse button pressed.
+    pub physical_input: bool,
 }
 
 impl EngineSpec {
@@ -48,8 +55,10 @@ impl EngineSpec {
         };
         Some(Self {
             program: helper.parent()?.join(name),
-            args: vec!["mcp".to_owned()],
+            // Physical input: the engine moves the pointer, clicks and types.
+            args: vec!["mcp".to_owned(), "--headed".to_owned()],
             env: Vec::new(),
+            physical_input: true,
         })
     }
 }
@@ -66,8 +75,13 @@ pub enum Output {
 /// How long an engine's process tree gets to be gone after it was killed.
 const TREE_GONE_WITHIN: Duration = Duration::from_secs(1);
 
+/// The number the next engine gets, unique for the helper's life.
+static NEXT_ENGINE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// A running engine. Dropping it ends its process tree.
 pub struct Engine {
+    /// Unique for the helper's life: which engine began the last tool call ([`crate::lock`]).
+    id: u64,
     child: Child,
     input: Option<Sender<String>>,
     output: Receiver<Output>,
@@ -109,6 +123,7 @@ impl Engine {
         let (outbox, output) = mpsc::channel();
         // From here on, dropping `engine` ends the process.
         let mut engine = Self {
+            id: NEXT_ENGINE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             child: command.spawn()?,
             input: None,
             output,
@@ -133,6 +148,12 @@ impl Engine {
             .spawn(move || read_lines(stdout, &outbox))?;
         engine.input = Some(input);
         Ok(engine)
+    }
+
+    /// The engine's number, unique for the helper's life.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Sends one message, a line without a line break, to the engine.
@@ -178,6 +199,27 @@ impl Engine {
         end_process_tree(self, Instant::now() + TREE_GONE_WITHIN)
     }
 }
+
+/// Releases the left mouse button, which an engine ended in the middle of a drag leaves pressed:
+/// the person's next move would draw on. A release without a press before it changes nothing
+/// on Windows and macOS. Elsewhere the engine delivers no physical input.
+#[cfg(any(windows, target_os = "macos"))]
+pub fn release_pointer() {
+    use enigo::{Button, Direction, Enigo, Mouse, Settings};
+    let settings = Settings {
+        // The app asks for Accessibility itself (Agent Desktop's window); the helper never does.
+        open_prompt_to_get_permissions: false,
+        release_keys_when_dropped: false,
+        ..Settings::default()
+    };
+    // Without input, or without Accessibility on macOS, there is nothing to release with.
+    if let Ok(mut input) = Enigo::new(&settings) {
+        let _ = input.button(Button::Left, Direction::Release);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn release_pointer() {}
 
 /// How often an ending engine is checked.
 const CHECK_EVERY: Duration = Duration::from_millis(5);
@@ -430,7 +472,8 @@ mod tests {
                 "agent-desktop"
             }
         );
-        assert_eq!(spec.args, ["mcp"]);
+        assert_eq!(spec.args, ["mcp", "--headed"]);
+        assert!(spec.physical_input);
         assert_eq!(spec.env, Vec::<(String, String)>::new());
     }
 
@@ -443,6 +486,7 @@ mod tests {
             program: crate::testkit::scratch("no-engine").join("agent-desktop"),
             args: vec!["mcp".to_owned()],
             env: Vec::new(),
+            physical_input: false,
         };
         assert!(Engine::start(&spec).is_err());
     }

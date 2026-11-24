@@ -25,6 +25,10 @@ nix = { version = "=0.31.3", default-features = false, features = ["signal"] }
 # (`guard`). Already in the lock through rustls-native-certs.
 security-framework = { version = "=3.7.0", default-features = false }
 
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+# Releases the left mouse button after an engine with physical input ended (`engine`).
+enigo = { version = "=0.6.1", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 # Ends the engine's job object (ADR 0006 point 8).
 win32job = "=2.0.3"

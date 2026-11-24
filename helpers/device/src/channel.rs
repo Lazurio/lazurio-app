@@ -168,10 +168,19 @@ pub struct Channel {
     pub lock_report: LockReport,
     /// Ends an engine with its process tree and says whether the tree is gone; [`Engine::end`].
     pub ender: Ender,
+    /// Releases the left mouse button ([`crate::engine::release_pointer`]), or a stand-in in tests.
+    pub pointer_release: PointerRelease,
 }
+
+/// How long a tool call waits for an engine of the same Environment's earlier channel to end
+/// (its grace and the wait for its tree) before it is refused as busy.
+pub const ENDING_ENGINE_WAIT: Duration = Duration::from_secs(5);
 
 /// How a session ends its engine: [`Engine::end`], or a stand-in in tests.
 pub type Ender = fn(Engine, Duration) -> bool;
+
+/// How a channel releases the left mouse button after its engine with physical input ended.
+pub type PointerRelease = Arc<dyn Fn() + Send + Sync>;
 
 /// One Environment's channel thread. Dropping it stops the channel without waiting.
 pub struct Supervisor {
@@ -187,7 +196,12 @@ impl Supervisor {
     /// Fails when the system gives no thread; the channel's secrets are then dropped, wiped.
     pub fn spawn(channel: Channel) -> std::io::Result<Self> {
         let environment_id = channel.request.environment_id.clone();
-        let control = Arc::new(Control::new(environment_id.clone()));
+        // The Stops so far: a later one this channel never handles with its own engine still
+        // refuses the call it got before that Stop.
+        let stops = channel
+            .lock
+            .with(|lock| lock.stop_generation(&environment_id));
+        let control = Arc::new(Control::new(environment_id.clone(), stops));
         let mut worker = Worker {
             control: Arc::clone(&control),
             channel,
@@ -231,7 +245,7 @@ impl Supervisor {
     #[must_use]
     pub fn request_stop(&self) -> bool {
         let mut state = self.control.lock();
-        let waits = state.engine == EngineState::Running;
+        let waits = matches!(state.engine, EngineState::Starting | EngineState::Running);
         if waits {
             state.engine = EngineState::Stopping;
         }
@@ -268,6 +282,9 @@ struct ControlState {
     stream: Option<TcpStream>,
     /// The session's engine, from its start until it was killed and waited for.
     engine: EngineState,
+    /// The Stops of this Environment the channel has seen
+    /// ([`DeviceLock::stop_generation`](crate::lock::DeviceLock::stop_generation)).
+    stops_seen: u64,
 }
 
 /// Where the session's engine is, as Stop sees it.
@@ -276,16 +293,21 @@ enum EngineState {
     /// No engine runs.
     #[default]
     None,
+    /// An engine is starting: Stop waits for it as for a running one.
+    Starting,
     Running,
     /// It runs, and Stop waits for its end ([`Supervisor::request_stop`]).
     Stopping,
 }
 
 impl Control {
-    fn new(environment_id: String) -> Self {
+    fn new(environment_id: String, stops_seen: u64) -> Self {
         Self {
             environment_id,
-            state: Mutex::new(ControlState::default()),
+            state: Mutex::new(ControlState {
+                stops_seen,
+                ..ControlState::default()
+            }),
             changed: Condvar::new(),
         }
     }
@@ -338,8 +360,24 @@ impl Control {
         self.lock().engine == EngineState::Stopping
     }
 
+    /// Takes the Environment's Stops up to `stops` as seen, and says whether one was new.
+    fn see_stops(&self, stops: u64) -> bool {
+        let mut state = self.lock();
+        let new = state.stops_seen != stops;
+        state.stops_seen = stops;
+        new
+    }
+
+    fn engine_starting(&self) {
+        self.lock().engine = EngineState::Starting;
+    }
+
+    /// The engine started; a Stop that came while it started still waits for its end.
     fn engine_started(&self) {
-        self.lock().engine = EngineState::Running;
+        let mut state = self.lock();
+        if state.engine == EngineState::Starting {
+            state.engine = EngineState::Running;
+        }
     }
 
     /// The engine was killed and waited for. Returns whether Stop waited for that.
@@ -400,7 +438,8 @@ impl Watched for Control {
         if let Some(stream) = state.stream.take() {
             let _ = stream.shutdown(Shutdown::Both);
         }
-        let waits = stop_engine && state.engine == EngineState::Running;
+        let waits =
+            stop_engine && matches!(state.engine, EngineState::Starting | EngineState::Running);
         if waits {
             state.engine = EngineState::Stopping;
         }
@@ -728,13 +767,26 @@ impl Worker {
         };
         let end = self.serve_messages(socket, &mut served);
         let open = served.tap.take_open();
-        self.end_engine(&mut served, open.len());
+        let _ = self.end_engine(&mut served, open.len(), !open.is_empty());
         end
     }
 
     fn start_engine(&self) -> Option<Engine> {
-        // Once a tree could not be confirmed gone, no engine starts for tool work again.
-        if self.channel.lock.with(|lock| lock.unconfirmed()) {
+        let environment_id = &self.channel.request.environment_id;
+        #[cfg(test)]
+        if self.channel.engine.is_some() {
+            crate::testkit::engine_start_pause_point(crate::testkit::PauseAt::BeforeStarting);
+        }
+        // Once a tree could not be confirmed gone, no engine starts for tool work again. From
+        // here on Stop sees the engine starting and waits for its end, in the same lock.
+        let starts = self.channel.lock.with(|lock| {
+            if lock.unconfirmed() {
+                return false;
+            }
+            self.control.engine_starting();
+            true
+        });
+        if !starts {
             return None;
         }
         // Without the engine the session still serves, with the stub.
@@ -742,25 +794,74 @@ impl Worker {
             .channel
             .engine
             .as_ref()
-            .and_then(|spec| Engine::start(spec).ok())?;
-        self.control.engine_started();
-        Some(engine)
+            .and_then(|spec| Engine::start(spec).ok());
+        #[cfg(test)]
+        if engine.is_some() {
+            crate::testkit::engine_start_pause_point(crate::testkit::PauseAt::AfterSpawn);
+        }
+        self.channel.lock.with(|lock| match &engine {
+            Some(engine) => {
+                lock.engine_started(engine.id(), environment_id);
+                self.control.engine_started();
+            }
+            // No engine: a Stop that waited for this start is done with it.
+            None => {
+                if self.control.engine_gone() && lock.engine_ended(environment_id) {
+                    (self.channel.lock_report)(0, lock.state(Instant::now()));
+                }
+            }
+        });
+        engine
     }
 
     /// Ends the session's engine: closes its input, gives it the grace of [`Timing`], then ends
     /// its whole process tree and waits until it is gone. Only then does the lock hear of it: the
     /// end a Stop waits for, or else the end of the `open` tool calls no engine answers any more.
-    fn end_engine(&self, served: &mut Served, open: usize) {
+    /// `in_call` says whether a tool call of this engine was still running when it ended. Returns
+    /// whether a Stop waited for this end, also one that came while it ended for another reason.
+    fn end_engine(&self, served: &mut Served, open: usize, in_call: bool) -> bool {
         let grace = self.channel.timing.engine_grace;
-        let gone = served
-            .engine
-            .take()
-            .is_none_or(|engine| (self.channel.ender)(engine, grace));
+        let engine = served.engine.take();
+        let engine_id = engine.as_ref().map(Engine::id);
+        let ran_with_physical_input = engine.is_some()
+            && self
+                .channel
+                .engine
+                .as_ref()
+                .is_some_and(|spec| spec.physical_input);
+        let gone = engine.is_none_or(|engine| (self.channel.ender)(engine, grace));
         let request = &self.channel.request;
         let environment_id = &request.environment_id;
         let mut newly_unconfirmed = false;
+        let mut stopped = false;
         self.channel.lock.with(|lock| {
+            // A drag cut off by the end leaves the mouse button pressed. Only the engine that
+            // began the last tool call, ended in the middle of a call, can have it pressed: not an
+            // idle one, and not one whose input a later call of another engine took over, such as
+            // the new engine of a channel the same Environment replaced. Inside the lock no other
+            // engine begins a call between the check and the release. An engine that outlived
+            // its kill may still work, so its button is left alone.
+            if ran_with_physical_input
+                && in_call
+                && gone
+                && engine_id.is_some()
+                && lock.input_engine() == engine_id
+                && lock
+                    .holder(Instant::now())
+                    .is_some_and(|holder| holder.environment_id == *environment_id)
+            {
+                (self.channel.pointer_release)();
+            }
+            if gone && let Some(engine) = engine_id {
+                lock.engine_gone(engine);
+            }
             let stop_waited = self.control.engine_gone();
+            stopped = stop_waited;
+            if stop_waited {
+                // This channel handles the Stop with its own engine; its session ends after it
+                // (`restart_engine`), so nothing the agent queued before the Stop is read.
+                self.control.see_stops(lock.stop_generation(environment_id));
+            }
             if !gone {
                 // A process of the engine outlived its kill and may still work: for the rest
                 // of the helper's life the computer stays held, the device lock with it, and
@@ -794,6 +895,7 @@ impl Worker {
                 None,
             );
         }
+        stopped
     }
 
     fn serve_messages(&self, socket: &mut Socket, served: &mut Served) -> SessionEnd {
@@ -889,18 +991,48 @@ impl Worker {
             FromEnvironment::Drop => {}
             FromEnvironment::ToolCall { id, tool, line } => {
                 let request = &self.channel.request;
-                let begun = self.channel.lock.with(|lock| {
-                    lock.try_begin(
-                        &request.environment_id,
-                        &request.environment_label,
-                        Instant::now(),
-                        history::now_unix_ms(),
-                    )
-                });
+                let environment_id = &request.environment_id;
+                // A channel this Environment replaced may still be ending its old engine, whose
+                // drag may still press the mouse button: no call begins until that engine has
+                // ended and released it, so the button always has one engine that pressed it.
+                // Stop wakes the wait, and a call waiting when the person pressed it never
+                // reaches the engine. The call is accepted and handed to the engine in one hold of
+                // the lock, which Stop takes as well: a Stop either comes before and refuses the
+                // call, or after and ends it with its engine; no call reaches an engine after it.
+                let tap = &mut served.tap;
+                let begun = self.channel.lock.when(
+                    ENDING_ENGINE_WAIT,
+                    |lock| {
+                        lock.stopping(environment_id)
+                            || !lock.earlier_engine(environment_id, engine.id())
+                    },
+                    |lock, ready| {
+                        if lock.stopping(environment_id) {
+                            return Err(Busy::Stopped);
+                        }
+                        // A Stop this channel never saw with an engine of its own may have come after
+                        // the agent sent this call, and others still unread: this one is refused,
+                        // and the session ends below, so none of them reaches an engine.
+                        if self.control.see_stops(lock.stop_generation(environment_id)) {
+                            return Err(Busy::MissedStop);
+                        }
+                        if !ready {
+                            return Err(Busy::Ending);
+                        }
+                        lock.try_begin(
+                            environment_id,
+                            &request.environment_label,
+                            Instant::now(),
+                            history::now_unix_ms(),
+                        )?;
+                        lock.began_input(engine.id());
+                        tap.call_started(id.clone(), tool.clone());
+                        engine.send(line);
+                        Ok(())
+                    },
+                );
                 match begun {
                     Ok(()) => {
-                        served.tap.call_started(id, tool.clone());
-                        engine.send(line);
                         self.report(channel_state::State::Working(Working {
                             tool,
                             application: String::new(),
@@ -908,6 +1040,12 @@ impl Worker {
                     }
                     Err(busy) => {
                         send(socket, tap::tool_error(&id, &busy.message()))?;
+                        if matches!(busy, Busy::MissedStop) {
+                            // The messages still in the socket were sent before that Stop, or
+                            // cannot be told apart from them: the session ends unread, and the
+                            // channel connects again with a new hand-over.
+                            return Err(SessionEnded);
+                        }
                     }
                 }
             }
@@ -964,7 +1102,9 @@ impl Worker {
     /// place, after `ready`, Stop or a cancellation.
     ///
     /// - After Stop, the hold ends with the tree, the open calls do not end on the lock on their
-    ///   own, and each is answered as stopped. The Device records `stopped`.
+    ///   own, and each is answered as stopped. The Device records `stopped`. Then the session ends
+    ///   without starting a new engine: calls the agent queued before the Stop are never read, so
+    ///   nothing clicks or types after it, and the channel connects again with a new hand-over.
     /// - After the agent cancelled a call, which the engine never answers, the open calls end on
     ///   the lock once the tree is gone and each gets a `tool` entry, as an answered call does.
     ///   The cancelled request gets no response (MCP); any other open call is answered as
@@ -981,7 +1121,24 @@ impl Worker {
             Restart::Stop => None,
             Restart::Cancel(id) => Some(id),
         };
-        self.end_engine(served, if cancelled.is_some() { open.len() } else { 0 });
+        let stopped = self.end_engine(
+            served,
+            if cancelled.is_some() { open.len() } else { 0 },
+            !open.is_empty(),
+        );
+        // A Stop that came while a cancellation ended the engine is a Stop as well: the session
+        // ends, and the cancelled call gets no response, as MCP asks.
+        if cancelled.is_none() || stopped {
+            for answer in unanswered {
+                send(socket, answer)?;
+            }
+            for call in &open {
+                if cancelled != Some(&call.id) {
+                    send(socket, tap::tool_error(&call.id, tap::STOPPED))?;
+                }
+            }
+            return Err(SessionEnded);
+        }
         if cancelled.is_some() {
             for call in &open {
                 // The history is a record for the person; a failed write never stops the
@@ -1226,6 +1383,7 @@ mod tests {
             lock: Arc::clone(lock),
             lock_report,
             ender,
+            pointer_release: Arc::new(|| {}),
         })
         .expect("a thread");
         Running {
@@ -2533,6 +2691,7 @@ mod tests {
                 program: scratch("no-engine").join("agent-desktop"),
                 args: vec!["mcp".to_owned()],
                 env: Vec::new(),
+                physical_input: false,
             }),
             &a_lock(),
         );
