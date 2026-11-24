@@ -733,7 +733,7 @@ impl Worker {
         };
         let end = self.serve_messages(socket, &mut served);
         let open = served.tap.take_open();
-        self.end_engine(&mut served, open.len());
+        self.end_engine(&mut served, open.len(), !open.is_empty());
         end
     }
 
@@ -755,7 +755,8 @@ impl Worker {
     /// Ends the session's engine: closes its input, gives it the grace of [`Timing`], then ends
     /// its whole process tree and waits until it is gone. Only then does the lock hear of it: the
     /// end a Stop waits for, or else the end of the `open` tool calls no engine answers any more.
-    fn end_engine(&self, served: &mut Served, open: usize) {
+    /// `in_call` says whether a tool call of this engine was still running when it ended.
+    fn end_engine(&self, served: &mut Served, open: usize, in_call: bool) {
         let grace = self.channel.timing.engine_grace;
         let engine = served.engine.take();
         let ran_with_physical_input = engine.is_some()
@@ -769,11 +770,14 @@ impl Worker {
         let environment_id = &request.environment_id;
         let mut newly_unconfirmed = false;
         self.channel.lock.with(|lock| {
-            // A drag cut off by the end leaves the mouse button pressed. Only the engine of the
-            // Environment that holds the computer can have pressed it, and inside the lock, before
-            // the hold is released, no other Environment's engine can press it meanwhile. An
-            // engine that outlived its kill may still work, so its button is left alone.
+            // A drag cut off by the end leaves the mouse button pressed. Only an engine ended in
+            // the middle of a tool call of the Environment that holds the computer can have
+            // pressed it: not an idle one, also not the old engine of a channel the same
+            // Environment replaced, whose new engine may be dragging. Inside the lock, before the
+            // hold is released, no other engine can press it meanwhile. An engine that outlived
+            // its kill may still work, so its button is left alone.
             if ran_with_physical_input
+                && in_call
                 && gone
                 && lock
                     .holder(Instant::now())
@@ -1002,7 +1006,11 @@ impl Worker {
             Restart::Stop => None,
             Restart::Cancel(id) => Some(id),
         };
-        self.end_engine(served, if cancelled.is_some() { open.len() } else { 0 });
+        self.end_engine(
+            served,
+            if cancelled.is_some() { open.len() } else { 0 },
+            !open.is_empty(),
+        );
         if cancelled.is_some() {
             for call in &open {
                 // The history is a record for the person; a failed write never stops the

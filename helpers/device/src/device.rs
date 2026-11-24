@@ -1582,6 +1582,120 @@ mod tests {
         assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
     }
 
+    /// Ends engines a while after asked, so a replaced channel's old engine is still ending
+    /// while its replacement works.
+    fn slow_end(engine: crate::engine::Engine, grace: Duration) -> bool {
+        std::thread::sleep(Duration::from_millis(500));
+        engine.end(grace)
+    }
+
+    /// The same Environment's new channel works while its old, idle engine still ends: the old
+    /// engine, though of the Environment that holds the computer, releases nothing, and only the
+    /// working engine's end does.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story: a replaced channel's old engine ends while the new one works"
+    )]
+    fn a_replaced_channels_idle_engine_never_releases_the_new_ones_button() {
+        use crate::lazurio::app::device::v1::{Connected, Working};
+        use crate::testkit::{
+            EngineEvent, FakeEngines, FakeUtility, Order, scripted_sessions, spawning,
+        };
+        use serde_json::json;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _forks = spawning();
+        let (environment, mut orders) = scripted_sessions(2);
+        let new = orders.remove(1);
+        let engines = FakeEngines::start();
+        let mut spec = engines.spec();
+        spec.physical_input = true;
+        let utility = FakeUtility::absent();
+        let (device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            Some(spec),
+        );
+        let releases = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&releases);
+        let mut device = device
+            .with_ender(slow_end)
+            .with_pointer_release(Arc::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }));
+
+        // The old channel is connected with an idle engine.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-a".to_owned(),
+                channel_state::State::Connected(Connected {})
+            )
+        );
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Started(1))),
+            EngineEvent::Started(1)
+        );
+
+        // A new hand-over replaces the channel; the old engine is still ending while the new
+        // one's agent starts a tool call that runs on, as a drag does.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
+        while state_of(&states)
+            != (
+                "env-a".to_owned(),
+                channel_state::State::Connected(Connected {}),
+            )
+        {}
+        new.send(Order::Send(json!({"jsonrpc": "2.0", "id": "n0", "method": "initialize",
+                                    "params": {"protocolVersion": "2025-06-18", "capabilities": {}}})))
+            .expect("the session follows orders");
+        // The answer to `initialize` goes to the Environment; the old session's close comes
+        // among the Environment's events, so the test does not read them here.
+        new.send(Order::Send(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                    "params": {"name": "desktop_wait", "arguments": {}}}),
+        ))
+        .expect("the session follows orders");
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 2, tool, .. } if tool == "desktop_wait")
+        });
+        while state_of(&states)
+            != (
+                "env-a".to_owned(),
+                channel_state::State::Working(Working {
+                    tool: "desktop_wait".to_owned(),
+                    application: String::new(),
+                }),
+            )
+        {}
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(1))),
+            EngineEvent::Ended(1),
+            "the old engine ended while the new one worked"
+        );
+
+        // Stop ends the working engine in the middle of its call: one release, its own.
+        device.answer(&app_message::Kind::StopAgent(StopAgent {}));
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(2))),
+            EngineEvent::Ended(2)
+        );
+        let deadline = Instant::now() + crate::testkit::PATIENCE;
+        while releases.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "only the working engine released the button"
+        );
+        assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
+    }
+
     #[test]
     fn a_check_that_hangs_opens_no_channel_and_closes_an_open_one() {
         use crate::lazurio::app::device::v1::Connected;
