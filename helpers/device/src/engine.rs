@@ -75,8 +75,13 @@ pub enum Output {
 /// How long an engine's process tree gets to be gone after it was killed.
 const TREE_GONE_WITHIN: Duration = Duration::from_secs(1);
 
+/// The number the next engine gets, unique for the helper's life.
+static NEXT_ENGINE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// A running engine. Dropping it ends its process tree.
 pub struct Engine {
+    /// Unique for the helper's life: which engine began the last tool call ([`crate::lock`]).
+    id: u64,
     child: Child,
     input: Option<Sender<String>>,
     output: Receiver<Output>,
@@ -118,6 +123,7 @@ impl Engine {
         let (outbox, output) = mpsc::channel();
         // From here on, dropping `engine` ends the process.
         let mut engine = Self {
+            id: NEXT_ENGINE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             child: command.spawn()?,
             input: None,
             output,
@@ -142,6 +148,12 @@ impl Engine {
             .spawn(move || read_lines(stdout, &outbox))?;
         engine.input = Some(input);
         Ok(engine)
+    }
+
+    /// The engine's number, unique for the helper's life.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Sends one message, a line without a line break, to the engine.

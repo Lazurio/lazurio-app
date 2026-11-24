@@ -759,6 +759,7 @@ impl Worker {
     fn end_engine(&self, served: &mut Served, open: usize, in_call: bool) {
         let grace = self.channel.timing.engine_grace;
         let engine = served.engine.take();
+        let engine_id = engine.as_ref().map(Engine::id);
         let ran_with_physical_input = engine.is_some()
             && self
                 .channel
@@ -770,15 +771,17 @@ impl Worker {
         let environment_id = &request.environment_id;
         let mut newly_unconfirmed = false;
         self.channel.lock.with(|lock| {
-            // A drag cut off by the end leaves the mouse button pressed. Only an engine ended in
-            // the middle of a tool call of the Environment that holds the computer can have
-            // pressed it: not an idle one, also not the old engine of a channel the same
-            // Environment replaced, whose new engine may be dragging. Inside the lock, before the
-            // hold is released, no other engine can press it meanwhile. An engine that outlived
+            // A drag cut off by the end leaves the mouse button pressed. Only the engine that
+            // began the last tool call, ended in the middle of a call, can have it pressed: not an
+            // idle one, and not one whose input a later call of another engine took over, such as
+            // the new engine of a channel the same Environment replaced. Inside the lock no other
+            // engine begins a call between the check and the release. An engine that outlived
             // its kill may still work, so its button is left alone.
             if ran_with_physical_input
                 && in_call
                 && gone
+                && engine_id.is_some()
+                && lock.input_engine() == engine_id
                 && lock
                     .holder(Instant::now())
                     .is_some_and(|holder| holder.environment_id == *environment_id)
@@ -921,6 +924,7 @@ impl Worker {
                         Instant::now(),
                         history::now_unix_ms(),
                     )
+                    .map(|()| lock.began_input(engine.id()))
                 });
                 match begun {
                     Ok(()) => {

@@ -1482,7 +1482,7 @@ mod tests {
         let mut spec = engines.spec();
         spec.physical_input = true;
         let utility = FakeUtility::absent();
-        let (device, states, _locks, _) = guarded_device(
+        let (device, states, locks, _) = guarded_device(
             &environment,
             &utility,
             guard::CHECK_EVERY,
@@ -1570,10 +1570,12 @@ mod tests {
             EngineEvent::Ended(1)
         );
         // The release comes inside the lock, before the hold ends.
-        let deadline = Instant::now() + crate::testkit::PATIENCE;
-        while releases.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
-            std::thread::yield_now();
-        }
+        // The release comes inside the lock, before the hold ends and the computer is idle.
+        while !locks
+            .recv_timeout(crate::testkit::PATIENCE)
+            .expect("who holds the computer is reported")
+            .idle
+        {}
         assert_eq!(
             releases.load(Ordering::SeqCst),
             1,
@@ -1612,7 +1614,7 @@ mod tests {
         let mut spec = engines.spec();
         spec.physical_input = true;
         let utility = FakeUtility::absent();
-        let (device, states, _locks, _) = guarded_device(
+        let (device, states, locks, _) = guarded_device(
             &environment,
             &utility,
             guard::CHECK_EVERY,
@@ -1684,14 +1686,148 @@ mod tests {
             engines.until(|event| matches!(event, EngineEvent::Ended(2))),
             EngineEvent::Ended(2)
         );
-        let deadline = Instant::now() + crate::testkit::PATIENCE;
-        while releases.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
-            std::thread::yield_now();
-        }
+        // The release comes inside the lock, before the hold ends and the computer is idle.
+        while !locks
+            .recv_timeout(crate::testkit::PATIENCE)
+            .expect("who holds the computer is reported")
+            .idle
+        {}
         assert_eq!(
             releases.load(Ordering::SeqCst),
             1,
             "only the working engine released the button"
+        );
+        assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
+    }
+
+    /// A gate the ender of one test waits at, so an engine's end waits for the test's event.
+    static END_GATE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    static END_GATE_OPENED: std::sync::Condvar = std::sync::Condvar::new();
+
+    /// Ends engines once [`END_GATE`] is open.
+    fn gated_end(engine: crate::engine::Engine, grace: Duration) -> bool {
+        let open = END_GATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(
+            END_GATE_OPENED
+                .wait_while(open, |open| !*open)
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        engine.end(grace)
+    }
+
+    /// The same Environment's channel is replaced while its old engine runs a tool call, and the
+    /// new engine's agent begins a call before the old engine has ended: the new call took the
+    /// input over, so the old engine's end releases nothing, and only the new one's end does.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story: a replaced channel ends in a call while the new one begins one"
+    )]
+    fn a_replaced_channel_ending_in_a_call_never_releases_the_new_calls_button() {
+        use crate::lazurio::app::device::v1::Working;
+        use crate::testkit::{
+            EngineEvent, Event, FakeEngines, FakeUtility, Order, scripted_sessions, spawning,
+        };
+        use serde_json::json;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _forks = spawning();
+        let (environment, mut orders) = scripted_sessions(2);
+        let new = orders.remove(1);
+        let old = orders.remove(0);
+        let engines = FakeEngines::start();
+        let mut spec = engines.spec();
+        spec.physical_input = true;
+        let utility = FakeUtility::absent();
+        let (device, states, locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            Some(spec),
+        );
+        let releases = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&releases);
+        let mut device = device
+            .with_ender(gated_end)
+            .with_pointer_release(Arc::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }));
+        let working = (
+            "env-a".to_owned(),
+            channel_state::State::Working(Working {
+                tool: "desktop_wait".to_owned(),
+                application: String::new(),
+            }),
+        );
+        let call = |session: &std::sync::mpsc::Sender<Order>, init: &str| {
+            session
+                .send(Order::Send(
+                    json!({"jsonrpc": "2.0", "id": init, "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
+                ))
+                .expect("the session follows orders");
+            session
+                .send(Order::Send(
+                    json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "desktop_wait", "arguments": {}}}),
+                ))
+                .expect("the session follows orders");
+        };
+
+        // The old channel's agent runs a tool call on engine 1.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        call(&old, "o0");
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 1, tool, .. } if tool == "desktop_wait")
+        });
+        while state_of(&states) != working {}
+
+        // A new hand-over replaces the channel; engine 1's end waits at the gate while the new
+        // channel's agent begins a call on engine 2.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
+        call(&new, "n0");
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 2, tool, .. } if tool == "desktop_wait")
+        });
+        *END_GATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        END_GATE_OPENED.notify_all();
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(1))),
+            EngineEvent::Ended(1),
+            "the old engine ended in its call, after the new call began"
+        );
+        // Its session closes only after the engine's end went through the lock.
+        assert_eq!(
+            environment.until(|event| *event == Event::Closed),
+            Event::Closed
+        );
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            0,
+            "the old engine released the new call's button"
+        );
+
+        // Stop ends engine 2 in its call: one release, its own.
+        device.answer(&app_message::Kind::StopAgent(StopAgent {}));
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(2))),
+            EngineEvent::Ended(2)
+        );
+        // The release comes inside the lock, before the hold ends and the computer is idle.
+        while !locks
+            .recv_timeout(crate::testkit::PATIENCE)
+            .expect("who holds the computer is reported")
+            .idle
+        {}
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "only the engine that began the last call released the button"
         );
         assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
     }

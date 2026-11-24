@@ -83,6 +83,9 @@ pub struct DeviceLock {
     unconfirmed: bool,
     /// The sequence of the last snapshot [`DeviceLock::state`] took.
     sequence: u64,
+    /// The engine that began the last tool call: with physical input, the only one whose end
+    /// may release the mouse button, since a later call of any other engine took the input over.
+    input_engine: Option<u64>,
 }
 
 impl DeviceLock {
@@ -102,6 +105,7 @@ impl DeviceLock {
             update_hold: false,
             unconfirmed: false,
             sequence: 0,
+            input_engine: None,
         }
     }
 
@@ -150,6 +154,17 @@ impl DeviceLock {
     }
 
     /// A tool call of `environment_id` finished at `now`.
+    /// Engine `engine` began a tool call that [`DeviceLock::try_begin`] allowed.
+    pub fn began_input(&mut self, engine: u64) {
+        self.input_engine = Some(engine);
+    }
+
+    /// The engine that began the last tool call, if any did.
+    #[must_use]
+    pub fn input_engine(&self) -> Option<u64> {
+        self.input_engine
+    }
+
     pub fn end_call(&mut self, environment_id: &str, now: Instant) {
         if let Some(hold) = self
             .hold
