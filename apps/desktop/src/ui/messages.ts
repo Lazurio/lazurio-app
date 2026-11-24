@@ -214,7 +214,8 @@ export interface DeviceText {
     readonly restart: string;
     // Under the rows while Screen Recording is missing.
     readonly screenAfterRestart: string;
-    // An ad hoc signed build: a row switched on for another build of the app does not count.
+    // After a restart that did not help: an ad hoc signed build does not count a row switched on
+    // for another build of the app.
     readonly otherBuild: string;
   };
 }
@@ -471,7 +472,7 @@ const cs: Text = {
       restart: `Restartovat ${APP_NAME}`,
       screenAfterRestart: "Nahrávání obrazovky platí až po restartu aplikace.",
       otherBuild:
-        "Svítí Lazurio App v Nastavení systému u tohoto oprávnění už zapnutá? Pak ho macOS drží pro jinou verzi aplikace, třeba tu před aktualizací, a vypnutí a zapnutí nepomůže. Vyberte Lazurio App v seznamu, odeberte ji tlačítkem − a přidejte znovu tlačítkem +. Potom aplikaci restartujte.",
+        "Svítí Lazurio App v Nastavení systému zapnutá i po restartu aplikace, a tady pořád Nepovoleno? Pak macOS oprávnění nejspíš drží pro jinou verzi aplikace, třeba tu před aktualizací, a vypnutí a zapnutí nepomůže. Vyberte Lazurio App v seznamu, odeberte ji tlačítkem − a přidejte znovu tlačítkem +. Potom aplikaci restartujte znovu.",
     },
   },
   tray: {
@@ -743,7 +744,7 @@ const en: Text = {
       restart: `Restart ${APP_NAME}`,
       screenAfterRestart: "Screen Recording takes effect after the app restarts.",
       otherBuild:
-        "Is Lazurio App already switched on for this permission in System Settings? Then macOS keeps it for another version of the app, such as the one before an update, and switching it off and on does not help. Select Lazurio App in the list, remove it with −, and add it again with +. Then restart the app.",
+        "Is Lazurio App switched on in System Settings even after the app restarted, and still Not allowed here? Then macOS most likely keeps the permission for another version of the app, such as the one before an update, and switching it off and on does not help. Select Lazurio App in the list, remove it with −, and add it again with +. Then restart the app again.",
     },
   },
   tray: {
