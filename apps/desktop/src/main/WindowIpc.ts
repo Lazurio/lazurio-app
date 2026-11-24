@@ -8,6 +8,7 @@ import {
   COPY_STATUS_CHANNEL,
   COPY_TAILNET_SIGN_IN_CHANNEL,
   FIRST_PAGE_CHANNEL,
+  NETWORK_HELP_CHANNEL,
   RETRY_PAGE_CHANNEL,
   STATUS_PANEL_CHANNEL,
 } from "../shared/bridge.ts";
@@ -48,6 +49,8 @@ export interface WindowControls {
   readonly retryPage: Effect.Effect<void>;
   // Loads the window's first page instead, until the attempt has shown or failed.
   readonly firstPage: Effect.Effect<void>;
+  // Says in a dialog of the system what a person without the Organization's network does.
+  readonly networkHelp: Effect.Effect<void>;
 }
 
 export const serve = Effect.fn("WindowIpc.serve")(function* (controls: WindowControls) {
@@ -84,4 +87,5 @@ export const serve = Effect.fn("WindowIpc.serve")(function* (controls: WindowCon
   );
   yield* handle(RETRY_PAGE_CHANNEL, () => controls.retryPage);
   yield* handle(FIRST_PAGE_CHANNEL, () => controls.firstPage);
+  yield* handle(NETWORK_HELP_CHANNEL, () => controls.networkHelp);
 });

@@ -955,6 +955,17 @@ const program = Effect.gen(function* () {
       }),
     ),
     signInAddress: tailnets.signInAddress,
+    networkHelp: Effect.promise(async () => {
+      const options = {
+        type: "info" as const,
+        title: APP_NAME,
+        message: text.page.networkTitle,
+        detail: text.networkMissing,
+      };
+      if (Option.isSome(mainWindow) && !mainWindow.value.isDestroyed()) {
+        await Electron.dialog.showMessageBox(mainWindow.value, options);
+      } else await Electron.dialog.showMessageBox(options);
+    }),
     retryPage: Effect.promise(() =>
       Option.isSome(windowControls) ? windowControls.value.retryPage() : Promise.resolve(),
     ),
@@ -1068,7 +1079,7 @@ const program = Effect.gen(function* () {
         get view() {
           return agentBar();
         },
-        height: () => agentBarHeight(deviceControls.current()),
+        height: () => agentBarHeight(deviceControls.current(), joining.networkMissing),
       },
       // Called once the column's page has loaded: the bar's page follows it.
       showOnLoad: () => {
