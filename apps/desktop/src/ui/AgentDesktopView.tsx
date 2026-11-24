@@ -376,6 +376,9 @@ export function AgentDesktopView({
           <h1>{text.computer}</h1>
           <Help label={text.help}>{text.computerHelp}</Help>
         </header>
+        <p className="ad__muted" data-device-lead>
+          {text.computerLead}
+        </p>
         {status.state === "starting" ? <p className="ad__muted">{text.starting}</p> : null}
         {status.state === "failed" ? (
           <Notice kind="failed" sentence={text.failed} text={text} />

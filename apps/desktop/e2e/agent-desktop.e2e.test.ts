@@ -336,6 +336,11 @@ describe("Agent Desktop's switch", () => {
     await shell.locator('[data-device-account="signed-out"]').waitFor();
     await shell.locator(`[data-device-add="${ENVIRONMENT}"]`).waitFor();
     await shell.locator('[data-device-environments="none"]').waitFor();
+    // The window says plainly what a switch turns on: full control, the mouse and keyboard too.
+    assert.match(
+      await shell.locator("[data-device-lead]").innerText(),
+      /full control of this computer.*mouse.*keyboard|plné ovládání tohoto počítače.*myší.*klávesnici/su,
+    );
     const calls = await shell.evaluate(() => Object.keys(window.lazurio.device).toSorted());
     assert.deepStrictEqual(calls, [
       "addEnvironment",
@@ -415,7 +420,7 @@ describe("Agent Desktop's switch", () => {
     await shell.locator(".ad__head .ad__help summary").click();
     assert.match(
       await shell.locator(".ad__head .ad__help p").innerText(),
-      /lets agents|pustí agenty/u,
+      /works the way you do.*Stop|pracuje jako vy.*Zastavit/su,
     );
     await shell.locator(".ad__head .ad__help summary").click();
   });

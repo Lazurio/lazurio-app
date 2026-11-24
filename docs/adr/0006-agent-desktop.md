@@ -165,6 +165,18 @@ How Lazurio App carries the three locks above (task-2026-11-17-936). There is no
 
 - **The guard against the utility replaces the takeover of point 4.** The helper opens no channel while the utility Lazurio Agent Desktop keeps an entry of `io.lazurio.agent-desktop` in the system's keystore, and stops an agent when one appears (`agent_desktop_paired`). The window tells the person what to do: remove every Environment in the utility and uninstall it, or, once it is uninstalled, delete those entries in Credential Manager or Keychain Access, then turn the switch on again. The app reads, takes and deletes nothing of the utility.
 
+### Full control of the computer (2026-11-24)
+
+On 2026-11-24 Matěj decided on #108: physical input belongs under the same switch, "either full control of the computer, or none". There is no second consent and no hidden switch.
+
+- **The switch means full control.** The helper always starts the engine as `agent-desktop mcp --headed`. An agent sees the screen, moves the real pointer, clicks and drags at coordinates, types on the keyboard and focuses windows. Before this, the engine ran in its default strict headless mode, which delivers input only through accessibility and refuses pointer moves. The trial switch `LAZURIO_AGENT_DESKTOP_HEADED` of #105 never reached `main`.
+- **The window says it in plain words.** Agent Desktop's window says, under its heading, that a switch that is on gives the Environment's agents full control of the computer, with the mouse and the keyboard. Its help tells the person not to use the computer while an agent works, or to stop the agent first.
+- **What stays:** the bar with Stop over the page and Stop in the notification area. The status column never opens for an agent's work.
+- **A button released after an ended engine (#112).** The helper ends an engine's whole process tree (point 8), so a drag cut off by Stop never releases the mouse button it pressed, and the person's next move would draw on. Once the tree of an engine with physical input is ended, the helper releases the left mouse button itself, on Windows and macOS. A release with no press before it changes nothing.
+  - The call is made with [`enigo`](https://crates.io/crates/enigo), following the rules of point 1 and point 8: an exact version, MIT, no default features, and only for Windows and macOS.
+  - The cost: a person who holds the left button at the moment an engine ends has that press cut.
+  - Not done: cancelling the engine's calls before the kill, so that the engine releases by itself. On Windows the engine kills its tool at once, so that path needs a change of the fork.
+
 ## Alternatives considered
 
 | Alternative                                                               | Why not                                                                                                                                                                                         |

@@ -1,4 +1,4 @@
-//! The engine `agent-desktop mcp` of one session (ADR 0006 points 1 and 8).
+//! The engine `agent-desktop mcp --headed` of one session (ADR 0006 points 1 and 8).
 //!
 //! The engine lies next to the helper's binary; the helper never builds or downloads it. A
 //! session starts it after `ready` and speaks newline-delimited JSON-RPC with it over its standard
@@ -18,6 +18,11 @@
 //!
 //! [`Engine::end`] first closes the engine's input and gives it a grace to exit, then ends the
 //! tree and says whether it is gone. Dropping an [`Engine`] ends the tree too.
+//!
+//! The switch of Agent Desktop means full control of the computer: the engine delivers physical
+//! input (`--headed`), so it moves the real pointer, clicks and types (ADR 0006 point 9). A tree
+//! ended in the middle of a drag never releases the mouse button it pressed, so once the tree of
+//! such an engine is ended the helper releases the left button itself ([`release_pointer`]).
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -48,11 +53,19 @@ impl EngineSpec {
         };
         Some(Self {
             program: helper.parent()?.join(name),
-            args: vec!["mcp".to_owned()],
+            args: vec!["mcp".to_owned(), HEADED.to_owned()],
             env: Vec::new(),
         })
     }
+
+    /// Whether the engine delivers physical input, so ending it may leave a button pressed.
+    fn headed(&self) -> bool {
+        self.args.iter().any(|arg| arg == HEADED)
+    }
 }
+
+/// The engine's flag for physical input: it moves the pointer, clicks and types.
+const HEADED: &str = "--headed";
 
 /// What the engine said.
 #[derive(Debug, PartialEq, Eq)]
@@ -76,6 +89,8 @@ pub struct Engine {
     jobs: Option<(win32job::Job, win32job::Job)>,
     /// Whether the tree was already ended.
     ended: bool,
+    /// Whether ending the tree releases the mouse button: the engine delivered physical input.
+    releases_pointer: bool,
 }
 
 impl Engine {
@@ -115,6 +130,7 @@ impl Engine {
             #[cfg(windows)]
             jobs: None,
             ended: false,
+            releases_pointer: spec.headed(),
         };
         #[cfg(windows)]
         {
@@ -175,9 +191,34 @@ impl Engine {
     fn end_tree(&mut self) -> bool {
         self.ended = true;
         self.input = None;
-        end_process_tree(self, Instant::now() + TREE_GONE_WITHIN)
+        let gone = end_process_tree(self, Instant::now() + TREE_GONE_WITHIN);
+        if self.releases_pointer {
+            release_pointer();
+        }
+        gone
     }
 }
+
+/// Releases the left mouse button, which an engine ended in the middle of a drag leaves pressed:
+/// the person's next move would draw on. A release without a press before it changes nothing
+/// on Windows and macOS. Elsewhere the engine delivers no physical input.
+#[cfg(any(windows, target_os = "macos"))]
+fn release_pointer() {
+    use enigo::{Button, Direction, Enigo, Mouse, Settings};
+    let settings = Settings {
+        // The app asks for Accessibility itself (Agent Desktop's window); the helper never does.
+        open_prompt_to_get_permissions: false,
+        release_keys_when_dropped: false,
+        ..Settings::default()
+    };
+    // Without input, or without Accessibility on macOS, there is nothing to release with.
+    if let Ok(mut input) = Enigo::new(&settings) {
+        let _ = input.button(Button::Left, Direction::Release);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn release_pointer() {}
 
 /// How often an ending engine is checked.
 const CHECK_EVERY: Duration = Duration::from_millis(5);
@@ -430,7 +471,8 @@ mod tests {
                 "agent-desktop"
             }
         );
-        assert_eq!(spec.args, ["mcp"]);
+        assert_eq!(spec.args, ["mcp", "--headed"]);
+        assert!(spec.headed());
         assert_eq!(spec.env, Vec::<(String, String)>::new());
     }
 

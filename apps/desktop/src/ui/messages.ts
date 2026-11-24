@@ -140,6 +140,8 @@ export interface DeviceText {
   readonly title: string;
   // The window's head and what "?" beside it says.
   readonly computer: string;
+  // What the switch turns on, said in the window itself: full control, mouse and keyboard included.
+  readonly computerLead: string;
   readonly computerHelp: string;
   readonly starting: string;
   readonly failed: string;
@@ -350,8 +352,10 @@ const cs: Text = {
   device: {
     title: "Agent Desktop",
     computer: "Tento počítač",
+    computerLead:
+      "Zapnutý vypínač dá agentům z daného Prostředí plné ovládání tohoto počítače: vidí obrazovku, hýbou skutečnou myší a píšou na klávesnici. Dokud agent pracuje, je nahoře v okně lišta s tlačítkem Zastavit.",
     computerHelp:
-      "Zapnutý vypínač pustí agenty z daného Prostředí ovládat tento počítač: uvidí obrazovku a budou ovládat aplikace. Zastavit je ukončí kdykoli. Vypínače jsou jen v tomto okně; Zastavit je i v oznamovací oblasti. Webové Lazurio stav ukáže, ale nic nezapne. Po každém spuštění aplikace jsou všechny vypnuté.",
+      "Agent pracuje jako vy: hýbe kurzorem, kliká, táhne a píše do okna, které je vpředu. Když na počítači pracuje agent, sami na něm nepracujte, nebo agenta nejdřív zastavte. Zastavit ukončí jeho práci kdykoli, v liště nahoře v okně i v oznamovací oblasti. Vypínače jsou jen v tomto okně. Webové Lazurio stav ukáže, ale nic nezapne. Po každém spuštění aplikace jsou všechny vypnuté.",
     starting: "Spouští se…",
     failed: `Agent Desktop se nespustil. Spusťte ${APP_NAME} znovu.`,
     lost: "Nevíme, jestli agent ještě pracuje.",
@@ -622,8 +626,10 @@ const en: Text = {
   device: {
     title: "Agent Desktop",
     computer: "This computer",
+    computerLead:
+      "A switch that is on gives agents from that Environment full control of this computer: they see the screen, move the real mouse and type on the keyboard. While an agent works, a bar with Stop is at the top of the window.",
     computerHelp:
-      "A switch that is on lets agents from that Environment use this computer: they see the screen and work in its apps. Stop ends their work at any time. The switches are only in this window; Stop is also in the notification area. The web Lazurio shows their state but turns nothing on. Every switch is off after each start of the app.",
+      "An agent works the way you do: it moves the pointer, clicks, drags and types into the window in front. While an agent works on the computer, do not use it yourself, or stop the agent first. Stop ends its work at any time, in the bar at the top of the window and in the notification area. The switches are only in this window. The web Lazurio shows their state but turns nothing on. Every switch is off after each start of the app.",
     starting: "Starting…",
     failed: `Agent Desktop did not start. Start ${APP_NAME} again.`,
     lost: "It is not known whether an agent is still working.",
