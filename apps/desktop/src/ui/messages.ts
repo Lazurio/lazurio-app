@@ -214,6 +214,8 @@ export interface DeviceText {
     readonly restart: string;
     // Under the rows while Screen Recording is missing.
     readonly screenAfterRestart: string;
+    // An ad hoc signed build: a row switched on for another build of the app does not count.
+    readonly otherBuild: string;
   };
 }
 
@@ -468,6 +470,8 @@ const cs: Text = {
       open: "Otevřít Nastavení",
       restart: `Restartovat ${APP_NAME}`,
       screenAfterRestart: "Nahrávání obrazovky platí až po restartu aplikace.",
+      otherBuild:
+        "Svítí Lazurio App v Nastavení systému u tohoto oprávnění už zapnutá? Pak ho macOS drží pro jinou verzi aplikace, třeba tu před aktualizací, a vypnutí a zapnutí nepomůže. Vyberte Lazurio App v seznamu, odeberte ji tlačítkem − a přidejte znovu tlačítkem +. Potom aplikaci restartujte.",
     },
   },
   tray: {
@@ -738,6 +742,8 @@ const en: Text = {
       open: "Open System Settings",
       restart: `Restart ${APP_NAME}`,
       screenAfterRestart: "Screen Recording takes effect after the app restarts.",
+      otherBuild:
+        "Is Lazurio App already switched on for this permission in System Settings? Then macOS keeps it for another version of the app, such as the one before an update, and switching it off and on does not help. Select Lazurio App in the list, remove it with −, and add it again with +. Then restart the app.",
     },
   },
   tray: {

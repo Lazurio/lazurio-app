@@ -170,11 +170,14 @@ jobs:
         working-directory: apps/desktop
         env:
           # electron-builder skips signing on pull requests, even the ad hoc signature, which uses no
-          # secret (trial/electron-builder.trial.yml); this job holds no signing secret.
+          # secret (trial/electron-builder.trial.yml); this job holds no signing secret. A trial
+          # build has an identity of its own, so macOS keeps its permissions apart from those of the
+          # installed app and a trial never takes them away.
           CSC_FOR_PULL_REQUEST: "true"
         run: |
           pnpm exec electron-builder --config trial/electron-builder.trial.yml \
             --mac zip --arm64 --publish never \
+            -c.appId=io.lazurio.app.trial \
             -c.extraMetadata.version=0.0.1 \
             -c.directories.output=trial/out/0.0.1
       - name: Helper versions

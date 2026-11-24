@@ -624,7 +624,8 @@ describe("Agent Desktop's switch", () => {
     assert.strictEqual(signIns, signInsBefore);
     assert.strictEqual(handOverOrigins.length, handOversBefore);
     assert.notInclude(output.join("").slice(from), "system-browser");
-    // Two rows with their state, the sentence about the restart, one button.
+    // Two rows with their state, the sentences about the restart and about a row switched on
+    // for another build of the app, one button.
     assert.deepStrictEqual(
       await permissions()
         .locator("[data-permission][data-allowed]")
@@ -640,7 +641,11 @@ describe("Agent Desktop's switch", () => {
       ],
     );
     assert.strictEqual(await permissions().locator("button").count(), 1);
-    assert.strictEqual(await permissions().locator("p").count(), 1);
+    assert.strictEqual(await permissions().locator("p").count(), 2);
+    assert.match(
+      await permissions().locator('[data-permission-note="other-build"]').innerText(),
+      /remove it with −, and add it again with \+|odeberte ji tlačítkem − a přidejte znovu tlačítkem \+/u,
+    );
     // The window sends only a kind; the main process refuses any other.
     const refused = await shell.evaluate(async () => {
       const results: Array<string> = [];
