@@ -5,19 +5,38 @@ import type { DeviceStatus } from "../shared/bridge.ts";
 import { localeOf, messages } from "./messages.ts";
 
 // The bar across the top of the main window while an agent holds the computer (?view=agent-bar):
-// who works, Stop, and the Agent Desktop window. The main process gives it height only then
-// (MainWindow.topBar, agentBarHeight); without an agent it renders nothing.
+// who works, Stop, and the Agent Desktop window. Without an agent, and without the Organization's
+// network, it says that on every page, with a button for what to do. The main process gives it
+// height only then (MainWindow.topBar, agentBarHeight); otherwise it renders nothing.
 export function AgentBar() {
   const [status, setStatus] = useState<DeviceStatus | null>(null);
+  // Known at the app's start; once the network appears, the app starts again (SettingWatch.ts).
+  const [networkMissing, setNetworkMissing] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [stopFailed, setStopFailed] = useState(false);
   useEffect(() => {
     const stop = window.lazurio.device.subscribe(setStatus);
     void window.lazurio.device.getState().then(setStatus);
+    void window.lazurio.status().then((app) => setNetworkMissing(app.networkMissing));
     return stop;
   }, []);
-  const text = messages[localeOf(navigator.language)].device;
+  const words = messages[localeOf(navigator.language)];
+  const text = words.device;
   const agent = workingAgent(status);
+  if (agent === null && networkMissing) {
+    return (
+      <div className="agent-bar" data-agent-bar="network" role="status">
+        <p className="agent-bar__text">{words.networkBar}</p>
+        <button
+          type="button"
+          data-action="network-help"
+          onClick={() => void window.lazurio.showNetworkHelp()}
+        >
+          {words.networkHelp}
+        </button>
+      </div>
+    );
+  }
   if (agent === null) return <div className="agent-bar" data-agent-bar="none" />;
   const stopAgent = () => {
     setStopping(true);

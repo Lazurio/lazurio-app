@@ -1,7 +1,7 @@
 // End-to-end: without the Organization's network (a stable build with no setting), a page of the
 // Organization's network that does not load says that the network is not set up (#81), while any
 // other page that does not load, the public Dashboard's for one, keeps its own reason (review of
-// #84). Nothing serves launchpad.e2e.lazurio.io, so its name does not resolve.
+// #84). The status column stays hidden. Nothing serves launchpad.e2e.lazurio.io, so its name does not resolve.
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A plain HTTP server serves the other page.
 import * as NodeHttp from "node:http";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the app on disk.
@@ -74,6 +74,15 @@ describe("Lazurio App GEN4 without the Organization's network", () => {
     const text = await problemShown("network");
     assert.match(text, /not set up yet|zatím není nastavená/u);
     assert.match(text, /starts again by itself|sama spustí znovu/u);
+    // It says it in the window's page, not by opening the status column.
+    const shown = await app.evaluate(({ BaseWindow }) => {
+      const window = BaseWindow.getAllWindows()[0];
+      return {
+        window: window?.isVisible() === true,
+        column: window?.contentView.children[0]?.getVisible() === true,
+      };
+    });
+    assert.deepStrictEqual(shown, { window: true, column: false });
   });
 
   it("keeps the own reason of a page outside the Organization's network", async () => {

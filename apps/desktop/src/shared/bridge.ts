@@ -25,6 +25,8 @@ export const DEVICE_OPEN_PERMISSION_SETTINGS_CHANNEL = "lazurio:device-open-perm
 export const DEVICE_RESTART_APP_CHANNEL = "lazurio:device-restart-app";
 export const STATUS_PANEL_CHANNEL = "lazurio:status-panel";
 export const COPY_STATUS_CHANNEL = "lazurio:copy-status";
+// What a person without the Organization's network does, in a dialog of the system.
+export const NETWORK_HELP_CHANNEL = "lazurio:network-help";
 // Copies the sign-in address of a tailnet that waits for sign-in; the address stays in the main
 // process.
 export const COPY_TAILNET_SIGN_IN_CHANNEL = "lazurio:copy-tailnet-sign-in";
@@ -271,6 +273,8 @@ export interface LazurioBridge {
   readonly setStatusPanel: (shown: boolean) => Promise<void>;
   // Copies the app's status as text without secrets (statusText.ts) to the clipboard.
   readonly copyStatus: () => Promise<void>;
+  // Says in a dialog of the system why the Organization's network is missing and what to do.
+  readonly showNetworkHelp: () => Promise<void>;
   // Copies the sign-in address of a tailnet that waits for sign-in to the clipboard; fails when
   // the app holds none.
   readonly copyTailnetSignIn: (tailnet: string) => Promise<void>;

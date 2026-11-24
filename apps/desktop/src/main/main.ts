@@ -611,8 +611,8 @@ const program = Effect.gen(function* () {
   });
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
   const joining = yield* tailnetsToJoin;
-  // Without the Organization's network the status column opens and says what is missing.
-  if (joining.networkMissing) setStatusShown(true);
+  // Without the Organization's network, a page of it says what is missing in the page's place
+  // (MainWindow, kind "network"); the status column, a surface for support, stays hidden.
   const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
   const tailnets: Tailnet.Tailnets =
     tailnetHelper !== undefined && Option.isSome(tailnetHelper.connection)
@@ -957,6 +957,17 @@ const program = Effect.gen(function* () {
       }),
     ),
     signInAddress: tailnets.signInAddress,
+    networkHelp: Effect.promise(async () => {
+      const options = {
+        type: "info" as const,
+        title: APP_NAME,
+        message: text.page.networkTitle,
+        detail: text.networkMissing,
+      };
+      if (Option.isSome(mainWindow) && !mainWindow.value.isDestroyed()) {
+        await Electron.dialog.showMessageBox(mainWindow.value, options);
+      } else await Electron.dialog.showMessageBox(options);
+    }),
     retryPage: Effect.promise(() =>
       Option.isSome(windowControls) ? windowControls.value.retryPage() : Promise.resolve(),
     ),
@@ -1074,7 +1085,7 @@ const program = Effect.gen(function* () {
         get view() {
           return agentBar();
         },
-        height: () => agentBarHeight(deviceControls.current()),
+        height: () => agentBarHeight(deviceControls.current(), joining.networkMissing),
       },
       // Called once the column's page has loaded: the bar's page follows it.
       showOnLoad: () => {

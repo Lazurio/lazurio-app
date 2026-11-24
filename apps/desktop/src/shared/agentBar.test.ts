@@ -31,4 +31,10 @@ describe("the agent's bar", () => {
     assert.strictEqual(agentBarHeight(status("unknown", "lost")), 0);
     assert.strictEqual(agentBarHeight(null), 0);
   });
+
+  it("says on every page that the Organization's network is missing, while no agent works", () => {
+    assert.strictEqual(agentBarHeight(status(null), true), AGENT_BAR_HEIGHT);
+    assert.strictEqual(agentBarHeight(null, true), AGENT_BAR_HEIGHT);
+    assert.strictEqual(agentBarHeight(status("unknown", "lost"), true), AGENT_BAR_HEIGHT);
+  });
 });

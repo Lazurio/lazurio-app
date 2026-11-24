@@ -22,6 +22,9 @@ export interface Text {
   readonly noTailnets: string;
   // A stable build without the Organization's network.
   readonly networkMissing: string;
+  // The same, short, in the bar over every page, with the button for the whole explanation.
+  readonly networkBar: string;
+  readonly networkHelp: string;
   // The network setting appeared while the app ran: it starts again (SettingWatch.ts, #81).
   readonly networkFound: string;
   // The heading of the nodes' addresses under the technical details.
@@ -274,6 +277,8 @@ const cs: Text = {
   tailnets: "Síť Organizace",
   noTailnets: "Žádná síť",
   addresses: "Adresy v síti",
+  networkBar: `Síť vaší Organizace zatím není nastavená, proto se ${APP_NAME} k Prostředím nepřipojí.`,
+  networkHelp: "Co dělat",
   networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Soubor se sítí vám pošle Lazurio nebo Admin vaší Organizace, případně ji nastaví IT. Po jeho spuštění se ${APP_NAME} sama spustí znovu a připojí se.`,
   networkFound: `Síť vaší Organizace je nastavená. ${APP_NAME} se teď spustí znovu a připojí se.`,
   starting: "Připojuje se",
@@ -544,6 +549,8 @@ const en: Text = {
   tailnets: "Organization networks",
   noTailnets: "No network",
   addresses: "Addresses in the network",
+  networkBar: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments.`,
+  networkHelp: "What to do",
   networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Lazurio or your Organization's Admin sends you the file with the network, or your IT sets it. Once it has run, ${APP_NAME} starts again by itself and connects.`,
   networkFound: `Your Organization's network is set up. ${APP_NAME} starts again now and connects.`,
   starting: "Connecting",
