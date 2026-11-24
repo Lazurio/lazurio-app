@@ -81,14 +81,31 @@ describe("Lazurio App GEN4 without the Organization's network, on a page outside
   });
 
   it("keeps saying it after the page moves on, as after a sign-in", async () => {
-    await app.evaluate(async ({ BaseWindow, WebContentsView }, address) => {
+    const moved = await app.evaluate(async ({ BaseWindow, WebContentsView }, address) => {
       const main = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
-      const page = main?.contentView.children.find(
-        (child): child is Electron.WebContentsView =>
-          child instanceof WebContentsView && child.webContents.getURL().startsWith(address),
+      const views = (main?.contentView.children ?? []).filter(
+        (child): child is Electron.WebContentsView => child instanceof WebContentsView,
       );
-      await page?.webContents.loadURL(`${address}signed-in`);
+      const loaded = () =>
+        views
+          .map((view) => view.webContents)
+          .find((contents) => contents.getURL().startsWith(address) && !contents.isLoading());
+      // The first page has finished loading: a navigation in the middle of it would abort it, and
+      // Electron rejects the new load with that abort (-3).
+      const page =
+        loaded() ??
+        (await new Promise<Electron.WebContents>((resolve) => {
+          for (const view of views) {
+            view.webContents.on("did-stop-loading", () => {
+              const found = loaded();
+              if (found !== undefined) resolve(found);
+            });
+          }
+        }));
+      await page.loadURL(`${address}signed-in`);
+      return page.getURL();
     }, overview);
+    assert.strictEqual(moved, `${overview}signed-in`);
     const bar = await localPage(app, "view=agent-bar");
     await bar.locator('[data-agent-bar="network"]').waitFor();
     assert.deepStrictEqual(await shown(), { window: true, column: false, bar: 36 });
