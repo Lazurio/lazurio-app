@@ -67,13 +67,13 @@ describe("DeviceEnvironments", () => {
       assert.deepStrictEqual(again.origins(), [ORIGIN, OTHER]);
       assert.isFalse(yield* fileSystem.exists(`${file}.new`));
       assert.deepStrictEqual(JSON.parse(yield* fileSystem.readFileString(file)), {
-        version: 2,
+        version: 3,
         environments: [{ origin: ORIGIN }, { origin: OTHER }],
       });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("moves a version 1 file to version 2 without losing an Environment", () =>
+  it.effect("moves a version 1 file to version 3 without losing an Environment", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const directory = yield* fileSystem.makeTempDirectoryScoped();
@@ -85,14 +85,14 @@ describe("DeviceEnvironments", () => {
       const environments = yield* open(file);
       assert.deepStrictEqual(environments.origins(), [ORIGIN, OTHER]);
       assert.deepStrictEqual(environments.names(ORIGIN), {});
-      // Reading changes nothing on disk; the first change writes version 2 with every Environment.
+      // Reading changes nothing on disk; the first change writes version 3 with every Environment.
       assert.strictEqual(JSON.parse(yield* fileSystem.readFileString(file)).version, 1);
       yield* environments.setNames(ORIGIN, {
         name: "  Bob Dvořák ",
         organization: "Ukázková Organizace",
       });
       assert.deepStrictEqual(JSON.parse(yield* fileSystem.readFileString(file)), {
-        version: 2,
+        version: 3,
         environments: [
           { origin: ORIGIN, name: "Bob Dvořák", organization: "Ukázková Organizace" },
           { origin: OTHER },
@@ -114,6 +114,42 @@ describe("DeviceEnvironments", () => {
       yield* again.remove(ORIGIN);
       yield* again.add(ORIGIN);
       assert.deepStrictEqual(again.names(ORIGIN), {});
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps a switch the person left on across a restart, until they turn it off", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const directory = yield* fileSystem.makeTempDirectoryScoped();
+      const file = (yield* Path.Path).join(directory, "agent-desktop-environments.json");
+      // A version 2 file: every switch reads as off.
+      yield* fileSystem.writeFileString(
+        file,
+        JSON.stringify({
+          version: 2,
+          environments: [{ origin: ORIGIN, name: "Bob" }, { origin: OTHER }],
+        }),
+      );
+      const first = yield* open(file);
+      assert.isFalse(first.leftOn(ORIGIN));
+      yield* first.setLeftOn(ORIGIN, true);
+      yield* first.setLeftOn("https://launchpad.dave.example-org.lazurio.io", true);
+      // New names keep the switch; the file says it.
+      yield* first.setNames(ORIGIN, { name: "Bob Dvořák" });
+      assert.deepStrictEqual(JSON.parse(yield* fileSystem.readFileString(file)), {
+        version: 3,
+        environments: [{ origin: ORIGIN, name: "Bob Dvořák", on: true }, { origin: OTHER }],
+      });
+      const again = yield* open(file);
+      assert.isTrue(again.leftOn(ORIGIN));
+      assert.isFalse(again.leftOn(OTHER));
+      assert.isFalse(again.leftOn("https://launchpad.dave.example-org.lazurio.io"));
+      yield* again.setLeftOn(ORIGIN, false);
+      assert.isFalse((yield* open(file)).leftOn(ORIGIN));
+      assert.deepStrictEqual(JSON.parse(yield* fileSystem.readFileString(file)).environments[0], {
+        origin: ORIGIN,
+        name: "Bob Dvořák",
+      });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

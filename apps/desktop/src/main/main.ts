@@ -23,9 +23,11 @@ import * as Electron from "electron";
 
 import { agentBarHeight, workingAgent } from "../shared/agentBar.ts";
 import { APP_NAME } from "../shared/appName.ts";
+import { namedEnvironment } from "../shared/environmentName.ts";
 import {
   STATUS_CHANGED_CHANNEL,
   type AppStatus,
+  type DeviceSwitchProblem,
   type DeviceStatus,
   type PageOutcome,
   type UpdatesOffReason,
@@ -64,6 +66,7 @@ import * as Tray from "./Tray.ts";
 import * as Updates from "./Updates.ts";
 import * as UpdatesIpc from "./UpdatesIpc.ts";
 import * as WindowIpc from "./WindowIpc.ts";
+import * as MacLoginItem from "./MacLoginItem.ts";
 
 // Lazurio App GEN4 (decision 0248): the main process. It serves the app's own windows, guards
 // every web contents, starts the helper processes and opens the main window.
@@ -570,7 +573,8 @@ const program = Effect.gen(function* () {
       }),
   );
   yield* Effect.promise(() => Electron.app.whenReady());
-  // A packaged app on Windows starts, hidden, when the person signs in (Lifecycle.loginItem).
+  // A packaged app starts, hidden, when the person signs in: on Windows through its login item
+  // (Lifecycle.loginItem), on a Mac through a LaunchAgent of the person's own (MacLoginItem.ts).
   const loginItem = Lifecycle.loginItem({ platform, packaged: Electron.app.isPackaged });
   if (Option.isSome(loginItem)) {
     Electron.app.setLoginItemSettings({
@@ -578,6 +582,19 @@ const program = Effect.gen(function* () {
       args: [...loginItem.value.args],
       name: loginItem.value.name,
     });
+  }
+  if (platform === "darwin" && Electron.app.isPackaged) {
+    const home = NodeOS.homedir();
+    const bundle = MacLoginItem.installedBundle(process.execPath, home);
+    if (Option.isSome(bundle)) {
+      yield* MacLoginItem.ensure(home, bundle.value).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("the start at the sign-in to the Mac could not be set", {
+            problem: String(error),
+          }),
+        ),
+      );
+    }
   }
   const appPath = Electron.app.getAppPath();
 
@@ -653,7 +670,21 @@ const program = Effect.gen(function* () {
     }),
   );
   // Its switches (contract v3): the Environments the person added, the app's own sign-in with
-  // Lazurio Auth and a hand-over for each channel. Every switch is off after each start.
+  // Lazurio Auth and a hand-over for each channel. A switch the person left on goes on again at the
+  // start (docs/adr/0006, consent until revoked).
+  const deviceEnvironments = yield* DeviceEnvironments.open(
+    path.join(Electron.app.getPath("userData"), "agent-desktop-environments.json"),
+  );
+  const switchNotice = (origin: string, problem: DeviceSwitchProblem | "permissions") => {
+    const { name } = namedEnvironment(origin, deviceEnvironments.names(origin));
+    const words = messages[localeOf(Electron.app.getLocale())].device;
+    return hooks.notice(
+      (problem === "permissions" ? words.permissionsNotice : words.offNotice).replace(
+        "{name}",
+        name,
+      ),
+    );
+  };
   const switches = Option.isSome(device)
     ? Option.some(
         yield* DeviceSwitches.run({
@@ -673,9 +704,7 @@ const program = Effect.gen(function* () {
               }).pipe(Layer.provide(FetchHttpClient.layer)),
             ),
           ),
-          environments: yield* DeviceEnvironments.open(
-            path.join(Electron.app.getPath("userData"), "agent-desktop-environments.json"),
-          ),
+          environments: deviceEnvironments,
           // The Environment's names from its Lazurio, read as the main window's page reads them:
           // with that window's session, so its cookie and its tailnet's proxy, and nothing more.
           readNames: (origin) =>
@@ -683,6 +712,7 @@ const program = Effect.gen(function* () {
               Electron.session.fromPartition(MainWindow.REMOTE_PARTITION).fetch(url, init),
             ),
           permissions,
+          offByItself: switchNotice,
         }),
       )
     : Option.none<DeviceSwitches.DeviceSwitches>();

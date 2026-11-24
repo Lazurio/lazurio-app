@@ -94,9 +94,10 @@ const fakeAuth = (initial: AuthState) =>
     return { shape, state, signIns, handOverAnswers, handOverOrigins, signOutAnswers, calls };
   });
 
-const memoryEnvironments = (origins: ReadonlyArray<string>) => {
+const memoryEnvironments = (origins: ReadonlyArray<string>, leftOn: ReadonlyArray<string> = []) => {
   let list = [...origins];
   const names = new Map<string, EnvironmentNames>();
+  const on = new Set(leftOn);
   const environments: DeviceEnvironments.DeviceEnvironments = {
     origins: () => list,
     names: (origin) => names.get(origin) ?? {},
@@ -112,6 +113,13 @@ const memoryEnvironments = (origins: ReadonlyArray<string>) => {
     setNames: (origin, next) =>
       Effect.sync(() => {
         if (list.includes(origin)) names.set(origin, next);
+      }),
+    leftOn: (origin) => list.includes(origin) && on.has(origin),
+    setLeftOn: (origin, next) =>
+      Effect.sync(() => {
+        if (!list.includes(origin)) return;
+        if (next) on.add(origin);
+        else on.delete(origin);
       }),
   };
   return environments;
@@ -198,6 +206,11 @@ const setUp = (options: {
     });
     const auth = yield* fakeAuth(options.account);
     const names = yield* fakeNames();
+    // What the app told the person about switches that went off by themselves.
+    const notices = yield* Queue.unbounded<{
+      readonly origin: string;
+      readonly problem: unknown;
+    }>();
     const switches = yield* run({
       device,
       auth: auth.shape,
@@ -209,8 +222,10 @@ const setUp = (options: {
           platform: "linux",
           system: fakeMac({ accessibility: false, screen: false }).system,
         }),
+      offByItself: (origin, problem) =>
+        Queue.offer(notices, { origin, problem }).pipe(Effect.asVoid),
     });
-    return { helper, auth, switches, names };
+    return { helper, auth, switches, names, notices };
   });
 
 // Waits until the switches' state passes the check, from the change that made it so.
@@ -716,6 +731,93 @@ describe("DeviceSwitches", () => {
       const refusedSwitch = yield* switches.setSwitch(ORIGIN, true).pipe(Effect.flip);
       assert.strictEqual(refusedSwitch.problem, "not-listed");
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("turns a switch the person left on on again at the start, without a click", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const directory = yield* fileSystem.makeTempDirectoryScoped();
+      const file = (yield* Path.Path).join(directory, "agent-desktop-environments.json");
+      // The last run: both added, the person turned ORIGIN's switch on.
+      const first = yield* DeviceEnvironments.open(file);
+      yield* first.add(ORIGIN);
+      yield* first.add(OTHER);
+      yield* first.setLeftOn(ORIGIN, true);
+      // The app starts again: ORIGIN's channel starts by itself, OTHER stays off.
+      const { helper, switches, auth } = yield* setUp({
+        account: "signedIn",
+        environments: yield* DeviceEnvironments.open(file),
+      });
+      yield* stateWhere(switches, phaseIs("channel"));
+      assert.deepStrictEqual(
+        startsOf(helper).map((start) => start.environmentId),
+        [ORIGIN],
+      );
+      assert.strictEqual(switchOf(switches.current(), OTHER)?.switch.phase, "off");
+      assert.strictEqual(auth.calls.signIn, 0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("ends the consent when the person turns the switch off", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN]);
+      const { switches } = yield* setUp({ account: "signedIn", environments });
+      yield* switches.setSwitch(ORIGIN, true);
+      assert.isTrue(environments.leftOn(ORIGIN), "on until revoked");
+      yield* stateWhere(switches, phaseIs("channel"));
+      yield* switches.setSwitch(ORIGIN, false);
+      assert.isFalse(environments.leftOn(ORIGIN), "off stays off at the next start");
+    }),
+  );
+
+  it.effect("keeps the consent when Stop ends the agent's work", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN]);
+      const { switches } = yield* setUp({ account: "signedIn", environments });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      yield* switches.stop.pipe(Effect.ignore);
+      assert.isTrue(environments.leftOn(ORIGIN));
+    }),
+  );
+
+  it.effect("opens no sign-in for a switch left on, and says why it is off", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN], [ORIGIN]);
+      const { switches, auth, notices } = yield* setUp({ account: "signedOut", environments });
+      assert.deepStrictEqual(yield* Queue.take(notices), {
+        origin: ORIGIN,
+        problem: { from: "auth", reason: "signed-out" },
+      });
+      const shown = switchOf(switches.current())?.switch;
+      assert.deepStrictEqual(
+        shown?.phase === "off" ? shown.problem : shown,
+        { from: "auth", reason: "signed-out" },
+        "the window says why",
+      );
+      assert.strictEqual(auth.calls.signIn, 0, "no browser opens at the start");
+      // The consent stays: a sign-in later and the next start bring it back.
+      assert.isTrue(environments.leftOn(ORIGIN));
+    }),
+  );
+
+  it.effect("keeps a switch left on off on a Mac without its permissions, and says so", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN], [ORIGIN]);
+      const mac = fakeMac({ accessibility: true, screen: false });
+      const { helper, switches, notices } = yield* setUp({
+        account: "signedIn",
+        environments,
+        permissions: MacPermissions.make({ platform: "darwin", system: mac.system }),
+      });
+      assert.deepStrictEqual(yield* Queue.take(notices), {
+        origin: ORIGIN,
+        problem: "permissions",
+      });
+      assert.isDefined(switches.current().permissions, "the window shows the permissions");
+      assert.lengthOf(startsOf(helper), 0);
+      assert.isTrue(environments.leftOn(ORIGIN));
+    }),
   );
 
   it.effect("starts with every switch off and the saved Environments of the last run", () =>

@@ -146,6 +146,9 @@ export interface DeviceText {
   // What the switch turns on, said in the window itself: full control, mouse and keyboard included.
   readonly computerLead: string;
   readonly computerHelp: string;
+  // A system notice: a switch went off by itself, or one left on waits for macOS's permissions.
+  readonly offNotice: string;
+  readonly permissionsNotice: string;
   readonly starting: string;
   readonly failed: string;
   // The connection to the helper was lost: whether an agent works is unknown, or the helper had
@@ -361,9 +364,13 @@ const cs: Text = {
     title: "Agent Desktop",
     computer: "Tento počítač",
     computerLead:
-      "Zapnutý vypínač dá agentům z daného Prostředí plné ovládání tohoto počítače: vidí obrazovku, hýbou skutečnou myší a píšou na klávesnici. Dokud agent pracuje, je nahoře v okně lišta s tlačítkem Zastavit.",
+      "Zapnutý vypínač dá agentům z daného Prostředí plné ovládání tohoto počítače: vidí obrazovku, hýbou skutečnou myší a píšou na klávesnici. Platí, dokud ho nevypnete, i po restartu počítače. Dokud agent pracuje, je nahoře v okně lišta s tlačítkem Zastavit.",
     computerHelp:
-      "Agent pracuje jako vy: hýbe kurzorem, kliká, táhne a píše do okna, které je vpředu. Když na počítači pracuje agent, sami na něm nepracujte, nebo agenta nejdřív zastavte. Zastavit ukončí jeho práci kdykoli, v liště nahoře v okně i v oznamovací oblasti. Vypínače jsou jen v tomto okně. Webové Lazurio stav ukáže, ale nic nezapne. Po každém spuštění aplikace jsou všechny vypnuté.",
+      "Agent pracuje jako vy: hýbe kurzorem, kliká, táhne a píše do okna, které je vpředu. Když na počítači pracuje agent, sami na něm nepracujte, nebo agenta nejdřív zastavte. Zastavit ukončí jeho práci kdykoli, v liště nahoře v okně i v oznamovací oblasti; vypínač nechá zapnutý. Zapnutý vypínač platí, dokud ho tady nevypnete: aplikace se spouští po přihlášení k počítači a připojí se sama. Když se připojit nemůže, vypínač ukáže proč a přijde upozornění. Vypínače jsou jen v tomto okně. Webové Lazurio stav ukáže, ale nic nezapne.",
+    offNotice:
+      "Agent Desktop se k Prostředí {name} nepřipojil a vypínač je vypnutý. Otevřete okno Agent Desktop, uvidíte proč.",
+    permissionsNotice:
+      "Agent Desktop se k Prostředí {name} nepřipojí, dokud macOS nepovolí Zpřístupnění a Nahrávání obrazovky. Otevřete okno Agent Desktop.",
     starting: "Spouští se…",
     failed: `Agent Desktop se nespustil. Spusťte ${APP_NAME} znovu.`,
     lost: "Nevíme, jestli agent ještě pracuje.",
@@ -639,9 +646,13 @@ const en: Text = {
     title: "Agent Desktop",
     computer: "This computer",
     computerLead:
-      "A switch that is on gives agents from that Environment full control of this computer: they see the screen, move the real mouse and type on the keyboard. While an agent works, a bar with Stop is at the top of the window.",
+      "A switch that is on gives agents from that Environment full control of this computer: they see the screen, move the real mouse and type on the keyboard. It stays on until you turn it off, also after the computer restarts. While an agent works, a bar with Stop is at the top of the window.",
     computerHelp:
-      "An agent works the way you do: it moves the pointer, clicks, drags and types into the window in front. While an agent works on the computer, do not use it yourself, or stop the agent first. Stop ends its work at any time, in the bar at the top of the window and in the notification area. The switches are only in this window. The web Lazurio shows their state but turns nothing on. Every switch is off after each start of the app.",
+      "An agent works the way you do: it moves the pointer, clicks, drags and types into the window in front. While an agent works on the computer, do not use it yourself, or stop the agent first. Stop ends its work at any time, in the bar at the top of the window and in the notification area; the switch stays on. A switch that is on stays on until you turn it off here: the app starts when you sign in to the computer and connects by itself. When it cannot connect, the switch shows why and a notice comes. The switches are only in this window. The web Lazurio shows their state but turns nothing on.",
+    offNotice:
+      "Agent Desktop did not connect to the Environment {name}, and its switch is off. Open the Agent Desktop window to see why.",
+    permissionsNotice:
+      "Agent Desktop does not connect to the Environment {name} until macOS allows Accessibility and Screen Recording. Open the Agent Desktop window.",
     starting: "Starting…",
     failed: `Agent Desktop did not start. Start ${APP_NAME} again.`,
     lost: "It is not known whether an agent is still working.",
