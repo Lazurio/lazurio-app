@@ -1448,6 +1448,54 @@ mod tests {
     }
 
     #[test]
+    fn one_failed_check_keeps_an_open_channel_and_two_in_a_row_close_it() {
+        use crate::lazurio::app::device::v1::Connected;
+        use crate::testkit::{FakeEnvironment, FakeUtility, PATIENCE, Session};
+
+        let environment = FakeEnvironment::start(|session: &mut Session| {
+            if session.ready() {
+                session.until_closed();
+            }
+        });
+        let utility = FakeUtility::absent();
+        // The interval and the limit are short here; the guard's own are 10 s and 5 s.
+        let (mut device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            Duration::from_millis(20),
+            Duration::from_millis(50),
+            None,
+        );
+        let connected = (
+            "env-a".to_owned(),
+            channel_state::State::Connected(Connected {}),
+        );
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        assert_eq!(state_of(&states), connected);
+
+        // One check fails, as a slow `cmdkey` on a busy computer does: the check is asked again
+        // at once and the channel stays open.
+        let asked = utility.asked();
+        utility.then(&[guard::Pairing::Failed]);
+        utility.wait_asked_more_than(asked + 2);
+        assert!(
+            states
+                .try_iter()
+                .all(|state| state.state != Some(refused(guard::CHECK_FAILED))),
+            "one failed check closed the channel"
+        );
+
+        // Two in a row close it.
+        utility.then(&[guard::Pairing::Failed, guard::Pairing::Failed]);
+        assert_eq!(
+            state_of(&states),
+            ("env-a".to_owned(), refused(guard::CHECK_FAILED)),
+            "two failed checks in a row closed the channel"
+        );
+        assert!(device.shutdown(Instant::now() + PATIENCE));
+    }
+
+    #[test]
     fn a_check_that_hangs_opens_no_channel_and_closes_an_open_one() {
         use crate::lazurio::app::device::v1::Connected;
         use crate::testkit::{Event, FakeEnvironment, FakeUtility, PATIENCE, Session};
@@ -1508,8 +1556,9 @@ mod tests {
     }
 
     /// The utility is paired right after a periodic check read the keychain, the worst moment:
-    /// the channel closes within the window, counted from the pairing, whether the next check
-    /// answers `Paired` or hangs until its limit. The times are the guard's shortened (window
+    /// the channel closes within the window, counted from the pairing, when the next check answers
+    /// `Paired`, and within the window of a retried check when it hangs until its limit (the guard's
+    /// `RETRY_WINDOW`: a failed check is asked again once, after waiting for its search). The times are the guard's shortened (window
     /// 2 s, period 1 s, limit 1 s) and each check takes 700 ms: 300 ms below the limit, so a slow
     /// runner still answers in time, and long enough that a period counted from the end of a
     /// check (1 s + 2 × 700 ms) would overshoot the window and its tolerance.
@@ -1573,10 +1622,11 @@ mod tests {
                 }),
                 "hangs: {hangs}"
             );
+            let window = if hangs { WINDOW + 2 * LIMIT } else { WINDOW };
             assert!(
-                took <= WINDOW + TOLERANCE,
+                took <= window + TOLERANCE,
                 "hangs: {hangs}: the channel closed {took:?} after the pairing, past the window \
-                 of {WINDOW:?}"
+                 of {window:?}"
             );
             utility.release();
             assert!(device.shutdown(Instant::now() + PATIENCE));

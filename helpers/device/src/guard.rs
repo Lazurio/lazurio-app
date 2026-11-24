@@ -16,14 +16,17 @@
 //!   pilot, so the check answers that it is not paired.
 //!
 //! The check fails closed: when it cannot tell (an error, a locked keychain, no answer within 5 s),
-//! no channel opens and every open channel closes, as when an entry is found. Every check runs on a
+//! no channel opens, as when an entry is found. While a channel is open, one check that cannot
+//! tell may be a passing delay on a busy computer, so it is asked again at once, and only a second
+//! failure in a row closes every open channel ([`RETRY_WINDOW`]). Every check runs on a
 //! thread of its own and counts as failed after 5 s ([`CHECK_TIMEOUT`]): on macOS 26 a search in a
 //! locked keychain can show the prompt to unlock it although the keychain's user interface is off,
 //! and the search then waits for the person. While such a search still waits, no new one starts, so
 //! prompts never pile up, and every check fails at once. It runs before each channel opens and,
 //! while a channel is open, every 10 s counted from the start of the one before ([`Guard`]), so a
 //! utility paired while a channel is open works alongside it for at most 15 s ([`WINDOW`]), the
-//! time of the check that finds it included. When it finds the utility, the agent is stopped the
+//! time of the check that finds it included, or 25 s when the first check after it fails
+//! ([`RETRY_WINDOW`]). When it finds the utility, the agent is stopped the
 //! way Stop stops it (its engine's process tree ends, and the computer is free only after that),
 //! and every channel closes with the reason the main process shows.
 
@@ -50,6 +53,11 @@ pub const WINDOW: Duration = Duration::from_secs(15);
 
 /// How long any check may take before it counts as failed.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The longest a utility paired while a channel is open works alongside it when the first check
+/// after its pairing fails: that check's limit, then the wait for its search to end and the second
+/// check, each at most [`CHECK_TIMEOUT`].
+pub const RETRY_WINDOW: Duration = WINDOW.saturating_add(CHECK_TIMEOUT.saturating_mul(2));
 
 /// How often a check starts while a channel is open, counted from the start of the check before:
 /// what [`WINDOW`] leaves after [`CHECK_TIMEOUT`].
@@ -408,17 +416,17 @@ impl Guard {
     /// stopped and every watched channel closed with that reason too.
     #[must_use]
     pub fn check_before_open(&self) -> Option<&'static str> {
-        let reason = bounded_check(&self.shared).0.refusal()?;
+        let reason = bounded_check(&self.shared, Duration::ZERO).0.refusal()?;
         trip(&self.shared, reason);
         Some(reason)
     }
 }
 
 /// Runs the check on a thread of its own and waits for it at most `timeout`; later it is `Failed`.
-/// While the thread of an earlier check still runs, past its time, no new check starts and the
-/// answer is `Failed` at once. The waiting thread never joins a check's thread. Returns the answer
-/// and when the check started, once it was its turn.
-fn bounded_check(shared: &Shared) -> (Pairing, Instant) {
+/// While the thread of an earlier check still runs, past its time, no new check starts: after
+/// waiting at most `earlier` for it to end, the answer is `Failed`. The waiting thread never joins
+/// a check's thread. Returns the answer and when the check started, once it was its turn.
+fn bounded_check(shared: &Shared, earlier: Duration) -> (Pairing, Instant) {
     use std::sync::atomic::Ordering;
 
     /// Clears the flag when the check returned, or panicked.
@@ -433,6 +441,10 @@ fn bounded_check(shared: &Shared) -> (Pairing, Instant) {
         .checking
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
+    let waits_until = Instant::now() + earlier;
+    while shared.searching.load(Ordering::SeqCst) && Instant::now() < waits_until {
+        thread::sleep(EARLIER_CHECK_EVERY.min(waits_until - Instant::now()));
+    }
     let started = Instant::now();
     if shared.searching.swap(true, Ordering::SeqCst) {
         // An earlier check still waits, for example on a prompt.
@@ -459,6 +471,9 @@ fn bounded_check(shared: &Shared) -> (Pairing, Instant) {
     (found, started)
 }
 
+/// How often a check that waits for an earlier search looks whether it ended.
+const EARLIER_CHECK_EVERY: Duration = Duration::from_millis(10);
+
 /// The periodic check: while some channel is watched, a check starts `every` after the start of the
 /// one before, so the time a check takes never lengthens the period; the thread ends when no
 /// channel is watched. A refusal closes the channels as soon as the check answered.
@@ -483,7 +498,12 @@ fn watch(shared: &Shared) {
         }
         drop(state);
         // Outside the state's lock: `cmdkey` may take its 5 s.
-        let (found, started) = bounded_check(shared);
+        let (mut found, started) = bounded_check(shared, Duration::ZERO);
+        if found == Pairing::Failed {
+            // One failure may be a passing delay on a busy computer: asked again at once, after
+            // the first search ended or its own limit passed, so a prompt never gets a second one.
+            found = bounded_check(shared, shared.timeout).0;
+        }
         if let Some(reason) = found.refusal() {
             trip(shared, reason);
         }
