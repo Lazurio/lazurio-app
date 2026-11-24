@@ -44,6 +44,9 @@ pub enum Busy {
     /// The helper could not confirm that a stopped tool ended, so it keeps the computer until
     /// Lazurio App restarts.
     Unconfirmed,
+    /// An engine of the same Environment's earlier channel has not ended yet, and may still hold
+    /// the mouse button.
+    Ending,
 }
 
 impl Busy {
@@ -58,6 +61,7 @@ impl Busy {
             Self::OtherApplication => "Počítač teď ovládá agent z jiné aplikace Lazurio. Zkuste to, až skončí. (The computer is in use by an agent from another Lazurio app. Try again when it is done.)".to_owned(),
             Self::Updating => "Lazurio App se právě aktualizuje. Zkuste to za chvíli. (Lazurio App is updating. Try again in a moment.)".to_owned(),
             Self::Unconfirmed => "Agent Desktop nemohl potvrdit, že zastavený nástroj skončil. Restartujte Lazurio App. (Agent Desktop could not confirm that a stopped tool ended. Restart Lazurio App.)".to_owned(),
+            Self::Ending => "Předchozí spojení tohoto Prostředí ještě končí. Zkuste to za chvíli. (The previous connection of this Environment is still ending. Try again in a moment.)".to_owned(),
         }
     }
 }
@@ -84,8 +88,11 @@ pub struct DeviceLock {
     /// The sequence of the last snapshot [`DeviceLock::state`] took.
     sequence: u64,
     /// The engine that began the last tool call: with physical input, the only one whose end
-    /// may release the mouse button, since a later call of any other engine took the input over.
+    /// may release the mouse button.
     input_engine: Option<u64>,
+    /// Every engine that has not ended yet, with its Environment: a channel the same Environment
+    /// replaced may still be ending its old engine, which may still press the mouse button.
+    engines: std::collections::HashMap<u64, String>,
 }
 
 impl DeviceLock {
@@ -106,6 +113,7 @@ impl DeviceLock {
             unconfirmed: false,
             sequence: 0,
             input_engine: None,
+            engines: std::collections::HashMap::new(),
         }
     }
 
@@ -154,6 +162,25 @@ impl DeviceLock {
     }
 
     /// A tool call of `environment_id` finished at `now`.
+    /// Engine `engine` of `environment_id` started.
+    pub fn engine_started(&mut self, engine: u64, environment_id: &str) {
+        self.engines.insert(engine, environment_id.to_owned());
+    }
+
+    /// Engine `engine`'s process tree is gone, and a button it pressed released.
+    pub fn engine_gone(&mut self, engine: u64) {
+        self.engines.remove(&engine);
+    }
+
+    /// Whether another engine of `environment_id` than `engine` has not ended yet: an earlier
+    /// channel's, whose input may still be running.
+    #[must_use]
+    pub fn earlier_engine(&self, environment_id: &str, engine: u64) -> bool {
+        self.engines
+            .iter()
+            .any(|(other, environment)| *other != engine && environment == environment_id)
+    }
+
     /// Engine `engine` began a tool call that [`DeviceLock::try_begin`] allowed.
     pub fn began_input(&mut self, engine: u64) {
         self.input_engine = Some(engine);
@@ -387,6 +414,27 @@ impl SharedLock {
         self.shared.changed.notify_all();
         result
     }
+
+    /// Waits at most `timeout` until `ready` holds for the lock, checked after every change, then
+    /// runs `work` on it in the same hold of the lock. `work` gets whether `ready` held.
+    pub fn when<T>(
+        &self,
+        timeout: Duration,
+        ready: impl Fn(&DeviceLock) -> bool,
+        work: impl FnOnce(&mut DeviceLock, bool) -> T,
+    ) -> T {
+        let lock = guard(&self.shared.lock);
+        let (mut lock, waited) = self
+            .shared
+            .changed
+            .wait_timeout_while(lock, timeout, |lock| !ready(lock))
+            .unwrap_or_else(PoisonError::into_inner);
+        let held = !waited.timed_out() || ready(&lock);
+        let result = work(&mut lock, held);
+        drop(lock);
+        self.shared.changed.notify_all();
+        result
+    }
 }
 
 impl Drop for SharedLock {
@@ -503,6 +551,28 @@ mod tests {
             .join(format!("lock-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("a scratch directory");
         directory
+    }
+
+    #[test]
+    fn an_environment_has_an_earlier_engine_until_it_is_gone() {
+        let mut lock = lock_in(&scratch("earlier-engine"));
+        lock.engine_started(1, "a");
+        lock.engine_started(2, "b");
+        assert!(
+            !lock.earlier_engine("a", 1),
+            "its own engine is no earlier one"
+        );
+        assert!(
+            !lock.earlier_engine("b", 2),
+            "another Environment's engine is no earlier one"
+        );
+        lock.engine_started(3, "a");
+        assert!(
+            lock.earlier_engine("a", 3),
+            "the replaced channel's engine still runs"
+        );
+        lock.engine_gone(1);
+        assert!(!lock.earlier_engine("a", 3));
     }
 
     #[test]

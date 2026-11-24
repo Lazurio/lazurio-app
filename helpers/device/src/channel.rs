@@ -172,6 +172,10 @@ pub struct Channel {
     pub pointer_release: PointerRelease,
 }
 
+/// How long a tool call waits for an engine of the same Environment's earlier channel to end
+/// (its grace and the wait for its tree) before it is refused as busy.
+pub const ENDING_ENGINE_WAIT: Duration = Duration::from_secs(5);
+
 /// How a session ends its engine: [`Engine::end`], or a stand-in in tests.
 pub type Ender = fn(Engine, Duration) -> bool;
 
@@ -748,6 +752,10 @@ impl Worker {
             .engine
             .as_ref()
             .and_then(|spec| Engine::start(spec).ok())?;
+        let environment_id = &self.channel.request.environment_id;
+        self.channel
+            .lock
+            .with(|lock| lock.engine_started(engine.id(), environment_id));
         self.control.engine_started();
         Some(engine)
     }
@@ -787,6 +795,9 @@ impl Worker {
                     .is_some_and(|holder| holder.environment_id == *environment_id)
             {
                 (self.channel.pointer_release)();
+            }
+            if gone && let Some(engine) = engine_id {
+                lock.engine_gone(engine);
             }
             let stop_waited = self.control.engine_gone();
             if !gone {
@@ -917,15 +928,26 @@ impl Worker {
             FromEnvironment::Drop => {}
             FromEnvironment::ToolCall { id, tool, line } => {
                 let request = &self.channel.request;
-                let begun = self.channel.lock.with(|lock| {
-                    lock.try_begin(
-                        &request.environment_id,
-                        &request.environment_label,
-                        Instant::now(),
-                        history::now_unix_ms(),
-                    )
-                    .map(|()| lock.began_input(engine.id()))
-                });
+                let environment_id = &request.environment_id;
+                // A channel this Environment replaced may still be ending its old engine, whose
+                // drag may still press the mouse button: no call begins until that engine has
+                // ended and released it, so the button always has one engine that pressed it.
+                let begun = self.channel.lock.when(
+                    ENDING_ENGINE_WAIT,
+                    |lock| !lock.earlier_engine(environment_id, engine.id()),
+                    |lock, ready| {
+                        if !ready {
+                            return Err(Busy::Ending);
+                        }
+                        lock.try_begin(
+                            environment_id,
+                            &request.environment_label,
+                            Instant::now(),
+                            history::now_unix_ms(),
+                        )
+                        .map(|()| lock.began_input(engine.id()))
+                    },
+                );
                 match begun {
                     Ok(()) => {
                         served.tap.call_started(id, tool.clone());

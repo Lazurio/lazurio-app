@@ -1591,9 +1591,9 @@ mod tests {
         engine.end(grace)
     }
 
-    /// The same Environment's new channel works while its old, idle engine still ends: the old
-    /// engine, though of the Environment that holds the computer, releases nothing, and only the
-    /// working engine's end does.
+    /// The same Environment's new channel asks for a call while its old, idle engine still ends:
+    /// the call waits for that end, the idle engine releases nothing, and only the working
+    /// engine's end does.
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -1643,8 +1643,8 @@ mod tests {
             EngineEvent::Started(1)
         );
 
-        // A new hand-over replaces the channel; the old engine is still ending while the new
-        // one's agent starts a tool call that runs on, as a drag does.
+        // A new hand-over replaces the channel while the old engine is still ending; the new
+        // one's agent asks for a tool call that runs on, as a drag does.
         start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
         while state_of(&states)
             != (
@@ -1662,6 +1662,12 @@ mod tests {
                                     "params": {"name": "desktop_wait", "arguments": {}}}),
         ))
         .expect("the session follows orders");
+        // The call waits until the old engine has ended, then begins.
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(1))),
+            EngineEvent::Ended(1),
+            "the old engine ended before the new call began"
+        );
         engines.until(|event| {
             matches!(event, EngineEvent::Got { engine: 2, tool, .. } if tool == "desktop_wait")
         });
@@ -1674,11 +1680,6 @@ mod tests {
                 }),
             )
         {}
-        assert_eq!(
-            engines.until(|event| matches!(event, EngineEvent::Ended(1))),
-            EngineEvent::Ended(1),
-            "the old engine ended while the new one worked"
-        );
 
         // Stop ends the working engine in the middle of its call: one release, its own.
         device.answer(&app_message::Kind::StopAgent(StopAgent {}));
@@ -1717,18 +1718,18 @@ mod tests {
         engine.end(grace)
     }
 
-    /// The same Environment's channel is replaced while its old engine runs a tool call, and the
-    /// new engine's agent begins a call before the old engine has ended: the new call took the
-    /// input over, so the old engine's end releases nothing, and only the new one's end does.
+    /// The same Environment's channel is replaced while its old engine runs a tool call that may
+    /// press the mouse button: the new channel's call does not begin until the old engine has
+    /// ended and released the button, so each press has one engine that releases it.
     #[test]
     #[allow(
         clippy::too_many_lines,
-        reason = "one story: a replaced channel ends in a call while the new one begins one"
+        reason = "one story: a replaced channel ends in a call while the new one waits to begin one"
     )]
-    fn a_replaced_channel_ending_in_a_call_never_releases_the_new_calls_button() {
+    fn a_replaced_channel_in_a_call_ends_and_releases_before_the_new_call_begins() {
         use crate::lazurio::app::device::v1::Working;
         use crate::testkit::{
-            EngineEvent, Event, FakeEngines, FakeUtility, Order, scripted_sessions, spawning,
+            EngineEvent, FakeEngines, FakeUtility, Order, scripted_sessions, spawning,
         };
         use serde_json::json;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1762,13 +1763,15 @@ mod tests {
                 application: String::new(),
             }),
         );
-        let call = |session: &std::sync::mpsc::Sender<Order>, init: &str| {
+        let initialize = |session: &std::sync::mpsc::Sender<Order>, id: &str| {
             session
                 .send(Order::Send(
-                    json!({"jsonrpc": "2.0", "id": init, "method": "initialize",
+                    json!({"jsonrpc": "2.0", "id": id, "method": "initialize",
                     "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
                 ))
                 .expect("the session follows orders");
+        };
+        let call = |session: &std::sync::mpsc::Sender<Order>| {
             session
                 .send(Order::Send(
                     json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -1777,58 +1780,52 @@ mod tests {
                 .expect("the session follows orders");
         };
 
-        // The old channel's agent runs a tool call on engine 1.
+        // The old channel's agent runs a tool call on engine 1, as a drag that pressed the button.
         start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
-        call(&old, "o0");
+        initialize(&old, "o0");
+        call(&old);
         engines.until(|event| {
             matches!(event, EngineEvent::Got { engine: 1, tool, .. } if tool == "desktop_wait")
         });
         while state_of(&states) != working {}
 
-        // A new hand-over replaces the channel; engine 1's end waits at the gate while the new
-        // channel's agent begins a call on engine 2.
+        // A new hand-over replaces the channel; engine 1's end waits at the gate. The new
+        // channel's engine gets `initialize`, but its agent's call does not reach it meanwhile.
         start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
-        call(&new, "n0");
+        initialize(&new, "n0");
         engines.until(|event| {
-            matches!(event, EngineEvent::Got { engine: 2, tool, .. } if tool == "desktop_wait")
+            matches!(event, EngineEvent::Got { engine: 2, method, .. } if method == "initialize")
         });
+        call(&new);
+        let early = engines.events.recv_timeout(Duration::from_millis(500));
+        assert!(
+            !matches!(early, Ok(EngineEvent::Got { engine: 2, ref tool, .. }) if tool == "desktop_wait"),
+            "the new call began while the old engine could still press the button: {early:?}"
+        );
+
+        // The old engine ends in its call and releases its button; only then, in the same hold
+        // of the lock that forgets the old engine, may the new call begin.
         *END_GATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
         END_GATE_OPENED.notify_all();
-        assert_eq!(
-            engines.until(|event| matches!(event, EngineEvent::Ended(1))),
-            EngineEvent::Ended(1),
-            "the old engine ended in its call, after the new call began"
-        );
-        // Its session closes only after the engine's end went through the lock.
-        assert_eq!(
-            environment.until(|event| *event == Event::Closed),
-            Event::Closed
-        );
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 2, tool, .. } if tool == "desktop_wait")
+        });
         assert_eq!(
             releases.load(Ordering::SeqCst),
-            0,
-            "the old engine released the new call's button"
+            1,
+            "the old engine released the button it held before the new call began"
         );
 
-        // Stop ends engine 2 in its call: one release, its own.
+        // Stop ends engine 2 in its call: it releases the button of its own call.
         device.answer(&app_message::Kind::StopAgent(StopAgent {}));
-        assert_eq!(
-            engines.until(|event| matches!(event, EngineEvent::Ended(2))),
-            EngineEvent::Ended(2)
-        );
-        // The release comes inside the lock, before the hold ends and the computer is idle.
         while !locks
             .recv_timeout(crate::testkit::PATIENCE)
             .expect("who holds the computer is reported")
             .idle
         {}
-        assert_eq!(
-            releases.load(Ordering::SeqCst),
-            1,
-            "only the engine that began the last call released the button"
-        );
+        assert_eq!(releases.load(Ordering::SeqCst), 2);
         assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
     }
 
