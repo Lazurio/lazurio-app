@@ -1705,8 +1705,10 @@ mod tests {
     /// A gate the ender of one test waits at, so an engine's end waits for the test's event.
     static END_GATE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
     static END_GATE_OPENED: std::sync::Condvar = std::sync::Condvar::new();
-    /// Whether an engine's end waits at [`END_GATE`].
+    /// Whether an engine's end waits at [`END_GATE`], with a condition variable of its own: one
+    /// condition variable never serves two mutexes (macOS refuses that).
     static END_GATE_ENTERED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    static END_GATE_REACHED: std::sync::Condvar = std::sync::Condvar::new();
 
     /// Closes [`END_GATE`]; the tests that use it run one at a time (`spawning`).
     fn close_end_gate() {
@@ -1723,7 +1725,7 @@ mod tests {
         let entered = END_GATE_ENTERED
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (_entered, timeout) = END_GATE_OPENED
+        let (_entered, timeout) = END_GATE_REACHED
             .wait_timeout_while(entered, crate::testkit::PATIENCE, |entered| !*entered)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(!timeout.timed_out(), "an engine's end reached the gate");
@@ -1742,7 +1744,7 @@ mod tests {
         *END_GATE_ENTERED
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
-        END_GATE_OPENED.notify_all();
+        END_GATE_REACHED.notify_all();
         let open = END_GATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
