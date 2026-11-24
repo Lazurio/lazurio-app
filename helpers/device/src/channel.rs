@@ -168,10 +168,15 @@ pub struct Channel {
     pub lock_report: LockReport,
     /// Ends an engine with its process tree and says whether the tree is gone; [`Engine::end`].
     pub ender: Ender,
+    /// Releases the left mouse button ([`crate::engine::release_pointer`]), or a stand-in in tests.
+    pub pointer_release: PointerRelease,
 }
 
 /// How a session ends its engine: [`Engine::end`], or a stand-in in tests.
 pub type Ender = fn(Engine, Duration) -> bool;
+
+/// How a channel releases the left mouse button after its engine with physical input ended.
+pub type PointerRelease = Arc<dyn Fn() + Send + Sync>;
 
 /// One Environment's channel thread. Dropping it stops the channel without waiting.
 pub struct Supervisor {
@@ -752,14 +757,30 @@ impl Worker {
     /// end a Stop waits for, or else the end of the `open` tool calls no engine answers any more.
     fn end_engine(&self, served: &mut Served, open: usize) {
         let grace = self.channel.timing.engine_grace;
-        let gone = served
-            .engine
-            .take()
-            .is_none_or(|engine| (self.channel.ender)(engine, grace));
+        let engine = served.engine.take();
+        let ran_with_physical_input = engine.is_some()
+            && self
+                .channel
+                .engine
+                .as_ref()
+                .is_some_and(|spec| spec.physical_input);
+        let gone = engine.is_none_or(|engine| (self.channel.ender)(engine, grace));
         let request = &self.channel.request;
         let environment_id = &request.environment_id;
         let mut newly_unconfirmed = false;
         self.channel.lock.with(|lock| {
+            // A drag cut off by the end leaves the mouse button pressed. Only the engine of the
+            // Environment that holds the computer can have pressed it, and inside the lock, before
+            // the hold is released, no other Environment's engine can press it meanwhile. An
+            // engine that outlived its kill may still work, so its button is left alone.
+            if ran_with_physical_input
+                && gone
+                && lock
+                    .holder(Instant::now())
+                    .is_some_and(|holder| holder.environment_id == *environment_id)
+            {
+                (self.channel.pointer_release)();
+            }
             let stop_waited = self.control.engine_gone();
             if !gone {
                 // A process of the engine outlived its kill and may still work: for the rest
@@ -1226,6 +1247,7 @@ mod tests {
             lock: Arc::clone(lock),
             lock_report,
             ender,
+            pointer_release: Arc::new(|| {}),
         })
         .expect("a thread");
         Running {
@@ -2533,6 +2555,7 @@ mod tests {
                 program: scratch("no-engine").join("agent-desktop"),
                 args: vec!["mcp".to_owned()],
                 env: Vec::new(),
+                physical_input: false,
             }),
             &a_lock(),
         );

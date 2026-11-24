@@ -20,9 +20,9 @@
 //! tree and says whether it is gone. Dropping an [`Engine`] ends the tree too.
 //!
 //! The switch of Agent Desktop means full control of the computer: the engine delivers physical
-//! input (`--headed`), so it moves the real pointer, clicks and types (ADR 0006 point 9). A tree
-//! ended in the middle of a drag never releases the mouse button it pressed, so once the tree of
-//! such an engine is ended the helper releases the left button itself ([`release_pointer`]).
+//! input (`--headed`), so it moves the real pointer, clicks and types. A tree ended in the middle
+//! of a drag never releases the mouse button it pressed, so the channel whose Environment holds
+//! the computer releases the left button once its engine's tree is gone ([`release_pointer`]).
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -38,6 +38,8 @@ pub struct EngineSpec {
     pub args: Vec<String>,
     /// Variables added to the helper's environment; none for the bundled engine.
     pub env: Vec<(String, String)>,
+    /// Whether the engine delivers physical input, so its end may leave a mouse button pressed.
+    pub physical_input: bool,
 }
 
 impl EngineSpec {
@@ -53,19 +55,13 @@ impl EngineSpec {
         };
         Some(Self {
             program: helper.parent()?.join(name),
-            args: vec!["mcp".to_owned(), HEADED.to_owned()],
+            // Physical input: the engine moves the pointer, clicks and types.
+            args: vec!["mcp".to_owned(), "--headed".to_owned()],
             env: Vec::new(),
+            physical_input: true,
         })
     }
-
-    /// Whether the engine delivers physical input, so ending it may leave a button pressed.
-    fn headed(&self) -> bool {
-        self.args.iter().any(|arg| arg == HEADED)
-    }
 }
-
-/// The engine's flag for physical input: it moves the pointer, clicks and types.
-const HEADED: &str = "--headed";
 
 /// What the engine said.
 #[derive(Debug, PartialEq, Eq)]
@@ -89,8 +85,6 @@ pub struct Engine {
     jobs: Option<(win32job::Job, win32job::Job)>,
     /// Whether the tree was already ended.
     ended: bool,
-    /// Whether ending the tree releases the mouse button: the engine delivered physical input.
-    releases_pointer: bool,
 }
 
 impl Engine {
@@ -130,7 +124,6 @@ impl Engine {
             #[cfg(windows)]
             jobs: None,
             ended: false,
-            releases_pointer: spec.headed(),
         };
         #[cfg(windows)]
         {
@@ -191,11 +184,7 @@ impl Engine {
     fn end_tree(&mut self) -> bool {
         self.ended = true;
         self.input = None;
-        let gone = end_process_tree(self, Instant::now() + TREE_GONE_WITHIN);
-        if self.releases_pointer {
-            release_pointer();
-        }
-        gone
+        end_process_tree(self, Instant::now() + TREE_GONE_WITHIN)
     }
 }
 
@@ -203,7 +192,7 @@ impl Engine {
 /// the person's next move would draw on. A release without a press before it changes nothing
 /// on Windows and macOS. Elsewhere the engine delivers no physical input.
 #[cfg(any(windows, target_os = "macos"))]
-fn release_pointer() {
+pub fn release_pointer() {
     use enigo::{Button, Direction, Enigo, Mouse, Settings};
     let settings = Settings {
         // The app asks for Accessibility itself (Agent Desktop's window); the helper never does.
@@ -218,7 +207,7 @@ fn release_pointer() {
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn release_pointer() {}
+pub fn release_pointer() {}
 
 /// How often an ending engine is checked.
 const CHECK_EVERY: Duration = Duration::from_millis(5);
@@ -472,7 +461,7 @@ mod tests {
             }
         );
         assert_eq!(spec.args, ["mcp", "--headed"]);
-        assert!(spec.headed());
+        assert!(spec.physical_input);
         assert_eq!(spec.env, Vec::<(String, String)>::new());
     }
 
@@ -485,6 +474,7 @@ mod tests {
             program: crate::testkit::scratch("no-engine").join("agent-desktop"),
             args: vec!["mcp".to_owned()],
             env: Vec::new(),
+            physical_input: false,
         };
         assert!(Engine::start(&spec).is_err());
     }

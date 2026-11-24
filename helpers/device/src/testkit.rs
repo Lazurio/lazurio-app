@@ -843,6 +843,7 @@ impl FakeEngines {
             .map(str::to_owned)
             .to_vec(),
             env: vec![(FAKE_ENGINE_CONTROL.to_owned(), self.address.to_string())],
+            physical_input: false,
         }
     }
 

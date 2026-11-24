@@ -71,6 +71,8 @@ struct Channels {
     engine: Option<EngineSpec>,
     /// How sessions end their engines.
     ender: channel::Ender,
+    /// How a channel releases the mouse button after its engine with physical input ended.
+    pointer_release: channel::PointerRelease,
     /// Whether the utility Lazurio Agent Desktop is paired, and how often to ask while a channel is
     /// open.
     utility: Arc<dyn UtilityCheck>,
@@ -125,6 +127,7 @@ impl Device {
                 helper_version: String::new(),
                 engine: EngineSpec::bundled(),
                 ender: crate::engine::Engine::end,
+                pointer_release: Arc::new(crate::engine::release_pointer),
                 utility: Arc::new(SystemCheck),
                 utility_every: guard::CHECK_EVERY,
                 utility_timeout: guard::CHECK_TIMEOUT,
@@ -186,6 +189,14 @@ impl Device {
     #[must_use]
     pub(crate) fn with_ender(mut self, ender: channel::Ender) -> Self {
         self.channels.ender = ender;
+        self
+    }
+
+    /// Channels that release the mouse button with `release`, for tests that count releases.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_pointer_release(mut self, release: channel::PointerRelease) -> Self {
+        self.channels.pointer_release = release;
         self
     }
 
@@ -343,6 +354,7 @@ impl Device {
             report: Arc::clone(&self.channels.report),
             lock_report: Arc::clone(&self.channels.lock_report),
             ender: self.channels.ender,
+            pointer_release: Arc::clone(&self.channels.pointer_release),
             helper_version: self.channels.helper_version.clone(),
             engine: self.channels.engine.clone(),
             lock: Arc::clone(&runtime.lock),
@@ -1445,6 +1457,129 @@ mod tests {
             )
         );
         assert!(device.shutdown(Instant::now() + PATIENCE));
+    }
+
+    /// With physical input, only the engine of the Environment that holds the computer releases
+    /// the mouse button when it ends: an idle Environment's engine that ends while another one's
+    /// agent drags must not end that drag.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story: B ends while A drags, then A's engine ends"
+    )]
+    fn only_the_holders_engine_releases_the_mouse_button_when_it_ends() {
+        use crate::lazurio::app::device::v1::{Connected, Working};
+        use crate::testkit::{
+            EngineEvent, FakeEngines, FakeUtility, Order, scripted_sessions, spawning,
+        };
+        use serde_json::json;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _forks = spawning();
+        let (environment, mut orders) = scripted_sessions(2);
+        let a = orders.remove(0);
+        let engines = FakeEngines::start();
+        let mut spec = engines.spec();
+        spec.physical_input = true;
+        let utility = FakeUtility::absent();
+        let (device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            Some(spec),
+        );
+        let releases = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&releases);
+        let mut device = device.with_pointer_release(Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // A's agent holds the computer in the middle of a tool call that runs on, as a drag does (the
+        // fake engine answers `desktop_wait` only when asked); B is connected.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-a".to_owned(),
+                channel_state::State::Connected(Connected {})
+            )
+        );
+        a.send(Order::Send(
+            json!({"jsonrpc": "2.0", "id": "a0", "method": "initialize",
+                                  "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
+        ))
+        .expect("the session follows orders");
+        environment.answer(&json!("a0"));
+        a.send(Order::Send(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                  "params": {"name": "desktop_wait", "arguments": {}}}),
+        ))
+        .expect("the session follows orders");
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 1, tool, .. } if tool == "desktop_wait")
+        });
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-a".to_owned(),
+                channel_state::State::Working(Working {
+                    tool: "desktop_wait".to_owned(),
+                    application: String::new(),
+                })
+            )
+        );
+        start_env(&mut device, "env-b", &crate::testkit::hand_over(2));
+        assert_eq!(
+            state_of(&states),
+            (
+                "env-b".to_owned(),
+                channel_state::State::Connected(Connected {})
+            )
+        );
+
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Started(2))),
+            EngineEvent::Started(2),
+            "B's engine runs"
+        );
+
+        // B is switched off: its idle engine ends, and A's drag keeps its button.
+        let off = device.answer(&app_message::Kind::StopChannel(StopChannel {
+            environment_id: "env-b".to_owned(),
+        }));
+        assert!(
+            matches!(off, Some(helper_message::Kind::ChannelState(ref state))
+                if state.state == Some(channel_state::State::Off(Off {}))),
+            "B is off once its engine ended: {off:?}"
+        );
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(2))),
+            EngineEvent::Ended(2)
+        );
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            0,
+            "an idle engine released the button"
+        );
+
+        // Stop ends A's engine in the middle of its drag: its button is released, once.
+        device.answer(&app_message::Kind::StopAgent(StopAgent {}));
+        assert_eq!(
+            engines.until(|event| matches!(event, EngineEvent::Ended(1))),
+            EngineEvent::Ended(1)
+        );
+        // The release comes inside the lock, before the hold ends.
+        let deadline = Instant::now() + crate::testkit::PATIENCE;
+        while releases.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "the holder's engine released the button"
+        );
+        assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
     }
 
     #[test]
