@@ -753,10 +753,12 @@ impl Worker {
             .as_ref()
             .and_then(|spec| Engine::start(spec).ok())?;
         let environment_id = &self.channel.request.environment_id;
-        self.channel
-            .lock
-            .with(|lock| lock.engine_started(engine.id(), environment_id));
-        self.control.engine_started();
+        // In one hold of the lock, which Stop takes as well: a Stop either sees the engine running
+        // and waits for it, or comes before the engine is known at all.
+        self.channel.lock.with(|lock| {
+            lock.engine_started(engine.id(), environment_id);
+            self.control.engine_started();
+        });
         Some(engine)
     }
 
@@ -933,7 +935,10 @@ impl Worker {
                 // drag may still press the mouse button: no call begins until that engine has
                 // ended and released it, so the button always has one engine that pressed it.
                 // Stop wakes the wait, and a call waiting when the person pressed it never
-                // reaches the engine.
+                // reaches the engine. The call is accepted and handed to the engine in one hold of
+                // the lock, which Stop takes as well: a Stop either comes before and refuses the
+                // call, or after and ends it with its engine; no call reaches an engine after it.
+                let tap = &mut served.tap;
                 let begun = self.channel.lock.when(
                     ENDING_ENGINE_WAIT,
                     |lock| {
@@ -952,14 +957,15 @@ impl Worker {
                             &request.environment_label,
                             Instant::now(),
                             history::now_unix_ms(),
-                        )
-                        .map(|()| lock.began_input(engine.id()))
+                        )?;
+                        lock.began_input(engine.id());
+                        tap.call_started(id.clone(), tool.clone());
+                        engine.send(line);
+                        Ok(())
                     },
                 );
                 match begun {
                     Ok(()) => {
-                        served.tap.call_started(id, tool.clone());
-                        engine.send(line);
                         self.report(channel_state::State::Working(Working {
                             tool,
                             application: String::new(),
