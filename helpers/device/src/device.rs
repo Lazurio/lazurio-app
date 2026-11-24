@@ -1705,12 +1705,28 @@ mod tests {
     /// A gate the ender of one test waits at, so an engine's end waits for the test's event.
     static END_GATE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
     static END_GATE_OPENED: std::sync::Condvar = std::sync::Condvar::new();
+    /// Whether an engine's end waits at [`END_GATE`].
+    static END_GATE_ENTERED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
     /// Closes [`END_GATE`]; the tests that use it run one at a time (`spawning`).
     fn close_end_gate() {
         *END_GATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+        *END_GATE_ENTERED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+    }
+
+    /// Waits until an engine's end waits at [`END_GATE`].
+    fn wait_end_gate_entered() {
+        let entered = END_GATE_ENTERED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (_entered, timeout) = END_GATE_OPENED
+            .wait_timeout_while(entered, crate::testkit::PATIENCE, |entered| !*entered)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(!timeout.timed_out(), "an engine's end reached the gate");
     }
 
     /// Opens [`END_GATE`].
@@ -1723,6 +1739,10 @@ mod tests {
 
     /// Ends engines once [`END_GATE`] is open.
     fn gated_end(engine: crate::engine::Engine, grace: Duration) -> bool {
+        *END_GATE_ENTERED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        END_GATE_OPENED.notify_all();
         let open = END_GATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2321,6 +2341,97 @@ mod tests {
                 .iter()
                 .any(|state| matches!(state.state, Some(channel_state::State::Working(_)))),
             "a call was handed to the engine after Stop: {after_stop:?}"
+        );
+        assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
+    }
+
+    /// The agent cancels a running call and sends another, and the person presses Stop while the
+    /// cancelled call's engine ends: the Stop ends the session too, so the queued call never
+    /// reaches the engine the cancellation would have started.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story: a cancellation's end, then Stop, with a call queued"
+    )]
+    fn stop_during_a_cancellation_runs_none_of_the_queued_calls() {
+        use crate::lazurio::app::device::v1::Working;
+        use crate::testkit::{
+            EngineEvent, FakeEngines, FakeUtility, Order, scripted_sessions, spawning,
+        };
+        use serde_json::json;
+
+        let _forks = spawning();
+        close_end_gate();
+        let (environment, mut orders) = scripted_sessions(1);
+        let agent = orders.remove(0);
+        let engines = FakeEngines::start();
+        let mut spec = engines.spec();
+        spec.physical_input = true;
+        let utility = FakeUtility::absent();
+        let (device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            Some(spec),
+        );
+        let mut device = device
+            .with_ender(gated_end)
+            .with_pointer_release(Arc::new(|| {}));
+        let send = |message: serde_json::Value| {
+            agent
+                .send(Order::Send(message))
+                .expect("the session follows orders");
+        };
+
+        // The agent's call runs on engine 1.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        send(json!({"jsonrpc": "2.0", "id": "i0", "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}));
+        send(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "desktop_wait", "arguments": {}}}));
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 1, tool, .. } if tool == "desktop_wait")
+        });
+        let working = (
+            "env-a".to_owned(),
+            channel_state::State::Working(Working {
+                tool: "desktop_wait".to_owned(),
+                application: String::new(),
+            }),
+        );
+        while state_of(&states) != working {}
+
+        // It cancels that call and sends another; the cancelled call's engine waits at the gate
+        // while it ends, with the next call still in the socket.
+        send(
+            json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                    "params": {"requestId": 1}}),
+        );
+        send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": {"name": "desktop_wait", "arguments": {}}}));
+        wait_end_gate_entered();
+
+        // Stop, then the engine ends: the session ends with it, and no engine starts after the
+        // Stop to get the queued call.
+        device.answer(&app_message::Kind::StopAgent(StopAgent {}));
+        open_end_gate();
+        loop {
+            let (id, state) = state_of(&states);
+            assert!(
+                !matches!(state, channel_state::State::Working(_)),
+                "a call was handed to an engine after Stop"
+            );
+            if id == "env-a" && matches!(state, channel_state::State::NeedsHandOver(_)) {
+                break;
+            }
+        }
+        let later: Vec<EngineEvent> = engines.events.try_iter().collect();
+        assert!(
+            !later
+                .iter()
+                .any(|event| matches!(event, EngineEvent::Started(_))),
+            "an engine started after Stop: {later:?}"
         );
         assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
     }

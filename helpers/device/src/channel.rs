@@ -767,7 +767,7 @@ impl Worker {
         };
         let end = self.serve_messages(socket, &mut served);
         let open = served.tap.take_open();
-        self.end_engine(&mut served, open.len(), !open.is_empty());
+        let _ = self.end_engine(&mut served, open.len(), !open.is_empty());
         end
     }
 
@@ -817,8 +817,9 @@ impl Worker {
     /// Ends the session's engine: closes its input, gives it the grace of [`Timing`], then ends
     /// its whole process tree and waits until it is gone. Only then does the lock hear of it: the
     /// end a Stop waits for, or else the end of the `open` tool calls no engine answers any more.
-    /// `in_call` says whether a tool call of this engine was still running when it ended.
-    fn end_engine(&self, served: &mut Served, open: usize, in_call: bool) {
+    /// `in_call` says whether a tool call of this engine was still running when it ended. Returns
+    /// whether a Stop waited for this end, also one that came while it ended for another reason.
+    fn end_engine(&self, served: &mut Served, open: usize, in_call: bool) -> bool {
         let grace = self.channel.timing.engine_grace;
         let engine = served.engine.take();
         let engine_id = engine.as_ref().map(Engine::id);
@@ -832,6 +833,7 @@ impl Worker {
         let request = &self.channel.request;
         let environment_id = &request.environment_id;
         let mut newly_unconfirmed = false;
+        let mut stopped = false;
         self.channel.lock.with(|lock| {
             // A drag cut off by the end leaves the mouse button pressed. Only the engine that
             // began the last tool call, ended in the middle of a call, can have it pressed: not an
@@ -854,8 +856,10 @@ impl Worker {
                 lock.engine_gone(engine);
             }
             let stop_waited = self.control.engine_gone();
+            stopped = stop_waited;
             if stop_waited {
-                // This channel handled the Stop with its own engine: its later calls go on.
+                // This channel handles the Stop with its own engine; its session ends after it
+                // (`restart_engine`), so nothing the agent queued before the Stop is read.
                 self.control.see_stops(lock.stop_generation(environment_id));
             }
             if !gone {
@@ -891,6 +895,7 @@ impl Worker {
                 None,
             );
         }
+        stopped
     }
 
     fn serve_messages(&self, socket: &mut Socket, served: &mut Served) -> SessionEnd {
@@ -1116,17 +1121,21 @@ impl Worker {
             Restart::Stop => None,
             Restart::Cancel(id) => Some(id),
         };
-        self.end_engine(
+        let stopped = self.end_engine(
             served,
             if cancelled.is_some() { open.len() } else { 0 },
             !open.is_empty(),
         );
-        if cancelled.is_none() {
+        // A Stop that came while a cancellation ended the engine is a Stop as well: the session
+        // ends, and the cancelled call gets no response, as MCP asks.
+        if cancelled.is_none() || stopped {
             for answer in unanswered {
                 send(socket, answer)?;
             }
             for call in &open {
-                send(socket, tap::tool_error(&call.id, tap::STOPPED))?;
+                if cancelled != Some(&call.id) {
+                    send(socket, tap::tool_error(&call.id, tap::STOPPED))?;
+                }
             }
             return Err(SessionEnded);
         }
