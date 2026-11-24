@@ -196,7 +196,12 @@ impl Supervisor {
     /// Fails when the system gives no thread; the channel's secrets are then dropped, wiped.
     pub fn spawn(channel: Channel) -> std::io::Result<Self> {
         let environment_id = channel.request.environment_id.clone();
-        let control = Arc::new(Control::new(environment_id.clone()));
+        // The Stops so far: a later one this channel never handles with its own engine still
+        // refuses the call it got before that Stop.
+        let stops = channel
+            .lock
+            .with(|lock| lock.stop_generation(&environment_id));
+        let control = Arc::new(Control::new(environment_id.clone(), stops));
         let mut worker = Worker {
             control: Arc::clone(&control),
             channel,
@@ -277,6 +282,9 @@ struct ControlState {
     stream: Option<TcpStream>,
     /// The session's engine, from its start until it was killed and waited for.
     engine: EngineState,
+    /// The Stops of this Environment the channel has seen
+    /// ([`DeviceLock::stop_generation`](crate::lock::DeviceLock::stop_generation)).
+    stops_seen: u64,
 }
 
 /// Where the session's engine is, as Stop sees it.
@@ -293,10 +301,13 @@ enum EngineState {
 }
 
 impl Control {
-    fn new(environment_id: String) -> Self {
+    fn new(environment_id: String, stops_seen: u64) -> Self {
         Self {
             environment_id,
-            state: Mutex::new(ControlState::default()),
+            state: Mutex::new(ControlState {
+                stops_seen,
+                ..ControlState::default()
+            }),
             changed: Condvar::new(),
         }
     }
@@ -347,6 +358,14 @@ impl Control {
 
     fn stop_pending(&self) -> bool {
         self.lock().engine == EngineState::Stopping
+    }
+
+    /// Takes the Environment's Stops up to `stops` as seen, and says whether one was new.
+    fn see_stops(&self, stops: u64) -> bool {
+        let mut state = self.lock();
+        let new = state.stops_seen != stops;
+        state.stops_seen = stops;
+        new
     }
 
     fn engine_starting(&self) {
@@ -754,6 +773,10 @@ impl Worker {
 
     fn start_engine(&self) -> Option<Engine> {
         let environment_id = &self.channel.request.environment_id;
+        #[cfg(test)]
+        if self.channel.engine.is_some() {
+            crate::testkit::engine_start_pause_point(crate::testkit::PauseAt::BeforeStarting);
+        }
         // Once a tree could not be confirmed gone, no engine starts for tool work again. From
         // here on Stop sees the engine starting and waits for its end, in the same lock.
         let starts = self.channel.lock.with(|lock| {
@@ -774,7 +797,7 @@ impl Worker {
             .and_then(|spec| Engine::start(spec).ok());
         #[cfg(test)]
         if engine.is_some() {
-            crate::testkit::engine_start_pause_point();
+            crate::testkit::engine_start_pause_point(crate::testkit::PauseAt::AfterSpawn);
         }
         self.channel.lock.with(|lock| match &engine {
             Some(engine) => {
@@ -831,6 +854,10 @@ impl Worker {
                 lock.engine_gone(engine);
             }
             let stop_waited = self.control.engine_gone();
+            if stop_waited {
+                // This channel handled the Stop with its own engine: its later calls go on.
+                self.control.see_stops(lock.stop_generation(environment_id));
+            }
             if !gone {
                 // A process of the engine outlived its kill and may still work: for the rest
                 // of the helper's life the computer stays held, the device lock with it, and
@@ -976,6 +1003,11 @@ impl Worker {
                     },
                     |lock, ready| {
                         if lock.stopping(environment_id) {
+                            return Err(Busy::Stopped);
+                        }
+                        // A Stop this channel never saw with an engine of its own came after the
+                        // agent sent this call, which may have waited meanwhile: it is refused.
+                        if self.control.see_stops(lock.stop_generation(environment_id)) {
                             return Err(Busy::Stopped);
                         }
                         if !ready {

@@ -960,12 +960,20 @@ impl UtilityCheck for FakeUtility {
     }
 }
 
-/// Where the next engine start stops before the lock hears of it, for a test that presses Stop
-/// meanwhile: off, armed, paused there, or let go.
+/// Where a channel's engine start may stop for a test that presses Stop meanwhile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseAt {
+    /// Before the channel tells the lock that its engine starts.
+    BeforeStarting,
+    /// After the engine's process started, before the lock hears of it.
+    AfterSpawn,
+}
+
+/// Whether the next engine start stops: off, armed at a point, paused there, or let go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartPause {
     Off,
-    Armed,
+    Armed(PauseAt),
     Paused,
     Released,
 }
@@ -986,10 +994,10 @@ fn wait_start_pause(until: StartPause) {
     assert!(!timeout.timed_out(), "the engine's start reached {until:?}");
 }
 
-/// The next engine start stops before the lock hears of it. Only for tests that hold
+/// The next engine start stops at `at`. Only for tests that hold
 /// [`spawning`], so no other test's engine stops there.
-pub fn arm_engine_start_pause() {
-    set_start_pause(StartPause::Armed);
+pub fn arm_engine_start_pause(at: PauseAt) {
+    set_start_pause(StartPause::Armed(at));
 }
 
 /// Waits until an engine start stopped at the pause.
@@ -1002,10 +1010,10 @@ pub fn release_engine_start() {
     set_start_pause(StartPause::Released);
 }
 
-/// Called by a channel between an engine's start and the lock hearing of it.
-pub fn engine_start_pause_point() {
+/// Called by a channel at `at` of its engine's start.
+pub fn engine_start_pause_point(at: PauseAt) {
     let mut state = START_PAUSE.lock().unwrap_or_else(PoisonError::into_inner);
-    if *state != StartPause::Armed {
+    if *state != StartPause::Armed(at) {
         return;
     }
     *state = StartPause::Paused;

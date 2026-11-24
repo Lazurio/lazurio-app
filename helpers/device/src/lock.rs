@@ -96,6 +96,9 @@ pub struct DeviceLock {
     /// Every engine that has not ended yet, with its Environment: a channel the same Environment
     /// replaced may still be ending its old engine, which may still press the mouse button.
     engines: std::collections::HashMap<u64, String>,
+    /// How many Stops ended each Environment's work, so a channel that had no engine for a Stop
+    /// still refuses the call it got before that Stop.
+    stops: std::collections::HashMap<String, u64>,
 }
 
 impl DeviceLock {
@@ -117,6 +120,7 @@ impl DeviceLock {
             sequence: 0,
             input_engine: None,
             engines: std::collections::HashMap::new(),
+            stops: std::collections::HashMap::new(),
         }
     }
 
@@ -184,6 +188,12 @@ impl DeviceLock {
             .any(|(other, environment)| *other != engine && environment == environment_id)
     }
 
+    /// How many Stops ended the work of `environment_id` so far.
+    #[must_use]
+    pub fn stop_generation(&self, environment_id: &str) -> u64 {
+        self.stops.get(environment_id).copied().unwrap_or(0)
+    }
+
     /// Whether Stop ended the work of `environment_id` and the hold waits for its engines to end.
     #[must_use]
     pub fn stopping(&self, environment_id: &str) -> bool {
@@ -242,6 +252,11 @@ impl DeviceLock {
             return;
         }
         if let Some(hold) = &mut self.hold {
+            let stops = self
+                .stops
+                .entry(hold.holder.environment_id.clone())
+                .or_default();
+            *stops = stops.wrapping_add(1);
             hold.stopping = hold.stopping.saturating_add(engines);
             if hold.stopping == 0 {
                 self.hold = None;
