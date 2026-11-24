@@ -1097,7 +1097,9 @@ impl Worker {
     /// place, after `ready`, Stop or a cancellation.
     ///
     /// - After Stop, the hold ends with the tree, the open calls do not end on the lock on their
-    ///   own, and each is answered as stopped. The Device records `stopped`.
+    ///   own, and each is answered as stopped. The Device records `stopped`. Then the session ends
+    ///   without starting a new engine: calls the agent queued before the Stop are never read, so
+    ///   nothing clicks or types after it, and the channel connects again with a new hand-over.
     /// - After the agent cancelled a call, which the engine never answers, the open calls end on
     ///   the lock once the tree is gone and each gets a `tool` entry, as an answered call does.
     ///   The cancelled request gets no response (MCP); any other open call is answered as
@@ -1119,6 +1121,15 @@ impl Worker {
             if cancelled.is_some() { open.len() } else { 0 },
             !open.is_empty(),
         );
+        if cancelled.is_none() {
+            for answer in unanswered {
+                send(socket, answer)?;
+            }
+            for call in &open {
+                send(socket, tap::tool_error(&call.id, tap::STOPPED))?;
+            }
+            return Err(SessionEnded);
+        }
         if cancelled.is_some() {
             for call in &open {
                 // The history is a record for the person; a failed write never stops the
