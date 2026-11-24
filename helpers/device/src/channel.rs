@@ -240,7 +240,7 @@ impl Supervisor {
     #[must_use]
     pub fn request_stop(&self) -> bool {
         let mut state = self.control.lock();
-        let waits = state.engine == EngineState::Running;
+        let waits = matches!(state.engine, EngineState::Starting | EngineState::Running);
         if waits {
             state.engine = EngineState::Stopping;
         }
@@ -285,6 +285,8 @@ enum EngineState {
     /// No engine runs.
     #[default]
     None,
+    /// An engine is starting: Stop waits for it as for a running one.
+    Starting,
     Running,
     /// It runs, and Stop waits for its end ([`Supervisor::request_stop`]).
     Stopping,
@@ -347,8 +349,16 @@ impl Control {
         self.lock().engine == EngineState::Stopping
     }
 
+    fn engine_starting(&self) {
+        self.lock().engine = EngineState::Starting;
+    }
+
+    /// The engine started; a Stop that came while it started still waits for its end.
     fn engine_started(&self) {
-        self.lock().engine = EngineState::Running;
+        let mut state = self.lock();
+        if state.engine == EngineState::Starting {
+            state.engine = EngineState::Running;
+        }
     }
 
     /// The engine was killed and waited for. Returns whether Stop waited for that.
@@ -409,7 +419,8 @@ impl Watched for Control {
         if let Some(stream) = state.stream.take() {
             let _ = stream.shutdown(Shutdown::Both);
         }
-        let waits = stop_engine && state.engine == EngineState::Running;
+        let waits =
+            stop_engine && matches!(state.engine, EngineState::Starting | EngineState::Running);
         if waits {
             state.engine = EngineState::Stopping;
         }
@@ -742,8 +753,17 @@ impl Worker {
     }
 
     fn start_engine(&self) -> Option<Engine> {
-        // Once a tree could not be confirmed gone, no engine starts for tool work again.
-        if self.channel.lock.with(|lock| lock.unconfirmed()) {
+        let environment_id = &self.channel.request.environment_id;
+        // Once a tree could not be confirmed gone, no engine starts for tool work again. From
+        // here on Stop sees the engine starting and waits for its end, in the same lock.
+        let starts = self.channel.lock.with(|lock| {
+            if lock.unconfirmed() {
+                return false;
+            }
+            self.control.engine_starting();
+            true
+        });
+        if !starts {
             return None;
         }
         // Without the engine the session still serves, with the stub.
@@ -751,15 +771,24 @@ impl Worker {
             .channel
             .engine
             .as_ref()
-            .and_then(|spec| Engine::start(spec).ok())?;
-        let environment_id = &self.channel.request.environment_id;
-        // In one hold of the lock, which Stop takes as well: a Stop either sees the engine running
-        // and waits for it, or comes before the engine is known at all.
-        self.channel.lock.with(|lock| {
-            lock.engine_started(engine.id(), environment_id);
-            self.control.engine_started();
+            .and_then(|spec| Engine::start(spec).ok());
+        #[cfg(test)]
+        if engine.is_some() {
+            crate::testkit::engine_start_pause_point();
+        }
+        self.channel.lock.with(|lock| match &engine {
+            Some(engine) => {
+                lock.engine_started(engine.id(), environment_id);
+                self.control.engine_started();
+            }
+            // No engine: a Stop that waited for this start is done with it.
+            None => {
+                if self.control.engine_gone() && lock.engine_ended(environment_id) {
+                    (self.channel.lock_report)(0, lock.state(Instant::now()));
+                }
+            }
         });
-        Some(engine)
+        engine
     }
 
     /// Ends the session's engine: closes its input, gives it the grace of [`Timing`], then ends

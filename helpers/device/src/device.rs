@@ -1946,6 +1946,123 @@ mod tests {
         assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
     }
 
+    /// Stop while the same Environment's new engine is still starting, and the old engine then
+    /// ends: Stop waits for the starting engine too, so the hold stays stopping and the engine
+    /// that started meanwhile ends for the Stop before any call reaches it. A call after that is
+    /// one after the Stop, as any call the agent sends later.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story: Stop between an engine's start and the lock hearing of it"
+    )]
+    fn stop_during_a_new_engines_start_waits_for_that_engine() {
+        use crate::lazurio::app::device::v1::Working;
+        use crate::testkit::{
+            EngineEvent, FakeEngines, FakeUtility, Order, arm_engine_start_pause,
+            release_engine_start, scripted_sessions, spawning, wait_engine_start_paused,
+        };
+        use serde_json::json;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let _forks = spawning();
+        close_end_gate();
+        let (environment, mut orders) = scripted_sessions(2);
+        let new = orders.remove(1);
+        let old = orders.remove(0);
+        let engines = FakeEngines::start();
+        let mut spec = engines.spec();
+        spec.physical_input = true;
+        let utility = FakeUtility::absent();
+        let (device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            Some(spec),
+        );
+        let mut device = device
+            .with_ender(gated_end)
+            .with_pointer_release(Arc::new(|| {}));
+        let message = |session: &std::sync::mpsc::Sender<Order>, message: serde_json::Value| {
+            session
+                .send(Order::Send(message))
+                .expect("the session follows orders");
+        };
+        let initialize = |id: &str| {
+            json!({"jsonrpc": "2.0", "id": id, "method": "initialize",
+                   "params": {"protocolVersion": "2025-06-18", "capabilities": {}}})
+        };
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "desktop_wait", "arguments": {}}});
+
+        // The old channel's agent holds the computer in a call on engine 1.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        message(&old, initialize("o0"));
+        message(&old, call.clone());
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 1, tool, .. } if tool == "desktop_wait")
+        });
+        let working = (
+            "env-a".to_owned(),
+            channel_state::State::Working(Working {
+                tool: "desktop_wait".to_owned(),
+                application: String::new(),
+            }),
+        );
+        while state_of(&states) != working {}
+        let lock = Arc::clone(&device.runtime.as_ref().expect("configured").lock);
+        let old_engine = lock.with(|lock| lock.input_engine());
+
+        // A new hand-over replaces the channel; its engine's start stops before the lock hears
+        // of it, while its agent's call is already queued.
+        arm_engine_start_pause();
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
+        wait_engine_start_paused();
+        message(&new, initialize("n0"));
+        message(&new, call);
+
+        // Stop, then the old engine ends and is forgotten by the lock; only then the new engine's
+        // start goes on.
+        device.answer(&app_message::Kind::StopAgent(StopAgent {}));
+        open_end_gate();
+        assert!(
+            lock.when(
+                crate::testkit::PATIENCE,
+                |lock| !lock.earlier_engine("env-a", 0),
+                |_, gone| gone
+            ),
+            "the old engine ended"
+        );
+        assert!(
+            lock.with(|lock| lock.stopping("env-a")),
+            "Stop forgot the engine that was starting: the hold ended with the old engine"
+        );
+        release_engine_start();
+
+        // The engine that was starting registers, ends for the Stop, and only then the hold ends;
+        // a call before that is refused, so the first engine that gets a call starts after it.
+        let starting = AtomicU64::new(0);
+        assert!(
+            lock.when(
+                crate::testkit::PATIENCE,
+                |lock| !lock.stopping("env-a"),
+                |lock, ended| {
+                    starting.store(lock.input_engine().unwrap_or(0), Ordering::SeqCst);
+                    ended
+                }
+            ),
+            "the Stop ended"
+        );
+
+        // Only the old engine had begun a call when the Stop ended.
+        assert_eq!(
+            Some(starting.load(Ordering::SeqCst)),
+            old_engine,
+            "a call began on an engine before the Stop ended"
+        );
+        assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
+    }
+
     #[test]
     fn a_check_that_hangs_opens_no_channel_and_closes_an_open_one() {
         use crate::lazurio::app::device::v1::Connected;

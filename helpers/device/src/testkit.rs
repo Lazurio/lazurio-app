@@ -959,3 +959,60 @@ impl UtilityCheck for FakeUtility {
         answer
     }
 }
+
+/// Where the next engine start stops before the lock hears of it, for a test that presses Stop
+/// meanwhile: off, armed, paused there, or let go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartPause {
+    Off,
+    Armed,
+    Paused,
+    Released,
+}
+
+static START_PAUSE: Mutex<StartPause> = Mutex::new(StartPause::Off);
+static START_PAUSE_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
+
+fn set_start_pause(state: StartPause) {
+    *START_PAUSE.lock().unwrap_or_else(PoisonError::into_inner) = state;
+    START_PAUSE_CHANGED.notify_all();
+}
+
+fn wait_start_pause(until: StartPause) {
+    let state = START_PAUSE.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_state, timeout) = START_PAUSE_CHANGED
+        .wait_timeout_while(state, PATIENCE, |state| *state != until)
+        .unwrap_or_else(PoisonError::into_inner);
+    assert!(!timeout.timed_out(), "the engine's start reached {until:?}");
+}
+
+/// The next engine start stops before the lock hears of it. Only for tests that hold
+/// [`spawning`], so no other test's engine stops there.
+pub fn arm_engine_start_pause() {
+    set_start_pause(StartPause::Armed);
+}
+
+/// Waits until an engine start stopped at the pause.
+pub fn wait_engine_start_paused() {
+    wait_start_pause(StartPause::Paused);
+}
+
+/// Lets the paused engine start go on.
+pub fn release_engine_start() {
+    set_start_pause(StartPause::Released);
+}
+
+/// Called by a channel between an engine's start and the lock hearing of it.
+pub fn engine_start_pause_point() {
+    let mut state = START_PAUSE.lock().unwrap_or_else(PoisonError::into_inner);
+    if *state != StartPause::Armed {
+        return;
+    }
+    *state = StartPause::Paused;
+    START_PAUSE_CHANGED.notify_all();
+    let mut state = START_PAUSE_CHANGED
+        .wait_timeout_while(state, PATIENCE, |state| *state == StartPause::Paused)
+        .unwrap_or_else(PoisonError::into_inner)
+        .0;
+    *state = StartPause::Off;
+}
