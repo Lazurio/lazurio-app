@@ -884,6 +884,8 @@ impl FakeEngines {
 #[derive(Default)]
 pub struct FakeUtility {
     answer: Mutex<Option<Pairing>>,
+    /// Answers taken one per check before `answer`, as a check that fails now and then.
+    next: Mutex<std::collections::VecDeque<Pairing>>,
     asked: Mutex<usize>,
     changed: std::sync::Condvar,
     hanging: Mutex<bool>,
@@ -902,6 +904,14 @@ impl FakeUtility {
     /// From now on, the check answers `pairing`.
     pub fn set(&self, pairing: Pairing) {
         *self.answer.lock().unwrap_or_else(PoisonError::into_inner) = Some(pairing);
+    }
+
+    /// The next checks answer `answers` in order, then `set`'s answer again.
+    pub fn then(&self, answers: &[Pairing]) {
+        self.next
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(answers.iter().copied());
     }
 
     /// From now on, each check takes `takes` after it read its answer.
@@ -938,11 +948,17 @@ impl FakeUtility {
 
 impl UtilityCheck for FakeUtility {
     fn check(&self) -> Pairing {
-        let answer = self
-            .answer
+        let next = self
+            .next
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .unwrap_or(Pairing::Absent);
+            .pop_front();
+        let answer = next.unwrap_or_else(|| {
+            self.answer
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .unwrap_or(Pairing::Absent)
+        });
         *self.asked.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         self.changed.notify_all();
         let takes = *self.takes.lock().unwrap_or_else(PoisonError::into_inner);
