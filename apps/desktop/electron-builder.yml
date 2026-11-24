@@ -1,5 +1,7 @@
 # Lazurio App GEN4. The identity io.lazurio.app never changes (decisions 0241 and 0248): macOS
 # keeps the person's Accessibility and Screen Recording permissions with it and its signing team.
+# Only a trial build for macOS (desktop-update-trial.yml) is io.lazurio.app.trial, so it never takes
+# the installed app's permissions.
 appId: io.lazurio.app
 productName: Lazurio App
 # The package's name, which names the per-user Windows installation folder

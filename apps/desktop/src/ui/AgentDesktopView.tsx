@@ -278,6 +278,9 @@ function Permissions({
         {row("screen", text.screen, permissions.screen)}
       </ul>
       {permissions.screen ? null : <p className="ad__perm-note">{text.screenAfterRestart}</p>}
+      <p className="ad__perm-note" data-permission-note="other-build">
+        {text.otherBuild}
+      </p>
       {step.action === "restart" ? (
         <button
           type="button"

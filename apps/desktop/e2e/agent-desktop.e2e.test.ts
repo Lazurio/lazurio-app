@@ -624,7 +624,8 @@ describe("Agent Desktop's switch", () => {
     assert.strictEqual(signIns, signInsBefore);
     assert.strictEqual(handOverOrigins.length, handOversBefore);
     assert.notInclude(output.join("").slice(from), "system-browser");
-    // Two rows with their state, the sentence about the restart, one button.
+    // Two rows with their state, the sentences about the restart and about a row switched on
+    // for another build of the app, one button.
     assert.deepStrictEqual(
       await permissions()
         .locator("[data-permission][data-allowed]")
@@ -640,7 +641,11 @@ describe("Agent Desktop's switch", () => {
       ],
     );
     assert.strictEqual(await permissions().locator("button").count(), 1);
-    assert.strictEqual(await permissions().locator("p").count(), 1);
+    assert.strictEqual(await permissions().locator("p").count(), 2);
+    assert.match(
+      await permissions().locator('[data-permission-note="other-build"]').innerText(),
+      /remove it with −, and add it again with \+|odeberte ji tlačítkem − a přidejte znovu tlačítkem \+/u,
+    );
     // The window sends only a kind; the main process refuses any other.
     const refused = await shell.evaluate(async () => {
       const results: Array<string> = [];
@@ -687,6 +692,16 @@ describe("Agent Desktop's switch", () => {
     // Screen Recording's pane was opened: it applies after a restart, which the one button does.
     await shell.locator('[data-device-permissions="restart"]').waitFor();
     assert.strictEqual(await permissions().locator("button").count(), 1);
+    // A first grant needs only the restart; another build is named only for a restart that did
+    // not help.
+    assert.match(
+      await permissions().locator("p").first().innerText(),
+      /takes effect after the app restarts|platí až po restartu aplikace/u,
+    );
+    assert.match(
+      await permissions().locator('[data-permission-note="other-build"]').innerText(),
+      /^(Is Lazurio App switched on in System Settings even after the app restarted|Svítí Lazurio App v Nastavení systému zapnutá i po restartu aplikace)/u,
+    );
     const restarted = mark();
     await permissions().locator('[data-action="device-restart"]').click();
     await said(restarted, "lazurio-app-e2e restart");
