@@ -47,6 +47,8 @@ pub enum Busy {
     /// An engine of the same Environment's earlier channel has not ended yet, and may still hold
     /// the mouse button.
     Ending,
+    /// The person pressed Stop while the call waited for that engine: it never reaches an engine.
+    Stopped,
 }
 
 impl Busy {
@@ -62,6 +64,7 @@ impl Busy {
             Self::Updating => "Lazurio App se právě aktualizuje. Zkuste to za chvíli. (Lazurio App is updating. Try again in a moment.)".to_owned(),
             Self::Unconfirmed => "Agent Desktop nemohl potvrdit, že zastavený nástroj skončil. Restartujte Lazurio App. (Agent Desktop could not confirm that a stopped tool ended. Restart Lazurio App.)".to_owned(),
             Self::Ending => "Předchozí spojení tohoto Prostředí ještě končí. Zkuste to za chvíli. (The previous connection of this Environment is still ending. Try again in a moment.)".to_owned(),
+            Self::Stopped => crate::tap::STOPPED.to_owned(),
         }
     }
 }
@@ -179,6 +182,14 @@ impl DeviceLock {
         self.engines
             .iter()
             .any(|(other, environment)| *other != engine && environment == environment_id)
+    }
+
+    /// Whether Stop ended the work of `environment_id` and the hold waits for its engines to end.
+    #[must_use]
+    pub fn stopping(&self, environment_id: &str) -> bool {
+        self.hold
+            .as_ref()
+            .is_some_and(|hold| hold.holder.environment_id == environment_id && hold.stopping > 0)
     }
 
     /// Engine `engine` began a tool call that [`DeviceLock::try_begin`] allowed.

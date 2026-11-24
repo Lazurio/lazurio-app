@@ -1705,6 +1705,21 @@ mod tests {
     static END_GATE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
     static END_GATE_OPENED: std::sync::Condvar = std::sync::Condvar::new();
 
+    /// Closes [`END_GATE`]; the tests that use it run one at a time (`spawning`).
+    fn close_end_gate() {
+        *END_GATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+    }
+
+    /// Opens [`END_GATE`].
+    fn open_end_gate() {
+        *END_GATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        END_GATE_OPENED.notify_all();
+    }
+
     /// Ends engines once [`END_GATE`] is open.
     fn gated_end(engine: crate::engine::Engine, grace: Duration) -> bool {
         let open = END_GATE
@@ -1735,6 +1750,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let _forks = spawning();
+        close_end_gate();
         let (environment, mut orders) = scripted_sessions(2);
         let new = orders.remove(1);
         let old = orders.remove(0);
@@ -1805,10 +1821,7 @@ mod tests {
 
         // The old engine ends in its call and releases its button; only then, in the same hold
         // of the lock that forgets the old engine, may the new call begin.
-        *END_GATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
-        END_GATE_OPENED.notify_all();
+        open_end_gate();
         engines.until(|event| {
             matches!(event, EngineEvent::Got { engine: 2, tool, .. } if tool == "desktop_wait")
         });
@@ -1826,6 +1839,110 @@ mod tests {
             .idle
         {}
         assert_eq!(releases.load(Ordering::SeqCst), 2);
+        assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
+    }
+
+    /// Stop while the same Environment's new channel waits for its old engine to end: the waiting
+    /// call never reaches the new engine, so nothing clicks or drags after Stop.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one story: a call waits for a replaced channel's engine, then Stop"
+    )]
+    fn stop_refuses_a_call_that_waits_for_a_replaced_channels_engine() {
+        use crate::lazurio::app::device::v1::Working;
+        use crate::testkit::{
+            EngineEvent, FakeEngines, FakeUtility, Order, scripted_sessions, spawning,
+        };
+        use serde_json::json;
+
+        let _forks = spawning();
+        close_end_gate();
+        let (environment, mut orders) = scripted_sessions(2);
+        let new = orders.remove(1);
+        let old = orders.remove(0);
+        let engines = FakeEngines::start();
+        let mut spec = engines.spec();
+        spec.physical_input = true;
+        let utility = FakeUtility::absent();
+        let (device, states, _locks, _) = guarded_device(
+            &environment,
+            &utility,
+            guard::CHECK_EVERY,
+            guard::CHECK_TIMEOUT,
+            Some(spec),
+        );
+        let mut device = device
+            .with_ender(gated_end)
+            .with_pointer_release(Arc::new(|| {}));
+        let initialize = |session: &std::sync::mpsc::Sender<Order>, id: &str| {
+            session
+                .send(Order::Send(
+                    json!({"jsonrpc": "2.0", "id": id, "method": "initialize",
+                    "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
+                ))
+                .expect("the session follows orders");
+        };
+        let call = |session: &std::sync::mpsc::Sender<Order>| {
+            session
+                .send(Order::Send(
+                    json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "desktop_wait", "arguments": {}}}),
+                ))
+                .expect("the session follows orders");
+        };
+
+        // The old channel's agent runs a call on engine 1; the channel is replaced, engine 1's
+        // end waits at the gate, and the new channel's call waits for it.
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(1));
+        initialize(&old, "o0");
+        call(&old);
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 1, tool, .. } if tool == "desktop_wait")
+        });
+        let working = (
+            "env-a".to_owned(),
+            channel_state::State::Working(Working {
+                tool: "desktop_wait".to_owned(),
+                application: String::new(),
+            }),
+        );
+        while state_of(&states) != working {}
+        start_env(&mut device, "env-a", &crate::testkit::hand_over(2));
+        initialize(&new, "n0");
+        engines.until(|event| {
+            matches!(event, EngineEvent::Got { engine: 2, method, .. } if method == "initialize")
+        });
+        call(&new);
+        let early = engines.events.recv_timeout(Duration::from_millis(500));
+        assert!(
+            !matches!(early, Ok(EngineEvent::Got { engine: 2, ref tool, .. }) if tool == "desktop_wait"),
+            "the call did not wait: {early:?}"
+        );
+
+        // Stop, then the old engine ends: the waiting call is refused, and engine 2 ends without
+        // ever getting it.
+        device.answer(&app_message::Kind::StopAgent(StopAgent {}));
+        open_end_gate();
+        loop {
+            let event = engines.next();
+            assert!(
+                !matches!(event, EngineEvent::Got { engine: 2, ref tool, .. } if tool == "desktop_wait"),
+                "a call reached the engine after Stop"
+            );
+            if event == EngineEvent::Ended(2) {
+                break;
+            }
+        }
+        // A call handed to the engine says Working at once; a refused one never does. The
+        // engine may be killed before it reports what it got, so its state is what tells.
+        let after_stop: Vec<ChannelState> = states.try_iter().collect();
+        assert!(
+            !after_stop
+                .iter()
+                .any(|state| matches!(state.state, Some(channel_state::State::Working(_)))),
+            "a call was handed to the engine after Stop: {after_stop:?}"
+        );
         assert!(device.shutdown(Instant::now() + crate::testkit::PATIENCE));
     }
 

@@ -932,10 +932,18 @@ impl Worker {
                 // A channel this Environment replaced may still be ending its old engine, whose
                 // drag may still press the mouse button: no call begins until that engine has
                 // ended and released it, so the button always has one engine that pressed it.
+                // Stop wakes the wait, and a call waiting when the person pressed it never
+                // reaches the engine.
                 let begun = self.channel.lock.when(
                     ENDING_ENGINE_WAIT,
-                    |lock| !lock.earlier_engine(environment_id, engine.id()),
+                    |lock| {
+                        lock.stopping(environment_id)
+                            || !lock.earlier_engine(environment_id, engine.id())
+                    },
                     |lock, ready| {
+                        if lock.stopping(environment_id) {
+                            return Err(Busy::Stopped);
+                        }
                         if !ready {
                             return Err(Busy::Ending);
                         }
