@@ -184,10 +184,17 @@ describe("Agent Desktop's panel in its sample states", () => {
         lang === "cs" ? "Restartovat Lazurio App (Alpha)" : "Restart Lazurio App (Alpha)",
       );
       assert.strictEqual(
-        await block.locator(".ad__perm-note").innerText(),
+        await block.locator(".ad__perm-note:not([data-permission-note])").innerText(),
         lang === "cs"
           ? "Nahrávání obrazovky platí až po restartu aplikace."
           : "Screen Recording takes effect after the app restarts.",
+      );
+      // What to do when a restart did not help: the row may belong to another build.
+      assert.match(
+        await block.locator('[data-permission-note="other-build"]').innerText(),
+        lang === "cs"
+          ? /i po restartu aplikace.*tlačítkem −.*tlačítkem \+/su
+          : /even after the app restarted.*with −.*with \+/su,
       );
       // Nothing runs out of the window sideways, and the button keeps its text on one line.
       assert.isTrue(
