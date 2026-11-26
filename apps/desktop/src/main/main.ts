@@ -97,13 +97,40 @@ const testHooks = Effect.gen(function* () {
     !Electron.app.isPackaged &&
     (yield* Config.Boolean("LAZURIO_APP_E2E").pipe(Config.withDefault(false)));
   if (!enabled) {
+    // Trial build only (never in main): each address the app opens in the system's browser, the
+    // account's sign-in and the network's, also goes to the file named here, for a rehearsal.
+    const signInFile = Option.getOrUndefined(
+      yield* Config.option(Config.String("LAZURIO_APP_TRIAL_SIGN_IN_FILE")),
+    );
+    const record = (kind: string, address: string) => {
+      if (signInFile === undefined) return;
+      try {
+        // @effect-diagnostics-next-line globalDate:off - A plain timestamp in a rehearsal's file.
+        NodeFS.appendFileSync(signInFile, `${new Date().toISOString()} ${kind} ${address}\n`, {
+          mode: 0o600,
+        });
+      } catch {
+        // A rehearsal's file that cannot be written changes nothing for the app.
+      }
+    };
+    const kindOf = (address: string) =>
+      URL.parse(address)?.hostname.startsWith("headscale.") === true ? "network" : "external";
     return {
-      observer: Hardening.electronObserver,
+      observer: {
+        ...Hardening.electronObserver,
+        openExternally: (address: string) => {
+          record(kindOf(address), address);
+          Hardening.electronObserver.openExternally(address);
+        },
+      },
       remoteUrl: Option.none<string>(),
       tailnetHelper: Option.none<Helpers.HelperBinary>(),
       deviceHelper: Option.none<Helpers.HelperBinary>(),
       authIssuer: Option.none<string>(),
-      openBrowser: openInSystemBrowser,
+      openBrowser: (address: string) => {
+        record("account", address);
+        return openInSystemBrowser(address);
+      },
       helperStarted: (_name: string, _pid: number) => {},
       fixtures: false,
       notice: systemNotice,
