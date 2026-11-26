@@ -1,0 +1,3 @@
+#!/bin/sh
+# Runs the vault trial in the container with Chromium's OS sandbox. Usage: run.sh '<steps json>'
+cd "$(dirname "$0")" && rm -rf out && docker run --rm --network host --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined -v "$PWD":/work -w /work -e BITWARDEN_DIR=/work/bitwarden -e VAULT_SERVER=http://127.0.0.1:18088 -e VAULT_EMAIL="$VAULT_EMAIL" -e VAULT_PASSWORD="$VAULT_PASSWORD" -e ITEM_USER=trial-user -e ITEM_PASSWORD=S3cret-from-the-vault -e PAGE_PORT=18090 -e TRIAL_OUT=/work/out -e TRIAL_EXPLORE="${TRIAL_EXPLORE:-0}" -e TRIAL_STEPS="$1" lzd-electron-trial:2 timeout 240 xvfb-run -a /opt/electron/electron . > run.log 2>&1
