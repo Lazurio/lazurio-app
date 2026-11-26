@@ -27,7 +27,7 @@ import {
 } from "./AuthClient.ts";
 import * as DeviceEnvironments from "./DeviceEnvironments.ts";
 import * as DeviceService from "./DeviceService.ts";
-import { run, type DeviceSwitches } from "./DeviceSwitches.ts";
+import { run, withoutDevice, type DeviceSwitches } from "./DeviceSwitches.ts";
 import { fakeHelper, type FakeHelper, type Reply } from "./fake-device-connection.ts";
 import * as MacPermissions from "./MacPermissions.ts";
 
@@ -1104,6 +1104,52 @@ describe("DeviceSwitches when the helper does not confirm a channel's stop", () 
         problem: STOP_NOT_CONFIRMED,
         at: 0,
       });
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("DeviceSwitches without a Device helper", () => {
+  it.effect("shows the saved Environments, the consent and the account, and revokes them", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN, OTHER], [ORIGIN, OTHER]);
+      const auth = yield* fakeAuth("signedIn");
+      const switches = yield* withoutDevice({ state: "failed", auth: auth.shape, environments });
+      const shown = switches.current();
+      assert.strictEqual(shown.state, "failed");
+      assert.strictEqual(shown.account, "signed-in");
+      assert.deepStrictEqual(switchOf(shown), {
+        origin: ORIGIN,
+        host: HOST,
+        switch: { phase: "off", problem: { from: "app", reason: "helper-unavailable" } },
+        channel: { state: "off" },
+        consent: true,
+      });
+      // On needs the helper; off revokes the consent with nothing else.
+      assert.strictEqual(
+        (yield* Effect.flip(switches.setSwitch(ORIGIN, true))).problem,
+        "unavailable",
+      );
+      yield* switches.setSwitch(ORIGIN, false);
+      assert.isFalse(environments.leftOn(ORIGIN));
+      assert.isUndefined(switchOf(switches.current())?.consent);
+      // Signing out revokes every consent and ends the session.
+      yield* switches.signOut;
+      assert.isFalse(environments.leftOn(OTHER));
+      assert.strictEqual(auth.calls.signOut, 1);
+      assert.strictEqual(switches.current().account, "signed-out");
+      // An Environment can be removed too.
+      yield* switches.removeEnvironment(OTHER);
+      assert.deepStrictEqual(environments.origins(), [ORIGIN]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("fails the sign-out when a consent cannot be saved as revoked", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN], [ORIGIN], true);
+      const auth = yield* fakeAuth("signedIn");
+      const switches = yield* withoutDevice({ state: "absent", auth: auth.shape, environments });
+      assert.strictEqual((yield* Effect.flip(switches.signOut)).problem, "not-saved");
+      assert.strictEqual(auth.calls.signOut, 1, "the session still ends");
     }).pipe(Effect.scoped),
   );
 });

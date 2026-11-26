@@ -683,37 +683,41 @@ const program = Effect.gen(function* () {
       ),
     );
   };
-  const switches = Option.isSome(device)
-    ? Option.some(
-        yield* DeviceSwitches.run({
-          device: device.value,
-          auth: yield* Effect.service(AuthClient.AuthClient).pipe(
-            Effect.provide(
-              AuthClient.layer({
-                ...Option.match(hooks.authIssuer, {
-                  onNone: () => ({}),
-                  onSome: (issuer) => ({ issuer }),
-                }),
-                keystore,
-                sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
-                allowWithoutKeystore: !Electron.app.isPackaged,
-                openBrowser: hooks.openBrowser,
-                locale: localeOf(Electron.app.getLocale()),
-              }).pipe(Layer.provide(FetchHttpClient.layer)),
-            ),
-          ),
-          environments: deviceEnvironments,
-          // The Environment's names from its Lazurio, read as the main window's page reads them:
-          // with that window's session, so its cookie and its tailnet's proxy, and nothing more.
-          readNames: (origin) =>
-            ShellNames.read(origin, (url, init) =>
-              Electron.session.fromPartition(MainWindow.REMOTE_PARTITION).fetch(url, init),
-            ),
-          permissions,
-          offByItself: switchNotice,
+  // The app's own sign-in with Lazurio Auth, also without a helper: the person can sign out then.
+  const auth = yield* Effect.service(AuthClient.AuthClient).pipe(
+    Effect.provide(
+      AuthClient.layer({
+        ...Option.match(hooks.authIssuer, {
+          onNone: () => ({}),
+          onSome: (issuer) => ({ issuer }),
         }),
-      )
-    : Option.none<DeviceSwitches.DeviceSwitches>();
+        keystore,
+        sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
+        allowWithoutKeystore: !Electron.app.isPackaged,
+        openBrowser: hooks.openBrowser,
+        locale: localeOf(Electron.app.getLocale()),
+      }).pipe(Layer.provide(FetchHttpClient.layer)),
+    ),
+  );
+  const switches: DeviceSwitches.DeviceSwitches = Option.isSome(device)
+    ? yield* DeviceSwitches.run({
+        device: device.value,
+        auth,
+        environments: deviceEnvironments,
+        // The Environment's names from its Lazurio, read as the main window's page reads them:
+        // with that window's session, so its cookie and its tailnet's proxy, and nothing more.
+        readNames: (origin) =>
+          ShellNames.read(origin, (url, init) =>
+            Electron.session.fromPartition(MainWindow.REMOTE_PARTITION).fetch(url, init),
+          ),
+        permissions,
+        offByItself: switchNotice,
+      })
+    : yield* DeviceSwitches.withoutDevice({
+        state: deviceHelper === undefined ? "absent" : "failed",
+        auth,
+        environments: deviceEnvironments,
+      });
   // Without a Device helper no switch can go on: each the person left on says so.
   if (Option.isNone(device)) {
     for (const origin of deviceEnvironments.origins()) {
@@ -722,26 +726,13 @@ const program = Effect.gen(function* () {
       }
     }
   }
-  const noSwitch = Effect.fail(new DeviceSwitches.DeviceSwitchError({ problem: "not-listed" }));
   const openWindow = Effect.sync(openAgentDesktop);
-  const permissionControls = {
+  const deviceControls: DeviceIpc.DeviceControls = {
+    ...switches,
+    openWindow,
     openPermissionSettings: permissions.openSettings,
     restartApp: permissions.restartApp,
   };
-  const deviceControls: DeviceIpc.DeviceControls = Option.match(switches, {
-    onSome: (service) => ({ ...service, openWindow, ...permissionControls }),
-    onNone: () => ({
-      current: () => DeviceService.withoutHelper(deviceHelper === undefined ? "absent" : "failed"),
-      subscribe: () => () => {},
-      stop: Effect.void,
-      setSwitch: () => noSwitch,
-      addEnvironment: () => noSwitch,
-      removeEnvironment: () => noSwitch,
-      signOut: Effect.void,
-      openWindow,
-      ...permissionControls,
-    }),
-  });
   const panelServices = yield* Effect.context<never>();
   devicePanel = Option.some(
     yield* DevicePanel.make({
@@ -1096,7 +1087,7 @@ const program = Effect.gen(function* () {
       whenReachable: tailnets.whenReachable,
       historyChanged: () => refreshMenu(),
       pageShown: (url) => {
-        if (Option.isSome(switches)) switches.value.pageShown(url);
+        switches.pageShown(url);
       },
       pageOutcome: (outcome) => {
         page = outcome;

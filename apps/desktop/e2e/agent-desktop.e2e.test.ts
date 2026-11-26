@@ -528,6 +528,18 @@ describe("Agent Desktop's switch", () => {
       "lazurio-app-e2e notice Agent Desktop does not connect to the Environment",
     );
     assert.strictEqual(await toggle().getAttribute("aria-checked"), "true");
+
+    // Without a Device helper (here one that cannot start), the Environment, its consent and the
+    // account still show, a notice says why it does not connect, and the switch revokes it.
+    await app.close();
+    await launch({ LAZURIO_APP_E2E_DEVICE_HELPER: "/nonexistent/fake-device-helper.ts" });
+    await shell.locator('section[data-device-state="failed"]').waitFor();
+    assert.include(
+      output.join(""),
+      "lazurio-app-e2e notice Agent Desktop did not connect to the Environment",
+    );
+    assert.strictEqual(await toggle().getAttribute("aria-checked"), "true");
+    await shell.locator('[data-device-account="signed-out"]').waitFor();
     // One click revokes it, with no sign-in and no channel.
     await toggle().click();
     await shell
