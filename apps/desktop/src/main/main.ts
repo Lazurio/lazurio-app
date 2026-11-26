@@ -57,6 +57,7 @@ import type * as Tabs from "./Tabs.ts";
 import * as NodeKeys from "./NodeKeys.ts";
 import * as RemoteUrl from "./RemoteUrl.ts";
 import * as ShellNames from "./ShellNames.ts";
+import * as SignInAddress from "./SignInAddress.ts";
 import * as SignInIpc from "./SignInIpc.ts";
 import * as Tailnet from "./Tailnet.ts";
 import * as ReleaseFeed from "./ReleaseFeed.ts";
@@ -654,6 +655,8 @@ const program = Effect.gen(function* () {
   });
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
   // The app's own sign-in with Lazurio Auth, one for the person's networks and Agent Desktop.
+  // The address of the account's sign-in under way; a change reaches the windows' status.
+  const signInAddress = SignInAddress.make(() => broadcastStatus());
   const auth = yield* Effect.service(AuthClient.AuthClient).pipe(
     Effect.provide(
       AuthClient.layer({
@@ -664,7 +667,11 @@ const program = Effect.gen(function* () {
         keystore,
         sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
         allowWithoutKeystore: !Electron.app.isPackaged,
-        openBrowser: hooks.openBrowser,
+        // The address of a sign-in under way, which the network bar may copy (SignInIpc).
+        openBrowser: (address: string) => {
+          signInAddress.offer(address);
+          return hooks.openBrowser(address);
+        },
         locale: localeOf(Electron.app.getLocale()),
       }).pipe(Layer.provide(FetchHttpClient.layer)),
     ),
@@ -841,6 +848,7 @@ const program = Effect.gen(function* () {
     tailnetSource: joining.source,
     account: account === "signedOut" ? "signed-out" : needsSignIn ? "needs-sign-in" : "signed-in",
     networksNotRead,
+    signInCopyable: Option.isSome(signInAddress.current()),
     updates: updates.current(),
     page,
   });
@@ -863,6 +871,7 @@ const program = Effect.gen(function* () {
     Stream.runForEach((state) =>
       Effect.sync(() => {
         account = state;
+        signInAddress.clear();
         if (state === "signedOut") {
           needsSignIn = false;
           networksNotRead = false;
@@ -901,7 +910,16 @@ const program = Effect.gen(function* () {
     });
   }
   // Only the app's local windows may start the sign-in for the person's networks.
-  yield* SignInIpc.serve(auth, Account.signOutOf(switches, auth));
+  yield* SignInIpc.serve(
+    signInAddress.attempt(auth.signIn),
+    Account.signOutOf(switches, auth),
+    Effect.suspend(() =>
+      Option.match(signInAddress.current(), {
+        onNone: () => Effect.fail(new SignInIpc.NoSignInUnderWay()),
+        onSome: (address) => Effect.promise(async () => Electron.clipboard.writeText(address)),
+      }),
+    ),
+  );
   // Only the app's local windows may pick the channel or install (UpdatesIpc.ts).
   yield* UpdatesIpc.serve(updates);
   // Only the app's local windows see Agent Desktop's state and may press Stop (DeviceIpc.ts).

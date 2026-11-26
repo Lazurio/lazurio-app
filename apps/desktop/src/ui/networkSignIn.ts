@@ -11,6 +11,7 @@ export const useNetworkSignIn = () => {
   const [status, setStatus] = useState<AppStatus | undefined>(undefined);
   const [signingIn, setSigningIn] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
   useEffect(() => {
     const stop = window.lazurio.onStatus(setStatus);
     void window.lazurio.status().then(setStatus);
@@ -19,6 +20,7 @@ export const useNetworkSignIn = () => {
   const signIn = () => {
     setSigningIn(true);
     setFailed(false);
+    setCopied(null);
     window.lazurio.signIn().then(
       () => setSigningIn(false),
       () => {
@@ -29,13 +31,26 @@ export const useNetworkSignIn = () => {
   };
   const step: NetworkBarStep | undefined =
     status === undefined ? undefined : networkBarStep(status);
-  return { status, step, signingIn, failed, signIn };
+  // While the sign-in waits, its address can be copied, for a browser other than the system's.
+  const copySignIn = () => {
+    window.lazurio.copySignIn().then(
+      () => setCopied("copied"),
+      () => setCopied("failed"),
+    );
+  };
+  return { status, step, signingIn, failed, signIn, copied, copySignIn };
 };
 
-// The sign-in button's words: a first sign-in, a new one for the scope, or reading again.
-export const signInLabel = (step: NetworkBarStep, failed: boolean, words: Text): string =>
+// The sign-in button's words: the sign-in with the Lazurio account, also for a session from before
+// the app asked for the networks (nothing was signed in for them yet), or reading again.
+export const signInLabel = (
+  step: NetworkBarStep,
+  failed: boolean,
+  words: Text,
+  length: "full" | "short" = "full",
+): string =>
   failed || step === "not-read" || step === "empty"
     ? words.networkBarSteps.tryAgain
-    : step === "sign-in-again"
-      ? words.networksSignInAgain
+    : length === "short"
+      ? words.networkBarSteps.signInShort
       : words.networksSignIn;

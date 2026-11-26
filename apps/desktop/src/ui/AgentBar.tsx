@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { workingAgent } from "../shared/agentBar.ts";
 import type { DeviceStatus } from "../shared/bridge.ts";
-import { offersSignIn, type NetworkBarStep } from "../shared/networkBar.ts";
+import { networkBarSentence, offersSignIn, type NetworkBarSentence } from "../shared/networkBar.ts";
 import { localeOf, messages, type Text } from "./messages.ts";
 import { signInLabel, useNetworkSignIn } from "./networkSignIn.ts";
 
@@ -28,6 +28,16 @@ export function AgentBar() {
   const agent = workingAgent(status);
   if (agent === null && networkMissing && network.step !== undefined) {
     const signs = offersSignIn(network.step);
+    // While the sign-in waits in the browser, the bar says so and offers only to copy its
+    // address, once the attempt has one; otherwise the sentence, the sign-in and the help.
+    const sentence = network.signingIn
+      ? words.networkBarSteps.signingIn
+      : network.failed
+        ? words.networksSignInFailed
+        : barSentence(
+            networkBarSentence(network.step, (network.status?.tailnets.length ?? 0) > 0),
+            words,
+          );
     return (
       <div
         className="agent-bar"
@@ -35,29 +45,44 @@ export function AgentBar() {
         data-network-step={network.step}
         role="status"
       >
-        <p className="agent-bar__text">
-          {network.failed ? words.networksSignInFailed : barSentence(network.step, words)}
-        </p>
-        {signs ? (
-          <button
-            type="button"
-            data-action="networks-sign-in"
-            disabled={network.signingIn}
-            onClick={network.signIn}
-          >
-            {network.signingIn
-              ? words.networkBarSteps.signingIn
-              : signInLabel(network.step, network.failed, words)}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className={signs ? "agent-bar__secondary" : undefined}
-          data-action="network-help"
-          onClick={() => void window.lazurio.showNetworkHelp()}
-        >
-          {words.networkHelp}
-        </button>
+        <p className="agent-bar__text">{sentence}</p>
+        {network.signingIn ? (
+          network.status?.signInCopyable === true ? (
+            <button
+              type="button"
+              className="agent-bar__secondary"
+              data-action="networks-copy-sign-in"
+              onClick={network.copySignIn}
+            >
+              {network.copied === "copied"
+                ? words.networkBarSteps.copied
+                : network.copied === "failed"
+                  ? words.networkBarSteps.copyFailed
+                  : words.networkBarSteps.copy}
+            </button>
+          ) : null
+        ) : (
+          <>
+            {signs ? (
+              <button type="button" data-action="networks-sign-in" onClick={network.signIn}>
+                <span className="agent-bar__long">
+                  {signInLabel(network.step, network.failed, words)}
+                </span>
+                <span className="agent-bar__short">
+                  {signInLabel(network.step, network.failed, words, "short")}
+                </span>
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={signs ? "agent-bar__secondary agent-bar__help" : "agent-bar__help"}
+              data-action="network-help"
+              onClick={() => void window.lazurio.showNetworkHelp()}
+            >
+              {words.networkHelp}
+            </button>
+          </>
+        )}
       </div>
     );
   }
@@ -90,8 +115,10 @@ export function AgentBar() {
   );
 }
 
-const barSentence = (step: NetworkBarStep, words: Text): string => {
-  switch (step) {
+const barSentence = (sentence: NetworkBarSentence, words: Text): string => {
+  switch (sentence) {
+    case "own-networks":
+      return words.networkBarSteps.ownNetworks;
     case "reading":
       return words.networkBarSteps.reading;
     case "not-read":

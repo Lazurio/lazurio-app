@@ -21,6 +21,7 @@ import {
   SET_UPDATE_CHANNEL_CHANNEL,
   STATUS_PANEL_CHANNEL,
   SIGN_IN_CHANNEL,
+  COPY_SIGN_IN_CHANNEL,
   SIGN_OUT_CHANNEL,
   STATUS_CHANGED_CHANNEL,
   STATUS_CHANNEL,
@@ -74,6 +75,9 @@ const bridge: LazurioBridge = {
   },
   signIn: async () => {
     await Electron.ipcRenderer.invoke(SIGN_IN_CHANNEL);
+  },
+  copySignIn: async () => {
+    await Electron.ipcRenderer.invoke(COPY_SIGN_IN_CHANNEL);
   },
   signOut: async () => {
     await Electron.ipcRenderer.invoke(SIGN_OUT_CHANNEL);

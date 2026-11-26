@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { networkBarStep, offersSignIn } from "./networkBar.ts";
+import { networkBarSentence, networkBarStep, offersSignIn } from "./networkBar.ts";
 
 describe("what the main window says without the Organization's network", () => {
   it("offers the account's sign-in at a first start, and again when the session lacks the scope", () => {
@@ -66,5 +66,15 @@ describe("what the main window says without the Organization's network", () => {
       networkBarStep({ ...saved, account: "signed-in", networksNotRead: true }),
       "not-read",
     );
+  });
+
+  it("says the network is not set up only when the app joins none, never over a joined one", () => {
+    // No network at all (a stable Windows build with only the built-in list): not set up.
+    assert.strictEqual(networkBarSentence("sign-in", false), "not-set-up");
+    // Lazurio Example joined (a Mac, a nightly): the sign-in brings the person's own networks.
+    assert.strictEqual(networkBarSentence("sign-in", true), "own-networks");
+    assert.strictEqual(networkBarSentence("sign-in-again", true), "own-networks");
+    assert.strictEqual(networkBarSentence("reading", true), "reading");
+    assert.strictEqual(networkBarSentence("empty", false), "empty");
   });
 });

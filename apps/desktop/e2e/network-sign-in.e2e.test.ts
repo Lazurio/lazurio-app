@@ -190,6 +190,25 @@ const shot = async (page: import("playwright-core").Page, name: string) => {
   }
 };
 
+// The bar at narrow and normal widths of the window: nothing wraps out of its 36 px, and the
+// sentence keeps room to be read.
+const fitsAtWidths = async (bar: import("playwright-core").Page, name: string) => {
+  for (const width of [390, 600, 1280]) {
+    await app.evaluate(({ BaseWindow }, wanted) => {
+      const main = BaseWindow.getAllWindows().find((each) => each.getParentWindow() === null);
+      main?.setSize(wanted, 800);
+    }, width);
+    await bar.waitForFunction((wanted) => Math.abs(innerWidth - wanted) < 40, width);
+    const fit = await bar.evaluate(() => ({
+      height: document.querySelector(".agent-bar")?.scrollHeight ?? 0,
+      text: document.querySelector(".agent-bar__text")?.clientWidth ?? 0,
+    }));
+    assert.isAtMost(fit.height, 36, `${name} at ${width} px`);
+    assert.isAtLeast(fit.text, 120, `${name} at ${width} px`);
+    await shot(bar, `${name}-${width}.png`);
+  }
+};
+
 describe("Lazurio App GEN4 at a first start without the Organization's network", () => {
   it("offers the account's sign-in in the bar and in the Environment's place", async () => {
     const bar = await localPage(app, "view=agent-bar");
@@ -197,7 +216,7 @@ describe("Lazurio App GEN4 at a first start without the Organization's network",
     await network.waitFor();
     assert.match(await network.innerText(), /not set up yet|zatím není nastavená/u);
     assert.strictEqual(await network.locator('[data-action="networks-sign-in"]').count(), 1);
-    await shot(bar, "network-bar-sign-in.png");
+    await fitsAtWidths(bar, "network-bar-sign-in");
     const page = await localPage(app, "problem=network");
     await page.locator('main[data-problem="network"]').waitFor();
     assert.match(
@@ -212,14 +231,31 @@ describe("Lazurio App GEN4 at a first start without the Organization's network",
     const bar = await localPage(app, "view=agent-bar");
     const from = output.join("").length;
     await bar.locator('[data-action="networks-sign-in"]').click();
+    const address = await handedToBrowser(from);
+    // While the sign-in waits, the bar says so, and its address can be copied for another browser.
+    await bar.locator('[data-action="networks-copy-sign-in"]').waitFor();
+    // The page in the Environment's place asks for a sign-in too while the bar's attempt waits:
+    // that attempt and its address stay.
+    const page = await localPage(app, "problem=network");
+    await page.locator('[data-action="networks-sign-in"]').click();
+    await page.locator('[data-action="networks-sign-in"]:not([disabled])').waitFor();
+    assert.strictEqual(await bar.locator('[data-action="networks-copy-sign-in"]').count(), 1);
+    await fitsAtWidths(bar, "network-bar-signing-in");
+    await bar.locator('[data-action="networks-copy-sign-in"]').click();
+    await bar
+      .locator('[data-action="networks-copy-sign-in"]', { hasText: /Copied|Zkopírováno/u })
+      .waitFor();
+    assert.strictEqual(await app.evaluate(({ clipboard }) => clipboard.readText()), address);
     // The person signs in in the system's browser, which comes back to the app's loopback.
     // @effect-diagnostics-next-line globalFetch:off - The person's browser, outside the app and Effect.
-    await fetch(await handedToBrowser(from));
+    await fetch(address);
     // Auth's directory is out of reach: the bar says so and offers the read again.
     const notRead = bar.locator('[data-agent-bar="network"][data-network-step="not-read"]');
     await notRead.waitFor();
     assert.match(await notRead.innerText(), /could not be read|nepodařilo načíst/u);
     await shot(bar, "network-bar-not-read.png");
+    // The attempt ended: nothing to copy any more.
+    assert.strictEqual(await bar.locator('[data-action="networks-copy-sign-in"]').count(), 0);
     assert.strictEqual(signIns, 1);
     assert.deepStrictEqual(directoryReads, [{ scope: DIRECTORY_SCOPE, aud: DIRECTORY_SCOPE }]);
   });
