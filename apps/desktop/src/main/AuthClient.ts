@@ -167,11 +167,12 @@ export class NetworkDirectoryError extends Schema.TaggedError<NetworkDirectoryEr
   }
 }
 
-// One network of the person's directory as Auth answers it: its name, its control server and,
-// once Auth answers them, the DNS suffixes of the Organizations it serves.
+// One network of the person's directory as Auth answers it: its name, its control server, how many
+// of the person's Organizations it serves and, when Auth knows them all, their DNS suffixes.
 export interface DirectoryNetwork {
   readonly tailnet: string;
   readonly controlUrl: string;
+  readonly organizationCount: number;
   readonly domains?: ReadonlyArray<string>;
 }
 
@@ -953,9 +954,10 @@ export const layer = (options: AuthClientOptions) =>
           yield* Effect.logInfo("auth: network directory read", {
             networks: answer.value.networks.length,
           });
-          return answer.value.networks.map(({ tailnet, controlUrl, domains }) =>
-            domains === undefined ? { tailnet, controlUrl } : { tailnet, controlUrl, domains },
-          );
+          return answer.value.networks.map(({ tailnet, controlUrl, organizations, domains }) => {
+            const network = { tailnet, controlUrl, organizationCount: organizations.length };
+            return domains === undefined ? network : { ...network, domains };
+          });
         }).pipe(Effect.withSpan("AuthClient.networks")),
       });
     }),

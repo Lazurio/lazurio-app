@@ -1,7 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import type { AuthClientShape, DirectoryNetwork } from "./AuthClient.ts";
@@ -20,6 +22,31 @@ const domainsOf = (controlUrl: string): ReadonlyArray<string> => {
   const host = URL.parse(controlUrl)?.hostname ?? "";
   return host.startsWith(CONTROL_SERVER_PREFIX) ? [host.slice(CONTROL_SERVER_PREFIX.length)] : [];
 };
+
+// The networks Auth answers without `domains` although each serves several of the person's
+// Organizations: the control server's one suffix would leave the others' Environments unrouted, so
+// such an answer keeps the last complete list instead (Auth's contract, case of an unknown zone).
+export const unroutable = (networks: ReadonlyArray<DirectoryNetwork>): ReadonlyArray<string> =>
+  networks
+    .filter(
+      (network) =>
+        (network.domains === undefined || network.domains.length === 0) &&
+        network.organizationCount > 1,
+    )
+    .map((network) => network.tailnet);
+
+// Starts the app again for a new list only once no agent works, or may (work not confirmed ended
+// counts), as SettingWatch waits; `restart` is the app's one restart for the run.
+export const restartWhenIdle = (
+  agentWorks: () => boolean,
+  restart: Effect.Effect<void>,
+  every: Duration.Input = "5 seconds",
+): Effect.Effect<void> =>
+  Effect.suspend(() => (agentWorks() ? Effect.fail("agent works" as const) : Effect.void)).pipe(
+    Effect.retry(Schedule.spaced(every)),
+    Effect.andThen(restart),
+    Effect.ignore,
+  );
 
 // The directory's text in TailnetDirectory's form, sorted, so that the same networks give the same
 // text.
@@ -59,9 +86,9 @@ export interface ReadOptions {
   readonly handled?: Effect.Effect<void>;
 }
 
-// Reads the person's networks whenever the app is signed in, and saves a complete, non-empty list
-// that differs from the saved one. A refusal, an empty list or Auth out of reach keeps the last
-// one, and the next sign-in or start reads again; the read never retries in a loop.
+// Reads the person's networks whenever the app is signed in, and saves a complete list that differs
+// from the saved one, an empty one too: Auth's answer replaces the list whole. A refusal or Auth out
+// of reach keeps the last one, and the next sign-in or start reads again; never in a loop.
 export const follow = Effect.fn("NetworkDirectory.follow")(function* (options: ReadOptions) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -84,9 +111,15 @@ export const follow = Effect.fn("NetworkDirectory.follow")(function* (options: R
           Effect.option,
         );
         if (Option.isNone(networks)) return;
+        const unrouted = unroutable(networks.value);
+        if (unrouted.length > 0) {
+          yield* Effect.logWarning("network directory kept: a shared network without its zones", {
+            tailnets: unrouted,
+          });
+          return yield* options.onRead("not-read");
+        }
         if (networks.value.length === 0) {
           yield* Effect.logInfo("network directory: no network for this person");
-          return yield* options.onRead("read");
         }
         const text = textOf(networks.value);
         // The list replaces the last one whole, or not at all: one network the app refuses keeps

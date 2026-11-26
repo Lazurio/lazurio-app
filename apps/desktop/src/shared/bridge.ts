@@ -234,8 +234,8 @@ export interface AppStatus {
   readonly generation: "GEN4";
   readonly helpers: ReadonlyArray<HelperStatus>;
   readonly tailnets: ReadonlyArray<TailnetStatus>;
-  // A stable build with neither IT's policy nor the person's setting: no network of the
-  // Organization, and none joined in its place.
+  // No network of the Organization, and none joined in its place: a stable build with neither IT's
+  // policy, the person's setting nor a list from their account, or an account whose list is empty.
   readonly networkMissing: boolean;
   // Where the tailnets come from: the computer's IT policy, the person's own setting, the person's
   // directory at Lazurio Auth (after a sign-in), the list built into the app, or development's.
@@ -243,6 +243,9 @@ export interface AppStatus {
   // Whether the app is signed in to Lazurio with its own client; needs-sign-in: signed in from
   // before the app asked for the person's networks, so a new sign-in grants them.
   readonly account: "signed-in" | "signed-out" | "needs-sign-in";
+  // The latest read of the person's networks failed (Auth out of reach, a refusal, or a list the
+  // app does not take whole); the last complete list stays.
+  readonly networksNotRead: boolean;
   readonly updates: UpdatesStatus;
   readonly page: PageOutcome;
 }

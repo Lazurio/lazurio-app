@@ -1,11 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   type AuthClientShape,
@@ -13,16 +15,26 @@ import {
   type DirectoryNetwork,
   NetworkDirectoryError,
 } from "./AuthClient.ts";
-import { follow, readSaved, type ReadOutcome, textOf } from "./NetworkDirectory.ts";
+import type { DeviceStatus } from "../shared/bridge.ts";
+import {
+  follow,
+  readSaved,
+  type ReadOutcome,
+  restartWhenIdle,
+  textOf,
+  unroutable,
+} from "./NetworkDirectory.ts";
 import * as TailnetDirectory from "./TailnetDirectory.ts";
 
 const EXAMPLE: DirectoryNetwork = {
   tailnet: "lazurioexampleorganization",
   controlUrl: "https://headscale.lazurioexampleorganization.lazurio.io",
+  organizationCount: 1,
 };
 const OTHER: DirectoryNetwork = {
   tailnet: "another-org",
   controlUrl: "https://headscale.another-org.lazurio.io",
+  organizationCount: 1,
 };
 
 describe("NetworkDirectory.textOf", () => {
@@ -57,7 +69,9 @@ describe("NetworkDirectory.textOf", () => {
   it.effect("leaves a control server that is not headscale.<zone> without a suffix", () =>
     Effect.gen(function* () {
       const directory = yield* TailnetDirectory.fromText(
-        textOf([{ tailnet: "odd", controlUrl: "https://control.odd.lazurio.io" }]),
+        textOf([
+          { tailnet: "odd", controlUrl: "https://control.odd.lazurio.io", organizationCount: 1 },
+        ]),
         "Desktop-1",
       );
       assert.deepStrictEqual(directory.tailnets, []);
@@ -167,31 +181,98 @@ describe("NetworkDirectory.follow", () => {
     ),
   );
 
-  it.effect(
-    "keeps the last list when Auth refuses, answers none or nothing the app accepts",
-    () => {
-      const answers: Array<Effect.Effect<ReadonlyArray<DirectoryNetwork>, NetworkDirectoryError>> =
-        [
-          Effect.fail(new NetworkDirectoryError({ reason: "unavailable", status: 503 })),
-          Effect.succeed([]),
-          Effect.succeed([{ tailnet: "outside", controlUrl: "https://headscale.example.com" }]),
-        ];
-      return withFollow(
-        () => answers.shift() ?? Effect.die("no more answers"),
-        Option.some(textOf([EXAMPLE])),
-        ({ auth, signOut, savedPath, changes, handled }) =>
-          Effect.gen(function* () {
-            for (let attempt = 0; attempt < 3; attempt += 1) {
-              yield* auth.signIn;
-              yield* handled;
-              yield* signOut;
-            }
-            assert.isTrue(Option.isNone(yield* readSaved(savedPath)));
-            assert.strictEqual(changes(), 0);
-          }),
-      );
-    },
+  it.effect("keeps the last list when Auth refuses or answers nothing the app accepts", () => {
+    const answers: Array<Effect.Effect<ReadonlyArray<DirectoryNetwork>, NetworkDirectoryError>> = [
+      Effect.fail(new NetworkDirectoryError({ reason: "unavailable", status: 503 })),
+      Effect.succeed([
+        { tailnet: "outside", controlUrl: "https://headscale.example.com", organizationCount: 1 },
+      ]),
+    ];
+    return withFollow(
+      () => answers.shift() ?? Effect.die("no more answers"),
+      Option.some(textOf([EXAMPLE])),
+      ({ auth, signOut, savedPath, changes, handled }) =>
+        Effect.gen(function* () {
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            yield* auth.signIn;
+            yield* handled;
+            yield* signOut;
+          }
+          assert.isTrue(Option.isNone(yield* readSaved(savedPath)));
+          assert.strictEqual(changes(), 0);
+        }),
+    );
+  });
+
+  it.effect("replaces the list with an empty answer: a person in no Organization joins none", () =>
+    withFollow(
+      () => Effect.succeed([]),
+      Option.some(textOf([EXAMPLE])),
+      ({ auth, savedPath, changes, outcomes, handled }) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          yield* fileSystem.writeFileString(savedPath, textOf([EXAMPLE]));
+          yield* auth.signIn;
+          yield* handled;
+          assert.deepStrictEqual(yield* readSaved(savedPath), Option.some(textOf([])));
+          assert.deepStrictEqual(
+            (yield* TailnetDirectory.fromText(textOf([]), "Desktop-1")).tailnets,
+            [],
+          );
+          assert.strictEqual(changes(), 1);
+          assert.deepStrictEqual(outcomes, ["read"]);
+        }),
+    ),
   );
+
+  it.effect("starts nothing again when the empty list is the one in use", () =>
+    withFollow(
+      () => Effect.succeed([]),
+      Option.some(textOf([])),
+      ({ auth, changes, handled }) =>
+        Effect.gen(function* () {
+          yield* auth.signIn;
+          yield* handled;
+          assert.strictEqual(changes(), 0);
+        }),
+    ),
+  );
+
+  it.effect("keeps the last complete list for a shared network answered without its zones", () =>
+    withFollow(
+      () =>
+        Effect.succeed([
+          EXAMPLE,
+          {
+            tailnet: "shared-host",
+            controlUrl: "https://headscale.shared-host.lazurio.io",
+            organizationCount: 2,
+          },
+        ]),
+      Option.some(textOf([EXAMPLE])),
+      ({ auth, savedPath, changes, outcomes, handled }) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          yield* fileSystem.writeFileString(savedPath, textOf([OTHER]));
+          yield* auth.signIn;
+          yield* handled;
+          assert.deepStrictEqual(yield* readSaved(savedPath), Option.some(textOf([OTHER])));
+          assert.strictEqual(changes(), 0);
+          assert.deepStrictEqual(outcomes, ["not-read"]);
+        }),
+    ),
+  );
+
+  it("routes a network of one Organization without zones by its control server's suffix", () => {
+    assert.deepStrictEqual(unroutable([EXAMPLE, OTHER]), []);
+    assert.deepStrictEqual(
+      unroutable([
+        { ...OTHER, organizationCount: 2 },
+        { ...EXAMPLE, organizationCount: 2, domains: ["a.lazurio.io", "b.lazurio.io"] },
+      ]),
+      ["another-org"],
+    );
+  });
 
   it.effect("reads again at each sign-in and never while signed out", () =>
     withFollow(
@@ -215,7 +296,11 @@ describe("NetworkDirectory.follow", () => {
       () =>
         Effect.succeed([
           OTHER,
-          { tailnet: "outside", controlUrl: "https://headscale.outside.example.com" },
+          {
+            tailnet: "outside",
+            controlUrl: "https://headscale.outside.example.com",
+            organizationCount: 1,
+          },
         ]),
       Option.some(textOf([EXAMPLE])),
       ({ auth, savedPath, changes, outcomes, handled }) =>
@@ -259,6 +344,7 @@ describe("NetworkDirectory.follow", () => {
       const shared: DirectoryNetwork = {
         tailnet: "shared-host",
         controlUrl: "https://headscale.shared-host.lazurio.io",
+        organizationCount: 2,
         domains: ["first-org.lazurio.io", "second-org.lazurio.io"],
       };
       const directory = yield* TailnetDirectory.fromText(textOf([shared]), "Desktop-1");
@@ -273,6 +359,39 @@ describe("NetworkDirectory.follow", () => {
         "Desktop-1",
       );
       assert.deepStrictEqual(outside.tailnets, []);
+    }),
+  );
+});
+
+describe("NetworkDirectory.restartWhenIdle", () => {
+  it.effect("starts the app again only once no agent works or may work", () =>
+    Effect.gen(function* () {
+      // An agent at work, then one whose work was not confirmed ended, then none.
+      const agents: Array<DeviceStatus["agent"]> = [
+        { environmentId: "env-1", label: "Prostředí" },
+        "unknown",
+        null,
+      ];
+      let agent: DeviceStatus["agent"] = agents[0] ?? null;
+      let restarts = 0;
+      const fiber = yield* Effect.forkChild(
+        restartWhenIdle(
+          () => agent !== null,
+          Effect.sync(() => {
+            restarts += 1;
+          }),
+          "5 seconds",
+        ),
+      );
+      yield* TestClock.adjust("10 seconds");
+      assert.strictEqual(restarts, 0);
+      agent = agents[1] ?? null;
+      yield* TestClock.adjust("10 seconds");
+      assert.strictEqual(restarts, 0);
+      agent = agents[2] ?? null;
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(fiber);
+      assert.strictEqual(restarts, 1);
     }),
   );
 });

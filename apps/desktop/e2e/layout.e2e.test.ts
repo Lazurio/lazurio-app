@@ -214,6 +214,7 @@ describe("Lazurio App GEN4 with a remote page", () => {
       networkMissing: false,
       tailnetSource: "development",
       account: "signed-out",
+      networksNotRead: false,
       updates: { channel: "nightly", state: { phase: "off", reason: "unpackaged" } },
       page: { outcome: "none" },
     };

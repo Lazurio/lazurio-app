@@ -27,6 +27,16 @@ export interface Text {
   readonly networkHelp: string;
   // The network setting appeared while the app ran: it starts again (SettingWatch.ts, #81).
   readonly networkFound: string;
+  // The person's networks from their account changed: it starts again (NetworkDirectory.ts).
+  readonly networksChanged: string;
+  // The bar's sentence for each step of the account's sign-in (shared/networkBar.ts).
+  readonly networkBarSteps: {
+    readonly reading: string;
+    readonly notRead: string;
+    readonly empty: string;
+    readonly signingIn: string;
+    readonly tryAgain: string;
+  };
   // The heading of the nodes' addresses under the technical details.
   readonly addresses: string;
   // Signing in for the person's networks, while the app has none from their account yet.
@@ -308,11 +318,19 @@ const cs: Text = {
   tailnets: "Síť Organizace",
   noTailnets: "Žádná síť",
   addresses: "Adresy v síti",
-  networkBar: `Síť vaší Organizace zatím není nastavená, proto se ${APP_NAME} k Prostředím nepřipojí.`,
+  networkBar: "Síť vaší Organizace zatím není nastavená.",
   networkHelp: "Co dělat",
-  networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Soubor se sítí vám pošle Lazurio nebo Admin vaší Organizace, případně ji nastaví IT. Po jeho spuštění se ${APP_NAME} sama spustí znovu a připojí se.`,
+  networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Přihlaste se tlačítkem Přihlásit se účtem Lazurio, a to účtem, se kterým vás Admin přidal do Organizace. ${APP_NAME} pak sítě vašich Organizací načte a sama se spustí znovu. Když k účtu žádná síť nepatří, požádejte Admina své Organizace, aby vás přidal, a ${APP_NAME} spusťte znovu. Síť může nastavit i IT, nebo vám Admin pošle soubor se sítí.`,
   networkFound: `Síť vaší Organizace je nastavená. ${APP_NAME} se teď spustí znovu a připojí se.`,
-  networksSignIn: "Přihlásit se k Lazuriu",
+  networksChanged: `Sítě vašeho účtu Lazurio se změnily. ${APP_NAME} se teď spustí znovu.`,
+  networkBarSteps: {
+    reading: "Načítají se sítě vašeho účtu Lazurio…",
+    notRead: "Sítě vašeho účtu Lazurio se nepodařilo načíst.",
+    empty: "K vašemu účtu Lazurio zatím nepatří žádná síť Organizace.",
+    signingIn: "Dokončete přihlášení v prohlížeči",
+    tryAgain: "Zkusit znovu",
+  },
+  networksSignIn: "Přihlásit se účtem Lazurio",
   networksSignInHint: `Přihlaste se účtem Lazurio a ${APP_NAME} připojí sítě vašich Organizací.`,
   networksSignInFailed: "Přihlášení se nepovedlo. Zkuste to prosím znovu.",
   networksSignInAgain: "Přihlásit se znovu",
@@ -605,11 +623,19 @@ const en: Text = {
   tailnets: "Organization networks",
   noTailnets: "No network",
   addresses: "Addresses in the network",
-  networkBar: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments.`,
+  networkBar: "Your Organization's network is not set up yet.",
   networkHelp: "What to do",
-  networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Lazurio or your Organization's Admin sends you the file with the network, or your IT sets it. Once it has run, ${APP_NAME} starts again by itself and connects.`,
+  networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Sign in with the button Sign in with Lazurio, using the account your Admin added to the Organization. ${APP_NAME} then reads your Organizations' networks and starts again by itself. If no network belongs to the account, ask your Organization's Admin to add you, then start ${APP_NAME} again. IT can also set the network, or your Admin sends you a file with it.`,
   networkFound: `Your Organization's network is set up. ${APP_NAME} starts again now and connects.`,
-  networksSignIn: "Sign in to Lazurio",
+  networksChanged: `The networks of your Lazurio account changed. ${APP_NAME} starts again now.`,
+  networkBarSteps: {
+    reading: "Reading the networks of your Lazurio account…",
+    notRead: "The networks of your Lazurio account could not be read.",
+    empty: "No Organization's network belongs to your Lazurio account yet.",
+    signingIn: "Finish the sign-in in your browser",
+    tryAgain: "Try again",
+  },
+  networksSignIn: "Sign in with Lazurio",
   networksSignInHint: `Sign in with your Lazurio account and ${APP_NAME} joins your Organizations' networks.`,
   networksSignInFailed: "The sign-in did not work. Please try again.",
   networksSignInAgain: "Sign in again",

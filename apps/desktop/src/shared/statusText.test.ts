@@ -22,6 +22,7 @@ const STATUS: AppStatus = {
   networkMissing: false,
   tailnetSource: "policy",
   account: "signed-in",
+  networksNotRead: false,
   updates: { channel: "latest", state: { phase: "ready", version: "0.1.1" } },
   page: { outcome: "failed", code: -111 },
 };

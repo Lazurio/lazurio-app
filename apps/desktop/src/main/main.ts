@@ -260,7 +260,8 @@ const personalDirectory = Effect.fn("main.personalDirectory")(function* (platfor
       ),
       Effect.option,
     );
-    if (Option.isSome(directory) && directory.value.tailnets.length > 0) {
+    // The person's list replaces the built-in one whole, also when it names no network.
+    if (Option.isSome(directory)) {
       return {
         source: "lazurio-auth" as TailnetSource,
         text: Option.none<string>(),
@@ -335,7 +336,7 @@ const tailnetsToJoin = Effect.gen(function* () {
     return {
       source,
       tailnets: directory.tailnets,
-      networkMissing: TailnetDirectory.networkMissing(source, Electron.app.getVersion()),
+      networkMissing: TailnetDirectory.networkMissing(source, directory.tailnets.length),
       // On Windows and a Mac the setting is read again while the app runs (SettingWatch, #81).
       setting:
         platform === "win32" || platform === "darwin"
@@ -345,13 +346,14 @@ const tailnetsToJoin = Effect.gen(function* () {
     };
   }
   const setting = yield* Config.option(Config.String("LAZURIO_APP_DEV_TAILNETS"));
+  // End-to-end tests only (testHooks): a build with only the built-in list, no network of its own.
+  const networkMissing = yield* Config.Boolean("LAZURIO_APP_E2E_NETWORK_MISSING").pipe(
+    Config.withDefault(false),
+  );
   return {
-    source: "development" as TailnetSource,
+    source: (networkMissing ? "built-in" : "development") as TailnetSource,
     tailnets: Option.isSome(setting) ? yield* Tailnet.decodeTailnets(setting.value) : [],
-    // End-to-end tests only (testHooks): a stable build without the Organization's network.
-    networkMissing: yield* Config.Boolean("LAZURIO_APP_E2E_NETWORK_MISSING").pipe(
-      Config.withDefault(false),
-    ),
+    networkMissing,
     setting: Option.none<Option.Option<string>>(),
     directoryText: Option.none<string>(),
   };
@@ -828,6 +830,8 @@ const program = Effect.gen(function* () {
   let account = yield* auth.state;
   // Set when the session lacks the directory's scope, until a read succeeds or the app signs out.
   let needsSignIn = false;
+  // Set when the latest read of the person's networks failed for another reason.
+  let networksNotRead = false;
   const status = (): AppStatus => ({
     appVersion: Electron.app.getVersion(),
     generation: "GEN4",
@@ -836,6 +840,7 @@ const program = Effect.gen(function* () {
     networkMissing: joining.networkMissing,
     tailnetSource: joining.source,
     account: account === "signedOut" ? "signed-out" : needsSignIn ? "needs-sign-in" : "signed-in",
+    networksNotRead,
     updates: updates.current(),
     page,
   });
@@ -858,7 +863,10 @@ const program = Effect.gen(function* () {
     Stream.runForEach((state) =>
       Effect.sync(() => {
         account = state;
-        if (state === "signedOut") needsSignIn = false;
+        if (state === "signedOut") {
+          needsSignIn = false;
+          networksNotRead = false;
+        }
         broadcastStatus();
       }),
     ),
@@ -875,13 +883,21 @@ const program = Effect.gen(function* () {
       onRead: (outcome) =>
         Effect.sync(() => {
           if (outcome !== "not-read") needsSignIn = outcome === "needs-sign-in";
+          networksNotRead = outcome === "not-read";
           broadcastStatus();
         }),
-      changed: Effect.sync(() => {
-        if (quitting) return;
-        Electron.app.relaunch();
-        Electron.app.quit();
-      }).pipe(Effect.andThen(Effect.logInfo("network directory changed, so the app starts again"))),
+      // A new list starts the app again once no agent works, with the run's one restart.
+      changed: NetworkDirectory.restartWhenIdle(
+        () => agentWorksNow(),
+        Effect.suspend(() =>
+          quitting || restartRequested
+            ? Effect.void
+            : Effect.logInfo("network directory changed, so the app starts again").pipe(
+                Effect.andThen(hooks.notice(text.networksChanged)),
+                Effect.andThen(restartOnce(argsWithoutHidden())),
+              ),
+        ),
+      ),
     });
   }
   // Only the app's local windows may start the sign-in for the person's networks.

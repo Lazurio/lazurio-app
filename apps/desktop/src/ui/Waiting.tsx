@@ -1,32 +1,32 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import type { TailnetStatus } from "../shared/bridge.ts";
+import { offersSignIn } from "../shared/networkBar.ts";
 import { problemOf, reasonOf, servingTailnetOf, type PageProblem } from "../shared/pageProblem.ts";
 import { waitingStepFor, type WaitingStep } from "../shared/waitingStep.ts";
 import { localeOf, messages, type Text } from "./messages.ts";
+import { useNetworkSignIn } from "./networkSignIn.ts";
 
 // What the window shows in the remote page's place while it cannot show (MainWindow.ts): why its
 // load failed, or, waiting for the tailnet that serves the page, the step the person is at with it
 // (shared/waitingStep.ts), and a button that opens its sign-in again. Retry loads the page again.
+// Without the Organization's network it offers the sign-in with the Lazurio account first.
 export function Waiting() {
   const text = messages[localeOf(navigator.language)];
   const problem = problemOf(location.search);
   const served = servingTailnetOf(location.search);
   const [retrying, setRetrying] = useState(false);
+  const network = useNetworkSignIn();
   // Unknown until the app answers: a page that waits for a tailnet says nothing until then, so it
   // never shows a general sentence for a moment before the step (it loads again on every attempt).
-  const [tailnets, setTailnets] = useState<ReadonlyArray<TailnetStatus> | undefined>(undefined);
-  useEffect(() => {
-    const stop = window.lazurio.onStatus((status) => setTailnets(status.tailnets));
-    void window.lazurio.status().then((status) => setTailnets(status.tailnets));
-    return stop;
-  }, []);
+  const tailnets = network.status?.tailnets;
   const waitsForTailnet = problem === undefined || problem.kind === "waiting";
   if (waitsForTailnet && tailnets === undefined) {
     return <main className="waiting" data-problem={problem?.kind ?? "waiting"} aria-busy="true" />;
   }
   const step =
     waitsForTailnet && tailnets !== undefined ? waitingStepFor(tailnets, served) : undefined;
+  const signs =
+    problem?.kind === "network" && network.step !== undefined && offersSignIn(network.step);
   const retry = () => {
     setRetrying(true);
     void window.lazurio.retryPage().finally(() => setRetrying(false));
@@ -52,6 +52,7 @@ export function Waiting() {
         <p>{text.page.persists}</p>
       )}
       {words.code === undefined ? null : <p className="waiting__code">{words.code}</p>}
+      {signs && network.failed ? <p role="alert">{text.networksSignInFailed}</p> : null}
       <div className="waiting__actions">
         {step === "sign-in" && served !== undefined ? (
           <button
@@ -62,9 +63,19 @@ export function Waiting() {
             {text.waiting.signInAgain}
           </button>
         ) : null}
+        {signs ? (
+          <button
+            type="button"
+            data-action="networks-sign-in"
+            disabled={network.signingIn}
+            onClick={network.signIn}
+          >
+            {network.signingIn ? text.networkBarSteps.signingIn : text.networksSignIn}
+          </button>
+        ) : null}
         <button
           type="button"
-          className={step === "sign-in" ? "waiting__secondary" : undefined}
+          className={step === "sign-in" || signs ? "waiting__secondary" : undefined}
           data-action="page-retry"
           disabled={retrying}
           onClick={retry}

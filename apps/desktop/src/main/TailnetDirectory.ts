@@ -128,10 +128,11 @@ export const fromFile = Effect.fn("TailnetDirectory.fromFile")(function* (
 export const builtInAllowed = (appVersion: string, platform: string): boolean =>
   platform !== "win32" || /-nightly\./u.test(appVersion);
 
-// Whether a packaged build tells the person that their Organization's network is not set up: a
-// stable build with neither IT's policy nor the person's own setting. A Mac still joins the
-// built-in Lazurio Example (builtInAllowed), but that is never a customer's own network.
-export const networkMissing = (source: string, appVersion: string): boolean =>
-  source === "built-in" && !/-nightly\./u.test(appVersion);
+// Whether a packaged build tells the person that their Organization's network is not set up, with
+// the sign-in that brings it: neither IT's policy, the person's own setting nor a list from their
+// Lazurio account, or that list names no network. The built-in Lazurio Example a Mac or a nightly
+// still joins (builtInAllowed) is never a customer's own network, so a nightly says it too.
+export const networkMissing = (source: string, tailnetCount: number): boolean =>
+  source === "built-in" || (source === "lazurio-auth" && tailnetCount === 0);
 
 export const NO_TAILNETS: Directory = { tailnets: [], refused: [] };
