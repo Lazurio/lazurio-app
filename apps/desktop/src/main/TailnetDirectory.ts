@@ -121,11 +121,21 @@ export const fromFile = Effect.fn("TailnetDirectory.fromFile")(function* (
   return yield* fromText(yield* fileSystem.readFileString(path), computer);
 });
 
-// Whether a packaged build may join the directory built into the app (Lazurio Example, Lazurio's
-// own test network): a nightly may, for Lazurio's testers, and so may any build off Windows, which
-// has no other source yet. A stable Windows build may not: a person at a customer whose network
-// is not set yet is never sent to sign in to one that is not theirs (v0.1.0, 2026-11-19).
-export const builtInAllowed = (appVersion: string, platform: string): boolean =>
-  platform !== "win32" || /-nightly\./u.test(appVersion);
+// Whether a packaged build may join the directory built into the app: every build, for the
+// onboarding of new Organizations until Lazurio Auth's directory serves each person's own (#55).
+// Being listed grants nothing: a network's control server admits only its Organization's members.
+export const builtInAllowed = (_appVersion: string, _platform: string): boolean => true;
+
+// Lazurio's own example Organization in the built-in directory: never a customer's own network.
+export const LAZURIO_EXAMPLE = "lazurioexampleorganization";
+
+// Whether a packaged build tells the person that their Organization's network is not set up: with
+// neither IT's policy nor the person's own setting, the built-in directory lists no network but
+// Lazurio's own example.
+export const networkMissing = (
+  source: string,
+  tailnets: ReadonlyArray<{ readonly tailnet: string }>,
+): boolean =>
+  source === "built-in" && tailnets.every((tailnet) => tailnet.tailnet === LAZURIO_EXAMPLE);
 
 export const NO_TAILNETS: Directory = { tailnets: [], refused: [] };

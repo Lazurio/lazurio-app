@@ -238,12 +238,10 @@ const testHooks = Effect.gen(function* () {
 });
 
 // The tailnets a packaged app joins (ADR 0008): on Windows and a Mac IT's policy or the person's
-// setting, else the built-in directory where TailnetDirectory.builtInAllowed lets it (not a stable
-// Windows build). Development may set them as JSON in LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
+// setting, else the built-in directory (TailnetDirectory.builtInAllowed). Development may set them as JSON in LAZURIO_APP_DEV_TAILNETS and joins none otherwise.
 const packagedDirectory = Effect.gen(function* () {
   const path = yield* Path.Path;
   const builtInFile = path.join(process.resourcesPath, "tailnets", "directory.json");
-  // A stable Windows build joins no built-in network; a nightly and any build off Windows do.
   const platform = yield* HostProcess.Platform;
   const builtIn = TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform)
     ? TailnetDirectory.fromFile(builtInFile, NodeOS.hostname())
@@ -295,9 +293,7 @@ const tailnetsToJoin = Effect.gen(function* () {
     const platform = yield* HostProcess.Platform;
     return {
       tailnets: directory.tailnets,
-      networkMissing:
-        source === "built-in" &&
-        !TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform),
+      networkMissing: TailnetDirectory.networkMissing(source, directory.tailnets),
       // On Windows and a Mac the setting is read again while the app runs (SettingWatch, #81).
       setting:
         platform === "win32" || platform === "darwin"

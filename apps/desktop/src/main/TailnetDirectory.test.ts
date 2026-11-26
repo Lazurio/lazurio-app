@@ -5,7 +5,15 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { builtInAllowed, fromFile, fromText, nodeHostname, refusalOf } from "./TailnetDirectory.ts";
+import {
+  builtInAllowed,
+  fromFile,
+  fromText,
+  LAZURIO_EXAMPLE,
+  networkMissing,
+  nodeHostname,
+  refusalOf,
+} from "./TailnetDirectory.ts";
 
 const withDirectory = <A, E>(
   text: string,
@@ -199,11 +207,23 @@ describe("fromText", () => {
   );
 });
 
+describe("networkMissing", () => {
+  it("says the network is missing while the built-in directory has only Lazurio's example", () => {
+    assert.isTrue(networkMissing("built-in", []));
+    assert.isTrue(networkMissing("built-in", [{ tailnet: LAZURIO_EXAMPLE }]));
+    assert.isFalse(
+      networkMissing("built-in", [{ tailnet: LAZURIO_EXAMPLE }, { tailnet: "neworg" }]),
+    );
+    assert.isFalse(networkMissing("user", []));
+    assert.isFalse(networkMissing("policy", [{ tailnet: LAZURIO_EXAMPLE }]));
+  });
+});
+
 describe("builtInAllowed", () => {
-  it("keeps a stable Windows build out of the built-in network, and nothing else", () => {
+  it("lets every build join the built-in networks, a stable Windows build too", () => {
     assert.isTrue(builtInAllowed("0.1.1-nightly.20261119.20", "win32"));
-    assert.isFalse(builtInAllowed("0.1.0", "win32"));
-    assert.isFalse(builtInAllowed("0.1.1", "win32"));
+    assert.isTrue(builtInAllowed("0.1.0", "win32"));
+    assert.isTrue(builtInAllowed("0.1.1", "win32"));
     // A Mac (and Linux) has no other source of networks yet, so its stable build keeps it.
     assert.isTrue(builtInAllowed("0.1.1", "darwin"));
     assert.isTrue(builtInAllowed("0.1.1", "linux"));
