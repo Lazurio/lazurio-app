@@ -94,6 +94,8 @@ The risk is an agent in the person's other tabs: the bank, mail, or another Orga
 
 - **Default: nothing.** The agent sees no tab and no list of tabs until the person hands one over. They do it from the extension's button ("Předat tuto záložku agentovi z Prostředí X") or from a link the agent sends that opens a new tab, which the person confirms.
 - **The boundary is one site:** the handed-over tab's scheme and registrable domain at the moment of the handover, for example every page of `https://*.banka.cz` when the person handed over `https://www.banka.cz`. Every other site is another site, the Organization's own Lazurio pages included: they need a handover of their own. The same definition holds for navigations, redirects and the tools.
+  - **Lazurio's names are one site per Organization.** Every Organization's Lazurio lies under `lazurio.io` (`launchpad.<env>.<org>.lazurio.io`), so the registrable domain alone would join them. The extension's site function treats `lazurio.io` as a public suffix: the site of a Lazurio name is `<org>.lazurio.io`. A handover of one Organization's page never reaches another Organization's, nor the shared `lazurio.io` pages such as the sign-in. Lazurio should also add `lazurio.io` to the private section of the Public Suffix List, so browsers keep the same boundary for cookies; until then the extension's own rule holds.
+  - The same rule applies to any other shared domain the extension learns of. The list of such domains lives in the extension, not in the agent's request.
 - **How the extension enforces it**, since Chrome does not (section 3):
   - **One attach, one tab:** the extension calls `chrome.debugger.attach` only for the tab ID the person handed over, and keeps the handover (tab ID, site, Environment) only in the service worker's memory. A restart of the browser or of the extension ends every handover. No tool takes a tab ID from the agent; every tool runs on the handed-over tab.
   - **Same site only, redirects too:** on attach the extension turns on CDP's `Fetch` for documents in that tab. Every top-level navigation, a redirect included, pauses before it is sent. A request to the handed-over site goes on. Any other is failed (`Fetch.failRequest`), and the person gets a prompt to hand the new site over too.
@@ -103,6 +105,7 @@ The risk is an agent in the person's other tabs: the bank, mail, or another Orga
     - a link and a redirect to another subdomain of the same site must go on;
     - a link, a redirect, `window.location` from a script and a cross-site form post to another site must be refused or end the handover;
     - the same to the Organization's Lazurio pages must be refused;
+    - with one Organization's Lazurio page handed over (`launchpad.a.org-a.lazurio.io`), a link, a redirect and a tool call to another Environment of the same Organization (`launchpad.b.org-a.lazurio.io`) go on, and to another Organization (`launchpad.c.org-b.lazurio.io`) or to `auth.lazurio.io` must be refused;
     - a new tab the page opens must not be handed over;
     - a tool after any of these must act only on the handed-over site.
 - **Never silently everything.** No mode attaches to every tab, and the agent never gets the list of tabs, cookies or history.
