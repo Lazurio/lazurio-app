@@ -267,6 +267,36 @@ describe("servingTailnet", () => {
     );
   });
 
+  // A network that serves Organizations in several zones, with the suffixes Lazurio Auth's
+  // directory answers for it (NetworkDirectory): each zone's pages go through it.
+  it("routes every zone of a shared network through it", () => {
+    const shared = [
+      {
+        tailnet: "shared-host",
+        controlUrl: "https://headscale.shared-host.lazurio.io",
+        hostname: "app",
+        domains: ["first-org.lazurio.io", "second-org.lazurio.io"],
+      },
+    ];
+    for (const address of [
+      "https://launchpad.ada.first-org.lazurio.io/",
+      "https://launchpad.ben.second-org.lazurio.io/",
+    ]) {
+      assert.strictEqual(servingTailnet(shared, address), "shared-host");
+      assert.match(
+        findProxy(
+          pacScript(shared[0]?.domains ?? [], { host: "127.0.0.1", port: 41234 }),
+          new URL(address).hostname,
+        ),
+        /^PROXY /u,
+      );
+    }
+    assert.strictEqual(
+      servingTailnet(shared, "https://launchpad.cy.third-org.lazurio.io/"),
+      undefined,
+    );
+  });
+
   it("names none for other names, look-alikes and what is not an address", () => {
     assert.isUndefined(servingTailnet(tailnets, "https://dashboard.lazurio.ai/"));
     assert.isUndefined(servingTailnet(tailnets, "https://evil-example-org.lazurio.io/"));

@@ -20,6 +20,8 @@ import {
   FIRST_PAGE_CHANNEL,
   SET_UPDATE_CHANNEL_CHANNEL,
   STATUS_PANEL_CHANNEL,
+  SIGN_IN_CHANNEL,
+  SIGN_OUT_CHANNEL,
   STATUS_CHANGED_CHANNEL,
   STATUS_CHANNEL,
   TAB_COMMAND_CHANNEL,
@@ -69,6 +71,12 @@ const bridge: LazurioBridge = {
   },
   firstPage: async () => {
     await Electron.ipcRenderer.invoke(FIRST_PAGE_CHANNEL);
+  },
+  signIn: async () => {
+    await Electron.ipcRenderer.invoke(SIGN_IN_CHANNEL);
+  },
+  signOut: async () => {
+    await Electron.ipcRenderer.invoke(SIGN_OUT_CHANNEL);
   },
   device: {
     getState: () => Electron.ipcRenderer.invoke(DEVICE_STATE_CHANNEL) as Promise<DeviceStatus>,

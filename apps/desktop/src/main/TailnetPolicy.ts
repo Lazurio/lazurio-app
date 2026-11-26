@@ -180,17 +180,15 @@ const choose = Effect.fn("TailnetPolicy.choose")(function* <E, R>(
   return Option.map(user.success, (text) => ({ source: "user-setting" as const, text }));
 });
 
-// The tailnets of a packaged app on Windows or a Mac: the chosen text's, or the built-in directory's. A
-// chosen text that does not decode joins nothing, rather than the built-in directory.
-export const directoryOf = Effect.fn("TailnetPolicy.directoryOf")(function* <E, R, F, S>(
+// The tailnets of a packaged app on Windows or a Mac: the chosen text's, or `otherwise`'s. A chosen
+// text that does not decode joins nothing, rather than `otherwise`'s.
+export const directoryOr = Effect.fn("TailnetPolicy.directoryOr")(function* <E, R, A, F, S>(
   read: (source: PolicySource) => Effect.Effect<Option.Option<string>, E, R>,
-  builtIn: Effect.Effect<TailnetDirectory.Directory, F, S>,
+  otherwise: Effect.Effect<A, F, S>,
   computer: string,
 ) {
   const chosen = yield* choose(read);
-  if (Option.isNone(chosen)) {
-    return { source: "built-in" as const, text: Option.none<string>(), directory: yield* builtIn };
-  }
+  if (Option.isNone(chosen)) return yield* otherwise;
   const { source, text } = chosen.value;
   const directory = yield* TailnetDirectory.fromText(text, computer).pipe(
     Effect.tapError((error) =>
@@ -200,6 +198,22 @@ export const directoryOf = Effect.fn("TailnetPolicy.directoryOf")(function* <E, 
   );
   return { source, text: Option.some(text), directory };
 });
+
+// `directoryOr` with the built-in directory as the other source.
+export const directoryOf = <E, R, F, S>(
+  read: (source: PolicySource) => Effect.Effect<Option.Option<string>, E, R>,
+  builtIn: Effect.Effect<TailnetDirectory.Directory, F, S>,
+  computer: string,
+) =>
+  directoryOr(
+    read,
+    Effect.map(builtIn, (directory) => ({
+      source: "built-in" as const,
+      text: Option.none<string>(),
+      directory,
+    })),
+    computer,
+  );
 
 // The chosen text now, policy or the person's setting, and whether it names any network to join:
 // what SettingWatch reads again while the app runs (#81).

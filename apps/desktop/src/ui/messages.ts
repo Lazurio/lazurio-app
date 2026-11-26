@@ -29,6 +29,16 @@ export interface Text {
   readonly networkFound: string;
   // The heading of the nodes' addresses under the technical details.
   readonly addresses: string;
+  // Signing in for the person's networks, while the app has none from their account yet.
+  readonly networksSignIn: string;
+  readonly networksSignInHint: string;
+  readonly networksSignInFailed: string;
+  // A sign-in from before the app asked for the person's networks.
+  readonly networksSignInAgain: string;
+  readonly networksSignInAgainHint: string;
+  // The app's account while Agent Desktop does not show it.
+  readonly accountSignedIn: string;
+  readonly accountSignOut: string;
   readonly starting: string;
   readonly "needs-login": string;
   readonly running: string;
@@ -302,6 +312,13 @@ const cs: Text = {
   networkHelp: "Co dělat",
   networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Soubor se sítí vám pošle Lazurio nebo Admin vaší Organizace, případně ji nastaví IT. Po jeho spuštění se ${APP_NAME} sama spustí znovu a připojí se.`,
   networkFound: `Síť vaší Organizace je nastavená. ${APP_NAME} se teď spustí znovu a připojí se.`,
+  networksSignIn: "Přihlásit se k Lazuriu",
+  networksSignInHint: `Přihlaste se účtem Lazurio a ${APP_NAME} připojí sítě vašich Organizací.`,
+  networksSignInFailed: "Přihlášení se nepovedlo. Zkuste to prosím znovu.",
+  networksSignInAgain: "Přihlásit se znovu",
+  networksSignInAgainHint: `Přihlaste se prosím znovu, aby ${APP_NAME} mohla načíst sítě vašich Organizací.`,
+  accountSignedIn: "Přihlášeno k Lazuriu",
+  accountSignOut: "Odhlásit",
   starting: "Připojuje se",
   "needs-login": "Čeká na přihlášení",
   running: "Připojeno",
@@ -592,6 +609,13 @@ const en: Text = {
   networkHelp: "What to do",
   networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Lazurio or your Organization's Admin sends you the file with the network, or your IT sets it. Once it has run, ${APP_NAME} starts again by itself and connects.`,
   networkFound: `Your Organization's network is set up. ${APP_NAME} starts again now and connects.`,
+  networksSignIn: "Sign in to Lazurio",
+  networksSignInHint: `Sign in with your Lazurio account and ${APP_NAME} joins your Organizations' networks.`,
+  networksSignInFailed: "The sign-in did not work. Please try again.",
+  networksSignInAgain: "Sign in again",
+  networksSignInAgainHint: `Please sign in again so that ${APP_NAME} can read your Organizations' networks.`,
+  accountSignedIn: "Signed in to Lazurio",
+  accountSignOut: "Sign out",
   starting: "Connecting",
   "needs-login": "Waiting for sign-in",
   running: "Connected",
