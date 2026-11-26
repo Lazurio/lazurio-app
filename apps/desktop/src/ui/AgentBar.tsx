@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { workingAgent } from "../shared/agentBar.ts";
 import type { DeviceStatus } from "../shared/bridge.ts";
-import { offersSignIn, type NetworkBarStep } from "../shared/networkBar.ts";
+import { networkBarSentence, offersSignIn, type NetworkBarSentence } from "../shared/networkBar.ts";
 import { localeOf, messages, type Text } from "./messages.ts";
 import { signInLabel, useNetworkSignIn } from "./networkSignIn.ts";
 
@@ -36,7 +36,12 @@ export function AgentBar() {
         role="status"
       >
         <p className="agent-bar__text">
-          {network.failed ? words.networksSignInFailed : barSentence(network.step, words)}
+          {network.failed
+            ? words.networksSignInFailed
+            : barSentence(
+                networkBarSentence(network.step, (network.status?.tailnets.length ?? 0) > 0),
+                words,
+              )}
         </p>
         {signs ? (
           <button
@@ -48,6 +53,20 @@ export function AgentBar() {
             {network.signingIn
               ? words.networkBarSteps.signingIn
               : signInLabel(network.step, network.failed, words)}
+          </button>
+        ) : null}
+        {network.signingIn ? (
+          <button
+            type="button"
+            className="agent-bar__secondary"
+            data-action="networks-copy-sign-in"
+            onClick={network.copySignIn}
+          >
+            {network.copied === "copied"
+              ? words.networkBarSteps.copied
+              : network.copied === "failed"
+                ? words.networkBarSteps.copyFailed
+                : words.networkBarSteps.copy}
           </button>
         ) : null}
         <button
@@ -90,8 +109,10 @@ export function AgentBar() {
   );
 }
 
-const barSentence = (step: NetworkBarStep, words: Text): string => {
-  switch (step) {
+const barSentence = (sentence: NetworkBarSentence, words: Text): string => {
+  switch (sentence) {
+    case "own-networks":
+      return words.networkBarSteps.ownNetworks;
     case "reading":
       return words.networkBarSteps.reading;
     case "not-read":

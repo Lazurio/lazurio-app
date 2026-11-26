@@ -212,9 +212,16 @@ describe("Lazurio App GEN4 at a first start without the Organization's network",
     const bar = await localPage(app, "view=agent-bar");
     const from = output.join("").length;
     await bar.locator('[data-action="networks-sign-in"]').click();
+    const address = await handedToBrowser(from);
+    // While the sign-in waits, its address can be copied for another browser.
+    await bar.locator('[data-action="networks-copy-sign-in"]').click();
+    await bar
+      .locator('[data-action="networks-copy-sign-in"]', { hasText: /copied|zkopírována/u })
+      .waitFor();
+    assert.strictEqual(await app.evaluate(({ clipboard }) => clipboard.readText()), address);
     // The person signs in in the system's browser, which comes back to the app's loopback.
     // @effect-diagnostics-next-line globalFetch:off - The person's browser, outside the app and Effect.
-    await fetch(await handedToBrowser(from));
+    await fetch(address);
     // Auth's directory is out of reach: the bar says so and offers the read again.
     const notRead = bar.locator('[data-agent-bar="network"][data-network-step="not-read"]');
     await notRead.waitFor();

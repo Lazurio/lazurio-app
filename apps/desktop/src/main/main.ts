@@ -654,6 +654,7 @@ const program = Effect.gen(function* () {
   });
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
   // The app's own sign-in with Lazurio Auth, one for the person's networks and Agent Desktop.
+  let signInAddress = Option.none<string>();
   const auth = yield* Effect.service(AuthClient.AuthClient).pipe(
     Effect.provide(
       AuthClient.layer({
@@ -664,7 +665,11 @@ const program = Effect.gen(function* () {
         keystore,
         sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
         allowWithoutKeystore: !Electron.app.isPackaged,
-        openBrowser: hooks.openBrowser,
+        // The address of a sign-in under way, which the network bar may copy (SignInIpc).
+        openBrowser: (address: string) => {
+          signInAddress = Option.some(address);
+          return hooks.openBrowser(address);
+        },
         locale: localeOf(Electron.app.getLocale()),
       }).pipe(Layer.provide(FetchHttpClient.layer)),
     ),
@@ -863,6 +868,7 @@ const program = Effect.gen(function* () {
     Stream.runForEach((state) =>
       Effect.sync(() => {
         account = state;
+        signInAddress = Option.none();
         if (state === "signedOut") {
           needsSignIn = false;
           networksNotRead = false;
@@ -901,7 +907,16 @@ const program = Effect.gen(function* () {
     });
   }
   // Only the app's local windows may start the sign-in for the person's networks.
-  yield* SignInIpc.serve(auth, Account.signOutOf(switches, auth));
+  yield* SignInIpc.serve(
+    auth,
+    Account.signOutOf(switches, auth),
+    Effect.suspend(() =>
+      Option.match(signInAddress, {
+        onNone: () => Effect.fail(new SignInIpc.NoSignInUnderWay()),
+        onSome: (address) => Effect.promise(async () => Electron.clipboard.writeText(address)),
+      }),
+    ),
+  );
   // Only the app's local windows may pick the channel or install (UpdatesIpc.ts).
   yield* UpdatesIpc.serve(updates);
   // Only the app's local windows see Agent Desktop's state and may press Stop (DeviceIpc.ts).

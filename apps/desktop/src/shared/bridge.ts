@@ -44,6 +44,8 @@ export const TABS_CHANGED_CHANNEL = "lazurio:tabs-changed";
 export const TAB_COMMAND_CHANNEL = "lazurio:tab-command";
 export const SIGN_IN_CHANNEL = "lazurio:sign-in";
 export const SIGN_OUT_CHANNEL = "lazurio:sign-out";
+// Copies the address of the account's sign-in under way, for a browser other than the system's.
+export const COPY_SIGN_IN_CHANNEL = "lazurio:copy-sign-in";
 
 export type HelperStatus =
   | { readonly name: string; readonly state: "ready"; readonly version: string }
@@ -299,6 +301,8 @@ export interface LazurioBridge {
   readonly firstPage: () => Promise<void>;
   // Signs in to Lazurio in the system's browser; the app then joins the person's networks.
   readonly signIn: () => Promise<void>;
+  // Copies the address of the sign-in under way; refused while none waits.
+  readonly copySignIn: () => Promise<void>;
   // Signs out of the app's Lazurio account, with or without Agent Desktop.
   readonly signOut: () => Promise<void>;
   // Agent Desktop. Only the app's local windows have it, never a remote page.

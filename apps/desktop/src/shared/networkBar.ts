@@ -31,6 +31,28 @@ export const networkBarStep = (
   }
 };
 
+// The bar's sentence: before the account's sign-in, "not set up" only when the app joins no network
+// at all; with the built-in Lazurio Example joined, the sign-in brings the person's own networks.
+export type NetworkBarSentence =
+  | "not-set-up"
+  | "own-networks"
+  | "reading"
+  | "not-read"
+  | "empty"
+  | "help";
+
+export const networkBarSentence = (step: NetworkBarStep, joinsAny: boolean): NetworkBarSentence => {
+  switch (step) {
+    case "sign-in":
+    case "sign-in-again":
+      return joinsAny ? "own-networks" : "not-set-up";
+    case "help":
+      return "not-set-up";
+    default:
+      return step;
+  }
+};
+
 // The steps where a sign-in is what the person does next: an empty list offers it to read again
 // once the Admin added the person.
 export const offersSignIn = (step: NetworkBarStep): boolean =>

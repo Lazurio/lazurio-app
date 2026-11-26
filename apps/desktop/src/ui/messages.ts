@@ -36,6 +36,11 @@ export interface Text {
     readonly empty: string;
     readonly signingIn: string;
     readonly tryAgain: string;
+    // The app joins the built-in Lazurio Example only: the sign-in brings the person's own.
+    readonly ownNetworks: string;
+    readonly copy: string;
+    readonly copied: string;
+    readonly copyFailed: string;
   };
   // The heading of the nodes' addresses under the technical details.
   readonly addresses: string;
@@ -320,7 +325,7 @@ const cs: Text = {
   addresses: "Adresy v síti",
   networkBar: "Síť vaší Organizace zatím není nastavená.",
   networkHelp: "Co dělat",
-  networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Přihlaste se účtem Lazurio, se kterým vás Admin přidal do Organizace; ${APP_NAME} pak síť načte a sama se spustí znovu. Když k účtu žádná síť nepatří, požádejte Admina své Organizace, aby vás přidal, a ${APP_NAME} spusťte znovu.`,
+  networkMissing: `Síť vaší Organizace zatím není nastavená. Přihlaste se účtem Lazurio, se kterým vás Admin přidal do Organizace; ${APP_NAME} pak síť načte a sama se spustí znovu. Když k účtu žádná síť nepatří, požádejte Admina své Organizace, aby vás přidal, a ${APP_NAME} spusťte znovu.`,
   networkFound: `Síť vaší Organizace je nastavená. ${APP_NAME} se teď spustí znovu a připojí se.`,
   networksChanged: `Sítě vašeho účtu Lazurio se změnily. ${APP_NAME} se teď spustí znovu.`,
   networkBarSteps: {
@@ -329,6 +334,10 @@ const cs: Text = {
     empty: "K vašemu účtu Lazurio zatím nepatří žádná síť Organizace.",
     signingIn: "Dokončete přihlášení v prohlížeči",
     tryAgain: "Zkusit znovu",
+    ownNetworks: "Přihlaste se účtem Lazurio, ať aplikace zná sítě vašich Organizací.",
+    copy: "Kopírovat adresu přihlášení",
+    copied: "Adresa zkopírována",
+    copyFailed: "Adresu se nepodařilo zkopírovat",
   },
   networksSignIn: "Přihlásit se účtem Lazurio",
   networksSignInHint: `Přihlaste se účtem Lazurio a ${APP_NAME} připojí sítě vašich Organizací.`,
@@ -625,7 +634,7 @@ const en: Text = {
   addresses: "Addresses in the network",
   networkBar: "Your Organization's network is not set up yet.",
   networkHelp: "What to do",
-  networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Sign in with the Lazurio account your Admin added to the Organization; ${APP_NAME} then reads the network and starts again by itself. If no network belongs to the account, ask your Organization's Admin to add you, then start ${APP_NAME} again.`,
+  networkMissing: `Your Organization's network is not set up yet. Sign in with the Lazurio account your Admin added to the Organization; ${APP_NAME} then reads the network and starts again by itself. If no network belongs to the account, ask your Organization's Admin to add you, then start ${APP_NAME} again.`,
   networkFound: `Your Organization's network is set up. ${APP_NAME} starts again now and connects.`,
   networksChanged: `The networks of your Lazurio account changed. ${APP_NAME} starts again now.`,
   networkBarSteps: {
@@ -634,6 +643,10 @@ const en: Text = {
     empty: "No Organization's network belongs to your Lazurio account yet.",
     signingIn: "Finish the sign-in in your browser",
     tryAgain: "Try again",
+    ownNetworks: "Sign in with your Lazurio account so the app knows your Organizations' networks.",
+    copy: "Copy the sign-in address",
+    copied: "Address copied",
+    copyFailed: "The address could not be copied",
   },
   networksSignIn: "Sign in with Lazurio",
   networksSignInHint: `Sign in with your Lazurio account and ${APP_NAME} joins your Organizations' networks.`,
