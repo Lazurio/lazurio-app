@@ -390,6 +390,16 @@ importers:
         specifier: 1.4.0
         version: 1.4.0(@types/node@24.12.4)(@vitest/ui@5.0.5)(jiti@2.7.0)(typescript@5.4.5)(yaml@2.9.1)
 
+  tools/bitwarden-trial:
+    dependencies:
+      electron-chrome-extensions:
+        specifier: 4.10.0
+        version: 4.10.0(supports-color@7.2.0)
+    devDependencies:
+      electron:
+        specifier: 'catalog:'
+        version: 44.10.1(supports-color@7.2.0)
+
   tools/oxlint-plugin-t3code:
     dependencies:
       '@oxlint/plugins':
@@ -1790,6 +1800,9 @@ packages:
     resolution: {integrity: sha512-LrLK65QX5PUYYODXqp23FKrV7CILTtVY7mrJckNknO9jLNSMiqFkKbSMiDRw4CjOADMPVDdWLxY4mezOZWswxg==}
     engines: {node: '>=14.0.0'}
     hasBin: true
+
+  electron-chrome-extensions@4.10.0:
+    resolution: {integrity: sha512-yGOGqDN38Xn8hP1jGSWUNoQJSmgZvDltZn8ZVFo8GcQQD1DI4NtA/Fv/BzYzUhpevX8C+4aZI3LC/lqzN+/RFQ==}
 
   electron-publish@26.16.0:
     resolution: {integrity: sha512-Vt3KzQIiw9BImvNOYtndg9Mjki+tl4+1sQiC/+G5j8khWaENOJFWodiB+sUl6yyHwtd37avehskdtPw7f8y/+Q==}
@@ -4071,6 +4084,12 @@ snapshots:
       yargs: 17.7.3
     transitivePeerDependencies:
       - electron-builder-squirrel-windows
+      - supports-color
+
+  electron-chrome-extensions@4.10.0(supports-color@7.2.0):
+    dependencies:
+      debug: 4.4.3(supports-color@7.2.0)
+    transitivePeerDependencies:
       - supports-color
 
   electron-publish@26.16.0(supports-color@7.2.0):
