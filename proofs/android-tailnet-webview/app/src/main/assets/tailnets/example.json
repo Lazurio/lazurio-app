@@ -1,0 +1,6 @@
+{
+  "tailnet": "lazurioexampleorganization",
+  "controlUrl": "https://headscale.lazurioexampleorganization.lazurio.io",
+  "domains": ["lazurioexampleorganization.lazurio.io"],
+  "startUrl": "https://dashboard.lazurio.ai/"
+}
