@@ -1,15 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { problemOf, reasonOf, type PageProblem } from "../shared/pageProblem.ts";
+import type { TailnetStatus } from "../shared/bridge.ts";
+import { problemOf, reasonOf, servingTailnetOf, type PageProblem } from "../shared/pageProblem.ts";
+import { waitingStepFor, type WaitingStep } from "../shared/waitingStep.ts";
 import { localeOf, messages, type Text } from "./messages.ts";
 
-// What the window shows in the remote page's place while it cannot show (MainWindow.ts,
-// watchPage): waiting for a tailnet that cannot reach it yet, or why its load failed. Either way
-// it says why, loads the page again on Retry and opens the app's status.
+// What the window shows in the remote page's place while it cannot show (MainWindow.ts): why its
+// load failed, or, waiting for the tailnet that serves the page, the step the person is at with it
+// (shared/waitingStep.ts), and a button that opens its sign-in again. Retry loads the page again.
 export function Waiting() {
   const text = messages[localeOf(navigator.language)];
   const problem = problemOf(location.search);
+  const served = servingTailnetOf(location.search);
   const [retrying, setRetrying] = useState(false);
+  // Unknown until the app answers: a page that waits for a tailnet says nothing until then, so it
+  // never shows a general sentence for a moment before the step (it loads again on every attempt).
+  const [tailnets, setTailnets] = useState<ReadonlyArray<TailnetStatus> | undefined>(undefined);
+  useEffect(() => {
+    const stop = window.lazurio.onStatus((status) => setTailnets(status.tailnets));
+    void window.lazurio.status().then((status) => setTailnets(status.tailnets));
+    return stop;
+  }, []);
+  const waitsForTailnet = problem === undefined || problem.kind === "waiting";
+  if (waitsForTailnet && tailnets === undefined) {
+    return <main className="waiting" data-problem={problem?.kind ?? "waiting"} aria-busy="true" />;
+  }
+  const step =
+    waitsForTailnet && tailnets !== undefined ? waitingStepFor(tailnets, served) : undefined;
   const retry = () => {
     setRetrying(true);
     void window.lazurio.retryPage().finally(() => setRetrying(false));
@@ -18,11 +35,16 @@ export function Waiting() {
     setRetrying(true);
     void window.lazurio.firstPage().finally(() => setRetrying(false));
   };
-  const words = wordsOf(problem, text);
+  const words = step === undefined ? wordsOf(problem, text) : stepWords(step, text);
   return (
-    <main className="waiting" data-problem={problem?.kind ?? "waiting"}>
+    <main
+      className="waiting"
+      data-problem={problem?.kind ?? "waiting"}
+      {...(step === undefined ? {} : { "data-waiting-step": step })}
+    >
       <h1>{words.title}</h1>
       <p>{words.lead}</p>
+      {step === "unreachable" ? <p>{text.waiting.unreachableAfter}</p> : null}
       {problem === undefined ||
       problem.kind === "waiting" ||
       problem.kind === "browser" ||
@@ -31,7 +53,22 @@ export function Waiting() {
       )}
       {words.code === undefined ? null : <p className="waiting__code">{words.code}</p>}
       <div className="waiting__actions">
-        <button type="button" data-action="page-retry" disabled={retrying} onClick={retry}>
+        {step === "sign-in" && served !== undefined ? (
+          <button
+            type="button"
+            data-action="tailnet-sign-in-again"
+            onClick={() => void window.lazurio.openTailnetSignIn(served)}
+          >
+            {text.waiting.signInAgain}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className={step === "sign-in" ? "waiting__secondary" : undefined}
+          data-action="page-retry"
+          disabled={retrying}
+          onClick={retry}
+        >
           {retrying ? text.page.retrying : text.page.retry}
         </button>
         <button
@@ -55,6 +92,25 @@ export function Waiting() {
     </main>
   );
 }
+
+const stepWords = (
+  step: WaitingStep,
+  text: Text,
+): { readonly title: string; readonly lead: string; readonly code?: string } => {
+  const words = text.waiting;
+  switch (step) {
+    case "key-unopened":
+      return { title: words.keyTitle, lead: words.keyUnopenedLead };
+    case "key":
+      return { title: words.keyTitle, lead: words.keyLead };
+    case "sign-in":
+      return { title: words.signInTitle, lead: words.signInLead };
+    case "connecting":
+      return { title: words.connectingTitle, lead: words.connectingLead };
+    case "unreachable":
+      return { title: words.unreachableTitle, lead: words.unreachableLead };
+  }
+};
 
 const wordsOf = (
   problem: PageProblem | undefined,

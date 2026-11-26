@@ -5,7 +5,14 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { builtInAllowed, fromFile, fromText, nodeHostname, refusalOf } from "./TailnetDirectory.ts";
+import {
+  builtInAllowed,
+  fromFile,
+  fromText,
+  networkMissing,
+  nodeHostname,
+  refusalOf,
+} from "./TailnetDirectory.ts";
 
 const withDirectory = <A, E>(
   text: string,
@@ -197,6 +204,15 @@ describe("fromText", () => {
       assert.strictEqual(directory.refused[2]?.reason, "an earlier entry has the same name");
     }),
   );
+});
+
+describe("networkMissing", () => {
+  it("says the network is missing in a stable build with no setting, on a Mac too", () => {
+    assert.isTrue(networkMissing("built-in", "0.1.7"));
+    assert.isFalse(networkMissing("built-in", "0.1.7-nightly.20261130.60"));
+    assert.isFalse(networkMissing("user", "0.1.7"));
+    assert.isFalse(networkMissing("policy", "0.1.7"));
+  });
 });
 
 describe("builtInAllowed", () => {

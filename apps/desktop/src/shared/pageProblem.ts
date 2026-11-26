@@ -3,7 +3,13 @@
 // address's, shown to the person; it never goes into Copy status.
 export type PageProblem =
   // A tailnet's page its node cannot reach yet: the app loads it again by itself.
-  | { readonly kind: "waiting"; readonly code: number; readonly host: string }
+  | {
+      readonly kind: "waiting";
+      readonly code: number;
+      readonly host: string;
+      // The tailnet that serves the page, whose state the page shows (shared/waitingStep.ts).
+      readonly tailnet?: string;
+    }
   | { readonly kind: "failed"; readonly code: number; readonly host: string }
   // A load failed while the Organization's network is not set up (#81): that is the reason.
   | { readonly kind: "network"; readonly code: number; readonly host: string }
@@ -20,15 +26,31 @@ export const problemQuery = (problem: PageProblem): string => {
   if (problem.kind === "failed" || problem.kind === "waiting" || problem.kind === "network") {
     query.set("code", String(problem.code));
   }
+  if (problem.kind === "waiting" && problem.tailnet !== undefined) {
+    query.set("tailnet", problem.tailnet);
+  }
   return `?${query.toString()}`;
 };
+
+// The address's query of the app's page while a first load waits for its tailnet, before any failure.
+export const waitingQuery = (tailnet: string | undefined): string =>
+  tailnet === undefined ? "" : `?${new URLSearchParams({ tailnet }).toString()}`;
+
+// The tailnet that serves the waiting page's address, from that page's query.
+export const servingTailnetOf = (search: string): string | undefined =>
+  new URLSearchParams(search).get("tailnet") ?? undefined;
 
 export const problemOf = (search: string): PageProblem | undefined => {
   const query = new URLSearchParams(search);
   const host = query.get("host") ?? "";
   const kind = query.get("problem");
   switch (kind) {
-    case "waiting":
+    case "waiting": {
+      const code = Number(query.get("code"));
+      const tailnet = query.get("tailnet");
+      if (!Number.isInteger(code)) return undefined;
+      return tailnet === null ? { kind, code, host } : { kind, code, host, tailnet };
+    }
     case "failed":
     case "network": {
       const code = Number(query.get("code"));

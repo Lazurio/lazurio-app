@@ -1,11 +1,24 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { problemOf, problemQuery, reasonOf, type PageProblem } from "./pageProblem.ts";
+import {
+  problemOf,
+  problemQuery,
+  reasonOf,
+  servingTailnetOf,
+  waitingQuery,
+  type PageProblem,
+} from "./pageProblem.ts";
 
 describe("pageProblem", () => {
   it("reads back every problem from the address it writes", () => {
     const problems: ReadonlyArray<PageProblem> = [
       { kind: "waiting", code: -111, host: "launchpad.ada.example-org.lazurio.io" },
+      {
+        kind: "waiting",
+        code: -111,
+        host: "launchpad.ada.example-org.lazurio.io",
+        tailnet: "example-org",
+      },
       { kind: "failed", code: -324, host: "launchpad.ada.example-org.lazurio.io" },
       { kind: "network", code: -105, host: "launchpad.ada.example-org.lazurio.io" },
       { kind: "proxy", host: "launchpad.ada.example-org.lazurio.io" },
@@ -21,6 +34,12 @@ describe("pageProblem", () => {
     assert.isUndefined(problemOf(""));
     assert.isUndefined(problemOf("?problem=other"));
     assert.isUndefined(problemOf("?problem=failed&code=x"));
+  });
+
+  it("keeps the tailnet that serves a waiting page, also before any failure", () => {
+    assert.strictEqual(servingTailnetOf(waitingQuery("example-org")), "example-org");
+    assert.strictEqual(waitingQuery(undefined), "");
+    assert.isUndefined(servingTailnetOf(""));
   });
 
   it("words a failed load by its network error", () => {

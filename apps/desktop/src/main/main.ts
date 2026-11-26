@@ -295,9 +295,7 @@ const tailnetsToJoin = Effect.gen(function* () {
     const platform = yield* HostProcess.Platform;
     return {
       tailnets: directory.tailnets,
-      networkMissing:
-        source === "built-in" &&
-        !TailnetDirectory.builtInAllowed(Electron.app.getVersion(), platform),
+      networkMissing: TailnetDirectory.networkMissing(source, Electron.app.getVersion()),
       // On Windows and a Mac the setting is read again while the app runs (SettingWatch, #81).
       setting:
         platform === "win32" || platform === "darwin"
@@ -957,6 +955,12 @@ const program = Effect.gen(function* () {
       }),
     ),
     signInAddress: tailnets.signInAddress,
+    // Only addresses the app kept, each on its own tailnet's control server (Tailnet.isSafeLoginUrl).
+    openSignIn: (tailnet) =>
+      Effect.sync(() => {
+        const address = tailnets.signInAddress(tailnet);
+        if (Option.isSome(address)) hooks.observer.openExternally(address.value);
+      }),
     networkHelp: Effect.promise(async () => {
       const options = {
         type: "info" as const,
@@ -1067,6 +1071,7 @@ const program = Effect.gen(function* () {
         broadcastStatus();
       },
       networkMissing: () => joining.networkMissing,
+      servingTailnet: (address) => Tailnet.servingTailnet(joining.tailnets, address),
       servedByTailnet: (address) => {
         const url = URL.parse(address);
         return url !== null && Option.isSome(tailnets.proxyFor(url.hostname));

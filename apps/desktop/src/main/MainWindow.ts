@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -18,7 +19,7 @@ import {
   type TabCommand,
   type TabsView,
 } from "../shared/bridge.ts";
-import { problemQuery, type PageProblem } from "../shared/pageProblem.ts";
+import { problemQuery, waitingQuery, type PageProblem } from "../shared/pageProblem.ts";
 import {
   hardenSession,
   hostOf,
@@ -71,6 +72,8 @@ export interface MainWindowOptions {
   // Whether a tailnet serves the address (Tailnet.Tailnets.proxyFor): only such a page waits for
   // its Environment to become reachable, for example for the Organization to approve the Device.
   readonly servedByTailnet: (address: string) => boolean;
+  // The tailnet whose domains serve the address (Tailnet.servingTailnet), for the waiting page.
+  readonly servingTailnet: (address: string) => string | undefined;
   // Whether the Organization's network is missing (a stable build without a setting): a failed
   // load then says that, not a host that cannot be found (#81).
   readonly networkMissing: () => boolean;
@@ -191,10 +194,17 @@ const loadRemote = Effect.fn("MainWindow.loadRemote")(function* (
   view: Electron.WebContentsView,
   url: string,
   whenReachable: (url: string) => Effect.Effect<void>,
+  waitsForNetwork: (url: string) => void,
 ) {
   // The page loads only once its tailnet runs, so the first load does not fail while the node
-  // starts.
-  yield* whenReachable(url).pipe(
+  // starts. A node that is not running soon (it needs a sign-in, or waits) leaves no blank window:
+  // the app's waiting page says which step it is at.
+  const reachable = yield* whenReachable(url).pipe(Effect.timeoutOption(Duration.millis(500)));
+  if (Option.isNone(reachable)) {
+    waitsForNetwork(url);
+    yield* whenReachable(url);
+  }
+  yield* Effect.void.pipe(
     Effect.andThen(
       Effect.tryPromise({
         try: () => view.webContents.loadURL(url),
@@ -228,6 +238,8 @@ interface PageWatch {
   readonly retry: () => Promise<void>;
   readonly first: () => Promise<void>;
   readonly reload: () => void;
+  // The first load waits for its tailnet: the app's page says why, until a page shows.
+  readonly waitsForNetwork: (address: string) => void;
 }
 
 // The page never stays blank (#36): an unreachable tailnet's page waits and loads again every few
@@ -241,6 +253,7 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
   // The window's first page, the Overview.
   readonly firstAddress: string;
   readonly servedByTailnet: (address: string) => boolean;
+  readonly servingTailnet: (address: string) => string | undefined;
   readonly networkMissing: () => boolean;
   readonly outcome: (outcome: PageOutcome) => void;
   // The app's page that says why the page does not show, to show in its place; none for the page.
@@ -315,7 +328,11 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
       log(Effect.logWarning("page waits for its tailnet", { host, code }));
       pending = address;
       retryAddress = address;
-      showCover(`${LOCAL_ENTRY}${problemQuery({ kind: "waiting", code, host })}#waiting`);
+      const tailnet = options.servingTailnet(address);
+      const problem = { kind: "waiting" as const, code, host };
+      showCover(
+        `${LOCAL_ENTRY}${problemQuery(tailnet === undefined ? problem : { ...problem, tailnet })}#waiting`,
+      );
       options.outcome({ outcome: "waiting", code });
       return;
     }
@@ -369,6 +386,10 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
       if (contents.isDestroyed()) return;
       if (covered !== undefined) void retry();
       else contents.reload();
+    },
+    waitsForNetwork: (address) => {
+      if (covered !== undefined || lastShown !== undefined) return;
+      showCover(`${LOCAL_ENTRY}${waitingQuery(options.servingTailnet(address))}#waiting`);
     },
   } satisfies PageWatch;
 });
@@ -666,6 +687,7 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
           startAddress,
           firstAddress: firstAddress ?? startAddress,
           servedByTailnet: options.servedByTailnet,
+          servingTailnet: options.servingTailnet,
           networkMissing: options.networkMissing,
           // Copy status tells how the front tab's page ended.
           outcome: (outcome) => {
@@ -721,7 +743,11 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     layout();
     frontChanged();
     view.webContents.focus();
-    runFork(loadRemote(window, view, firstAddress, options.whenReachable));
+    runFork(
+      loadRemote(window, view, firstAddress, options.whenReachable, (url) =>
+        tab.watch?.waitsForNetwork(url),
+      ),
+    );
   }
 
   let first: Tab | undefined;
@@ -814,7 +840,10 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   }
   if (options.showOnLoad()) window.show();
   if (first !== undefined && firstAddress !== undefined) {
-    yield* loadRemote(window, first.view, firstAddress, options.whenReachable);
+    const firstTab = first;
+    yield* loadRemote(window, first.view, firstAddress, options.whenReachable, (url) =>
+      firstTab.watch?.waitsForNetwork(url),
+    );
   }
   return window;
 });
