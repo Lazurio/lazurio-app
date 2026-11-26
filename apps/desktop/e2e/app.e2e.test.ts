@@ -304,6 +304,9 @@ describe("Lazurio App GEN4", () => {
       helpers: [],
       tailnets: [{ tailnet: "e2e", state: "running", addresses: ["100.64.0.1"] }],
       networkMissing: false,
+      tailnetSource: "development",
+      account: "signed-out",
+      networksNotRead: false,
       updates: { channel: "latest", state: { phase: "off", reason: "unpackaged" } },
       page: { outcome: "none" },
     };

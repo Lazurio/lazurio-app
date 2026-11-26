@@ -207,11 +207,13 @@ describe("fromText", () => {
 });
 
 describe("networkMissing", () => {
-  it("says the network is missing in a stable build with no setting, on a Mac too", () => {
-    assert.isTrue(networkMissing("built-in", "0.1.7"));
-    assert.isFalse(networkMissing("built-in", "0.1.7-nightly.20261130.60"));
-    assert.isFalse(networkMissing("user", "0.1.7"));
-    assert.isFalse(networkMissing("policy", "0.1.7"));
+  it("says the network is missing without a source of the person's own, or with an empty list", () => {
+    // Only the built-in list, on any channel and system: the account's sign-in brings the network.
+    assert.isTrue(networkMissing("built-in", 1));
+    assert.isTrue(networkMissing("lazurio-auth", 0));
+    assert.isFalse(networkMissing("lazurio-auth", 1));
+    assert.isFalse(networkMissing("user-setting", 1));
+    assert.isFalse(networkMissing("policy", 0));
   });
 });
 

@@ -73,7 +73,7 @@ describe("Lazurio App GEN4 without the Organization's network", () => {
   it("says that the network is not set up when an Environment does not load", async () => {
     const text = await problemShown("network");
     assert.match(text, /not set up yet|zatím není nastavená/u);
-    assert.match(text, /starts again by itself|sama spustí znovu/u);
+    assert.match(text, /starts again by itself|sama se spustí znovu/u);
     // It says it in the window's page, not by opening the status column.
     const shown = await app.evaluate(({ BaseWindow }) => {
       const window = BaseWindow.getAllWindows()[0];

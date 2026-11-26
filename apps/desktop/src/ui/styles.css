@@ -146,6 +146,7 @@ body {
 }
 
 .shell__updates button,
+.shell__sign-in button,
 .shell__agent button {
   margin: 4px 0 12px;
   padding: 6px 12px;
@@ -194,6 +195,7 @@ body {
   margin: 0 0 4px;
 }
 
+.shell__sign-in button:disabled,
 .shell__agent button:disabled {
   opacity: 0.6;
   cursor: default;
@@ -1105,4 +1107,12 @@ body {
 .tabs__close:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: -2px;
+}
+
+.shell__sign-in {
+  margin: 0 0 12px;
+}
+
+.shell__sign-in p {
+  margin: 0 0 8px;
 }
