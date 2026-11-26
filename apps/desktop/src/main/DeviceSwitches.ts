@@ -21,7 +21,7 @@ import type {
 } from "../shared/bridge.ts";
 import type { AuthClientShape, AuthState, HandOver, HandOverError } from "./AuthClient.ts";
 import type { DeviceEnvironments } from "./DeviceEnvironments.ts";
-import type { DeviceRequestError, DeviceService } from "./DeviceService.ts";
+import { withoutHelper, type DeviceRequestError, type DeviceService } from "./DeviceService.ts";
 import type { MacPermissions } from "./MacPermissions.ts";
 import {
   environmentName,
@@ -31,10 +31,10 @@ import {
 } from "../shared/environmentName.ts";
 import { environmentOriginOf } from "./Navigation.ts";
 
-// Agent Desktop's switches (docs/adr/0006, contract v3 in the app): off after every start, on only
-// by a click in a native window. While on: sign in if needed, a hand-over for the Environment's
-// origin, StartChannel; NeedsHandOver asks again, Refused or a final answer of Auth turns it off.
-// The hand-over stays Redacted in memory, goes to the helper once and is wiped; nothing logs it.
+// Agent Desktop's switches (docs/adr/0006, contract v3): on by a click in a native window, then on
+// until the person turns it off, across restarts too (no browser sign-in when it goes on again).
+// Refused or a final answer of Auth turns it off with its reason and tells the person. The
+// hand-over stays Redacted in memory, goes to the helper once and is wiped; nothing logs it.
 
 // Lazurio Auth that does not answer, or answers 503, is asked again after this long, doubling up to
 // the limit; a hand-over resets it.
@@ -139,6 +139,12 @@ export interface DeviceSwitchesOptions {
   readonly readNames: (origin: string) => Effect.Effect<Option.Option<EnvironmentNames>>;
   // macOS's permissions: on a Mac a switch goes on only with both allowed (MacPermissions.ts).
   readonly permissions: Pick<MacPermissions, "allowSwitch" | "current" | "subscribe">;
+  // A switch went off by itself, or one the person left on could not go on again at the start
+  // because macOS's permissions are missing: the app tells the person, whose window may be hidden.
+  readonly offByItself: (
+    origin: string,
+    problem: DeviceSwitchProblem | "permissions",
+  ) => Effect.Effect<void>;
 }
 
 export interface DeviceSwitches {
@@ -158,7 +164,7 @@ const hostOf = (origin: string): string => URL.parse(origin)?.hostname ?? origin
 
 // Runs the switches for as long as the scope lives; closing it ends every switch's work.
 export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwitchesOptions) {
-  const { device, auth, environments, readNames, permissions } = options;
+  const { device, auth, environments, readNames, permissions, offByItself } = options;
   const scope = yield* Effect.scope;
 
   const listeners = new Set<() => void>();
@@ -328,16 +334,26 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     yield* Effect.logWarning("Agent Desktop's switch went off", { origin, problem });
     const outcome = yield* stopConfirmed(origin, entry);
     entry.fiber = Option.none();
+    // Never silently: the person's consent stays, and the app says why the switch is off, before
+    // the window shows it.
+    yield* offByItself(origin, problem);
     if (outcome === "stopped") {
       yield* setPhase(entry, { phase: "off", problem, at: yield* Clock.currentTimeMillis });
     }
   });
 
   // The work of a switch that is on, until it goes off by itself or the person turns it off.
-  const work = Effect.fn("DeviceSwitches.work")(function* (origin: string, entry: Entry) {
-    // A sign-in may still happen in the first round: the app may not be signed in yet, or the
-    // session it kept may no longer be valid. Later a lost session turns the switch off.
-    let maySignIn = true;
+  // `resumed`: the app turned on a switch the person left on, at its start; it opens no sign-in in
+  // the browser then, and a missing session turns the switch off with its reason instead.
+  const work = Effect.fn("DeviceSwitches.work")(function* (
+    origin: string,
+    entry: Entry,
+    resumed: boolean,
+  ) {
+    // A sign-in may still happen in the first round after the person's click: the app may not be
+    // signed in yet, or the session it kept may no longer be valid. Later a lost session turns
+    // the switch off.
+    let maySignIn = !resumed;
     let authRetry = AUTH_RETRY_FIRST;
     const waitForAuth = Effect.gen(function* () {
       yield* setPhase(entry, { phase: "retrying", cause: "auth-unavailable" });
@@ -447,9 +463,30 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     // On a Mac without both permissions the switch stays off: no sign-in, no hand-over, no channel.
     // The window shows the permissions instead.
     if (!(yield* permissions.allowSwitch)) return;
+    yield* environments
+      .setLeftOn(origin, true)
+      .pipe(Effect.mapError(() => new DeviceSwitchError({ problem: "not-saved" })));
     yield* Effect.logInfo("Agent Desktop's switch on", { origin });
     yield* setPhase(entry, { phase: "connecting" });
-    entry.fiber = Option.some(yield* work(origin, entry).pipe(Effect.forkIn(scope)));
+    entry.fiber = Option.some(yield* work(origin, entry, false).pipe(Effect.forkIn(scope)));
+  });
+
+  // At the app's start, once the Device helper is ready: every switch the person left on goes on
+  // again, without a click. On a Mac without both permissions it stays off, and the window and a
+  // notice say why.
+  const resume = Effect.fn("DeviceSwitches.resume")(function* () {
+    for (const origin of environments.origins()) {
+      if (!environments.leftOn(origin)) continue;
+      const entry = yield* entryOf(origin);
+      if (Option.isSome(entry.fiber)) continue;
+      if (!(yield* permissions.allowSwitch)) {
+        yield* offByItself(origin, "permissions");
+        continue;
+      }
+      yield* Effect.logInfo("Agent Desktop's switch on again, as the person left it", { origin });
+      yield* setPhase(entry, { phase: "connecting" });
+      entry.fiber = Option.some(yield* work(origin, entry, true).pipe(Effect.forkIn(scope)));
+    }
   });
 
   // Turns the switch off and says how: it was off, its stop was confirmed, or the fail-safe ran.
@@ -469,6 +506,38 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     return outcome;
   });
   const notConfirmed = new DeviceSwitchError({ problem: "stop-not-confirmed" });
+  // The person turned the switch off: its consent ends, and it stays off at the next start.
+  const revoke = (origin: string) =>
+    environments
+      .setLeftOn(origin, false)
+      .pipe(Effect.mapError(() => new DeviceSwitchError({ problem: "not-saved" })));
+
+  // The switches the person left on go on again once the helper is ready, once per run. A helper
+  // that failed or was lost before that cannot turn them on: each says so, so none hides.
+  const helperOutcome = yield* Queue.unbounded<"ready" | "unavailable">();
+  const watchHelper = () => {
+    const { state } = device.current();
+    if (state === "ready") Queue.offerUnsafe(helperOutcome, "ready");
+    else if (state === "failed" || state === "lost")
+      Queue.offerUnsafe(helperOutcome, "unavailable");
+  };
+  const stopWatchingHelper = device.subscribe(watchHelper);
+  yield* Effect.addFinalizer(() => Effect.sync(stopWatchingHelper));
+  watchHelper();
+  const helperUnavailable: DeviceSwitchProblem = { from: "app", reason: "helper-unavailable" };
+  yield* Queue.take(helperOutcome).pipe(
+    Effect.tap(() => Effect.sync(stopWatchingHelper)),
+    Effect.flatMap((outcome) =>
+      outcome === "ready"
+        ? byPerson(resume())
+        : Effect.forEach(
+            environments.origins().filter((origin) => environments.leftOn(origin)),
+            (origin) => offByItself(origin, helperUnavailable),
+            { discard: true },
+          ),
+    ),
+    Effect.forkIn(scope),
+  );
 
   const addable = (): string | null =>
     shownOrigin === undefined || environments.origins().includes(shownOrigin) ? null : shownOrigin;
@@ -483,6 +552,7 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       ...(organization === undefined ? {} : { organization }),
       switch: entries.get(origin)?.phase ?? OFF,
       channel,
+      ...(environments.leftOn(origin) ? { consent: true as const } : {}),
     };
   };
 
@@ -515,15 +585,21 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     stop: device.stop,
     // Off fails only when nothing confirmed the channel's end; after the helper's confirmed end the
     // switch is truly off and says why.
+    // Off stops the channel first, also when the consent cannot be saved as revoked; then that
+    // failure is reported. A stop nothing confirmed is reported before it.
     setSwitch: (origin, on) =>
       byPerson(
         on
           ? turnOn(origin)
-          : turnOff(origin).pipe(
-              Effect.flatMap((outcome) =>
-                outcome === "unknown" ? Effect.fail(notConfirmed) : Effect.void,
-              ),
-            ),
+          : Effect.gen(function* () {
+              const outcome = yield* turnOff(origin);
+              const revoked = yield* Effect.exit(revoke(origin));
+              changed();
+              if (outcome === "unknown") return yield* notConfirmed;
+              if (Exit.isFailure(revoked)) {
+                return yield* new DeviceSwitchError({ problem: "not-saved" });
+              }
+            }),
       ),
     addEnvironment: (origin) =>
       byPerson(
@@ -559,15 +635,20 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     signOut: byPerson(
       Effect.gen(function* () {
         let allStopped = true;
+        let allRevoked = true;
         for (const origin of entries.keys()) {
           const outcome = yield* turnOff(origin);
           if (outcome !== "stopped" && outcome !== "was-off") allStopped = false;
+          // Signing out ends the consent of every switch, as turning each off would; a consent
+          // that cannot be saved as revoked makes the sign-out fail, after every channel stopped.
+          if (Exit.isFailure(yield* Effect.exit(revoke(origin)))) allRevoked = false;
         }
+        changed();
         if (Option.isSome(signInFiber)) yield* Fiber.interrupt(signInFiber.value);
         // Ending the session opens no channel, so it ends even when a stop was not confirmed.
         const signedOut = yield* Effect.result(auth.signOut);
         if (!allStopped) return yield* notConfirmed;
-        if (Result.isFailure(signedOut)) {
+        if (!allRevoked || Result.isFailure(signedOut)) {
           return yield* new DeviceSwitchError({ problem: "not-saved" });
         }
       }),
@@ -582,6 +663,93 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       }
       changed();
     },
+  };
+  return switches;
+});
+
+// Without a Device helper, missing or failed before it connected: no switch can go on, but the
+// person still sees the Environments they added with any consent they left, and the account, and
+// can revoke a consent, remove an Environment or sign out, so nothing survives unseen until the
+// helper works again (docs/adr/0006, consent until revoked).
+export const withoutDevice = Effect.fn("DeviceSwitches.withoutDevice")(function* (options: {
+  readonly state: "absent" | "failed";
+  readonly auth: AuthClientShape;
+  readonly environments: DeviceEnvironments;
+}) {
+  const { state, auth, environments } = options;
+  const scope = yield* Effect.scope;
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    for (const listener of listeners) listener();
+  };
+  let account: AuthState = yield* auth.state;
+  let accountName = Option.getOrUndefined(yield* auth.accountName);
+  yield* auth.changes.pipe(
+    Stream.runForEach((next) =>
+      Effect.gen(function* () {
+        account = next;
+        accountName = Option.getOrUndefined(yield* auth.accountName);
+        changed();
+      }),
+    ),
+    Effect.forkIn(scope),
+  );
+  const unavailable: DeviceSwitchPhase = {
+    phase: "off",
+    problem: { from: "app", reason: "helper-unavailable" },
+  };
+  const notSaved = new DeviceSwitchError({ problem: "not-saved" });
+  const revoke = (origin: string) =>
+    environments.setLeftOn(origin, false).pipe(Effect.mapError(() => notSaved));
+  const switches: DeviceSwitches = {
+    current: () => ({
+      ...withoutHelper(state),
+      account: account === "signedIn" ? "signed-in" : "signed-out",
+      ...(account === "signedIn" && accountName !== undefined ? { accountName } : {}),
+      switches: environments.origins().map((origin) => {
+        const { name, organization } = environments.names(origin);
+        return {
+          origin,
+          host: hostOf(origin),
+          ...(name === undefined ? {} : { name }),
+          ...(organization === undefined ? {} : { organization }),
+          switch: unavailable,
+          channel: NO_CHANNEL,
+          ...(environments.leftOn(origin) ? { consent: true as const } : {}),
+        };
+      }),
+    }),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    stop: Effect.void,
+    // On needs the helper; off revokes the consent, which needs nothing else.
+    setSwitch: (origin, on) =>
+      on
+        ? Effect.fail(new DeviceSwitchError({ problem: "unavailable" }))
+        : revoke(origin).pipe(Effect.ensuring(Effect.sync(changed))),
+    addEnvironment: () => Effect.fail(new DeviceSwitchError({ problem: "unavailable" })),
+    removeEnvironment: (origin) =>
+      environments.remove(origin).pipe(
+        Effect.mapError(() => notSaved),
+        Effect.ensuring(Effect.sync(changed)),
+      ),
+    signOut: Effect.gen(function* () {
+      let allRevoked = true;
+      for (const origin of environments.origins()) {
+        if (Exit.isFailure(yield* Effect.exit(revoke(origin)))) allRevoked = false;
+      }
+      const signedOut = yield* Effect.result(auth.signOut);
+      // The window shows the account as it is now, not after the change reaches it.
+      account = yield* auth.state;
+      accountName = Option.getOrUndefined(yield* auth.accountName);
+      changed();
+      if (!allRevoked || Result.isFailure(signedOut)) return yield* notSaved;
+    }).pipe(Effect.withSpan("DeviceSwitches.withoutDevice.signOut")),
+    pageShown: () => {},
   };
   return switches;
 });

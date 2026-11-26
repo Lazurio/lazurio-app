@@ -23,9 +23,11 @@ import * as Electron from "electron";
 
 import { agentBarHeight, workingAgent } from "../shared/agentBar.ts";
 import { APP_NAME } from "../shared/appName.ts";
+import { namedEnvironment } from "../shared/environmentName.ts";
 import {
   STATUS_CHANGED_CHANNEL,
   type AppStatus,
+  type DeviceSwitchProblem,
   type DeviceStatus,
   type PageOutcome,
   type UpdatesOffReason,
@@ -64,6 +66,7 @@ import * as Tray from "./Tray.ts";
 import * as Updates from "./Updates.ts";
 import * as UpdatesIpc from "./UpdatesIpc.ts";
 import * as WindowIpc from "./WindowIpc.ts";
+import * as MacLoginItem from "./MacLoginItem.ts";
 
 // Lazurio App GEN4 (decision 0248): the main process. It serves the app's own windows, guards
 // every web contents, starts the helper processes and opens the main window.
@@ -570,7 +573,8 @@ const program = Effect.gen(function* () {
       }),
   );
   yield* Effect.promise(() => Electron.app.whenReady());
-  // A packaged app on Windows starts, hidden, when the person signs in (Lifecycle.loginItem).
+  // A packaged app starts, hidden, when the person signs in: on Windows through its login item
+  // (Lifecycle.loginItem), on a Mac through a LaunchAgent of the person's own (MacLoginItem.ts).
   const loginItem = Lifecycle.loginItem({ platform, packaged: Electron.app.isPackaged });
   if (Option.isSome(loginItem)) {
     Electron.app.setLoginItemSettings({
@@ -578,6 +582,17 @@ const program = Effect.gen(function* () {
       args: [...loginItem.value.args],
       name: loginItem.value.name,
     });
+  }
+  if (platform === "darwin" && Electron.app.isPackaged) {
+    const home = NodeOS.homedir();
+    const bundle = MacLoginItem.installedBundle(process.execPath, home);
+    if (Option.isSome(bundle)) {
+      yield* MacLoginItem.ensureOrTell(
+        home,
+        bundle.value,
+        hooks.notice(messages[localeOf(Electron.app.getLocale())].device.loginItemFailed),
+      );
+    }
   }
   const appPath = Electron.app.getAppPath();
 
@@ -653,59 +668,71 @@ const program = Effect.gen(function* () {
     }),
   );
   // Its switches (contract v3): the Environments the person added, the app's own sign-in with
-  // Lazurio Auth and a hand-over for each channel. Every switch is off after each start.
-  const switches = Option.isSome(device)
-    ? Option.some(
-        yield* DeviceSwitches.run({
-          device: device.value,
-          auth: yield* Effect.service(AuthClient.AuthClient).pipe(
-            Effect.provide(
-              AuthClient.layer({
-                ...Option.match(hooks.authIssuer, {
-                  onNone: () => ({}),
-                  onSome: (issuer) => ({ issuer }),
-                }),
-                keystore,
-                sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
-                allowWithoutKeystore: !Electron.app.isPackaged,
-                openBrowser: hooks.openBrowser,
-                locale: localeOf(Electron.app.getLocale()),
-              }).pipe(Layer.provide(FetchHttpClient.layer)),
-            ),
-          ),
-          environments: yield* DeviceEnvironments.open(
-            path.join(Electron.app.getPath("userData"), "agent-desktop-environments.json"),
-          ),
-          // The Environment's names from its Lazurio, read as the main window's page reads them:
-          // with that window's session, so its cookie and its tailnet's proxy, and nothing more.
-          readNames: (origin) =>
-            ShellNames.read(origin, (url, init) =>
-              Electron.session.fromPartition(MainWindow.REMOTE_PARTITION).fetch(url, init),
-            ),
-          permissions,
+  // Lazurio Auth and a hand-over for each channel. A switch the person left on goes on again at the
+  // start (docs/adr/0006, consent until revoked).
+  const deviceEnvironments = yield* DeviceEnvironments.open(
+    path.join(Electron.app.getPath("userData"), "agent-desktop-environments.json"),
+  );
+  const switchNotice = (origin: string, problem: DeviceSwitchProblem | "permissions") => {
+    const { name } = namedEnvironment(origin, deviceEnvironments.names(origin));
+    const words = messages[localeOf(Electron.app.getLocale())].device;
+    return hooks.notice(
+      (problem === "permissions" ? words.permissionsNotice : words.offNotice).replace(
+        "{name}",
+        name,
+      ),
+    );
+  };
+  // The app's own sign-in with Lazurio Auth, also without a helper: the person can sign out then.
+  const auth = yield* Effect.service(AuthClient.AuthClient).pipe(
+    Effect.provide(
+      AuthClient.layer({
+        ...Option.match(hooks.authIssuer, {
+          onNone: () => ({}),
+          onSome: (issuer) => ({ issuer }),
         }),
-      )
-    : Option.none<DeviceSwitches.DeviceSwitches>();
-  const noSwitch = Effect.fail(new DeviceSwitches.DeviceSwitchError({ problem: "not-listed" }));
+        keystore,
+        sessionPath: path.join(Electron.app.getPath("userData"), "auth", "session.sealed"),
+        allowWithoutKeystore: !Electron.app.isPackaged,
+        openBrowser: hooks.openBrowser,
+        locale: localeOf(Electron.app.getLocale()),
+      }).pipe(Layer.provide(FetchHttpClient.layer)),
+    ),
+  );
+  const switches: DeviceSwitches.DeviceSwitches = Option.isSome(device)
+    ? yield* DeviceSwitches.run({
+        device: device.value,
+        auth,
+        environments: deviceEnvironments,
+        // The Environment's names from its Lazurio, read as the main window's page reads them:
+        // with that window's session, so its cookie and its tailnet's proxy, and nothing more.
+        readNames: (origin) =>
+          ShellNames.read(origin, (url, init) =>
+            Electron.session.fromPartition(MainWindow.REMOTE_PARTITION).fetch(url, init),
+          ),
+        permissions,
+        offByItself: switchNotice,
+      })
+    : yield* DeviceSwitches.withoutDevice({
+        state: deviceHelper === undefined ? "absent" : "failed",
+        auth,
+        environments: deviceEnvironments,
+      });
+  // Without a Device helper no switch can go on: each the person left on says so.
+  if (Option.isNone(device)) {
+    for (const origin of deviceEnvironments.origins()) {
+      if (deviceEnvironments.leftOn(origin)) {
+        yield* switchNotice(origin, { from: "app", reason: "helper-unavailable" });
+      }
+    }
+  }
   const openWindow = Effect.sync(openAgentDesktop);
-  const permissionControls = {
+  const deviceControls: DeviceIpc.DeviceControls = {
+    ...switches,
+    openWindow,
     openPermissionSettings: permissions.openSettings,
     restartApp: permissions.restartApp,
   };
-  const deviceControls: DeviceIpc.DeviceControls = Option.match(switches, {
-    onSome: (service) => ({ ...service, openWindow, ...permissionControls }),
-    onNone: () => ({
-      current: () => DeviceService.withoutHelper(deviceHelper === undefined ? "absent" : "failed"),
-      subscribe: () => () => {},
-      stop: Effect.void,
-      setSwitch: () => noSwitch,
-      addEnvironment: () => noSwitch,
-      removeEnvironment: () => noSwitch,
-      signOut: Effect.void,
-      openWindow,
-      ...permissionControls,
-    }),
-  });
   const panelServices = yield* Effect.context<never>();
   devicePanel = Option.some(
     yield* DevicePanel.make({
@@ -1060,7 +1087,7 @@ const program = Effect.gen(function* () {
       whenReachable: tailnets.whenReachable,
       historyChanged: () => refreshMenu(),
       pageShown: (url) => {
-        if (Option.isSome(switches)) switches.value.pageShown(url);
+        switches.pageShown(url);
       },
       pageOutcome: (outcome) => {
         page = outcome;

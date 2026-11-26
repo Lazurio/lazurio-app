@@ -189,6 +189,9 @@ export interface DeviceSwitchStatus {
   readonly organization?: string;
   readonly switch: DeviceSwitchPhase;
   readonly channel: DeviceChannelState;
+  // The person left the switch on: their consent lasts until they turn it off, and the app turns
+  // the switch on again at its next start, also while it is off now with a problem.
+  readonly consent?: true;
 }
 
 // The two permissions of macOS that Agent Desktop's engine needs (docs/adr/0006, point 6).

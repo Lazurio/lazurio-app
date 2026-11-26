@@ -76,8 +76,9 @@ interface LoginItem {
   readonly name: string;
 }
 
-// Only a packaged app on Windows starts at the person's sign-in, hidden and with every switch off
-// (docs/adr/0006: the consent lasts one run). Development and tests write nothing to the registry.
+// A packaged app on Windows starts at the person's sign-in, hidden, and turns on again the switches
+// the person left on (docs/adr/0006: consent until revoked); a Mac starts through MacLoginItem.ts.
+// Development and tests write nothing to the registry.
 export const loginItem = (options: {
   readonly platform: string;
   readonly packaged: boolean;

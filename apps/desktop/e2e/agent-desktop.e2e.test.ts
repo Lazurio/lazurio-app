@@ -493,14 +493,68 @@ describe("Agent Desktop's switch", () => {
     await inPhase("off");
   });
 
-  // Last: it restarts the app.
-  it("keeps the added Environment across a restart, with its switch off", async () => {
+  // Last: it restarts the app. A switch the person left on goes on again by itself; signed out,
+  // it opens no browser, goes off with its reason and tells the person (docs/adr/0006).
+  it("keeps the added Environment and its switch across a restart, and says why it is off", async () => {
+    await environmentRow().locator('[data-action="device-switch"]').click();
+    await inPhase("signing-in");
+    await app.close();
+    // The app's output starts anew with each launch.
+    await launch();
+    const from = 0;
+    await section().waitFor();
+    await shell
+      .locator(`[data-device-switch="${ENVIRONMENT}"] [data-switch-problem="signed-out"]`)
+      .waitFor();
+    // The notice comes before the window shows the reason.
+    assert.include(
+      output.join("").slice(from),
+      "lazurio-app-e2e notice Agent Desktop did not connect to the Environment",
+    );
+    assert.notInclude(output.join("").slice(from), "system-browser");
+    assert.strictEqual(await shell.locator("[data-device-add]").count(), 0);
+    // Off with its problem, the switch still shows the consent, which lasts until revoked.
+    // A function: each launch has a page of its own.
+    const toggle = () => environmentRow().locator('[data-action="device-switch"]');
+    assert.strictEqual(await toggle().getAttribute("aria-checked"), "true");
+
+    // On a Mac without its permissions, the consent shows too, with the permissions.
+    await app.close();
+    await launch({ LAZURIO_APP_E2E_MAC_PERMISSIONS: "accessibility:denied,screen:denied" });
+    await section().waitFor();
+    await permissions().waitFor();
+    assert.include(
+      output.join(""),
+      "lazurio-app-e2e notice Agent Desktop does not connect to the Environment",
+    );
+    assert.strictEqual(await toggle().getAttribute("aria-checked"), "true");
+
+    // Without a Device helper (here one that cannot start), the Environment, its consent and the
+    // account still show, a notice says why it does not connect, and the switch revokes it.
+    await app.close();
+    await launch({ LAZURIO_APP_E2E_DEVICE_HELPER: "/nonexistent/fake-device-helper.ts" });
+    await shell.locator('section[data-device-state="failed"]').waitFor();
+    assert.include(
+      output.join(""),
+      "lazurio-app-e2e notice Agent Desktop did not connect to the Environment",
+    );
+    assert.strictEqual(await toggle().getAttribute("aria-checked"), "true");
+    await shell.locator('[data-device-account="signed-out"]').waitFor();
+    // One click revokes it, with no sign-in and no channel.
+    await toggle().click();
+    await shell
+      .locator(
+        `[data-device-switch="${ENVIRONMENT}"] [data-action="device-switch"][aria-checked="false"]`,
+      )
+      .waitFor();
+    assert.notInclude(output.join(""), "system-browser");
+
+    // Revoked, the switch stays off after the next start.
     await app.close();
     await launch();
     await section().waitFor();
     await inPhase("off", "off");
     assert.strictEqual(await environmentRow().locator("[data-switch-problem]").count(), 0);
-    assert.strictEqual(await shell.locator("[data-device-add]").count(), 0);
     await environmentRow().locator('[data-action="device-more"]').click();
     await environmentRow().locator('[data-action="device-remove"]').click();
     await shell.locator('[data-device-environments="none"]').waitFor();

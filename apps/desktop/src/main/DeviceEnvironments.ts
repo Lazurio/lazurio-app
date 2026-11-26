@@ -9,12 +9,11 @@ import type { EnvironmentNames } from "../shared/environmentName.ts";
 import { environmentOriginOf } from "./Navigation.ts";
 import { nameText } from "./ShellNames.ts";
 
-// The Environments the person added to Agent Desktop, by the origin of their Lazurio with the names
-// it gave (ShellNames.ts), in `<userData>/agent-desktop-environments.json`: no secret, no switch
-// (every switch is off after each start, docs/adr/0006). Version 1 had origins alone; it reads as
-// version 2 without names, and the next change writes version 2.
+// The Environments added to Agent Desktop, with their names (ShellNames.ts) and whether the person
+// left the switch on, their consent until revoked (docs/adr/0006), in agent-desktop-environments.json.
+// No secret. Versions 1 and 2 read as version 3 with every switch off; the next change writes 3.
 
-class DeviceEnvironmentsError extends Schema.TaggedError<DeviceEnvironmentsError>()(
+export class DeviceEnvironmentsError extends Schema.TaggedError<DeviceEnvironmentsError>()(
   "DeviceEnvironmentsError",
   { path: Schema.String },
 ) {
@@ -37,12 +36,25 @@ const FileV2 = Schema.Struct({
     }),
   ),
 });
+const FileV3 = Schema.Struct({
+  version: Schema.Literal(3),
+  environments: Schema.Array(
+    Schema.Struct({
+      origin: Schema.String,
+      name: Schema.optional(Schema.String),
+      organization: Schema.optional(Schema.String),
+      on: Schema.optional(Schema.Boolean),
+    }),
+  ),
+});
 const decodeFile = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Union([FileV1, FileV2])),
+  Schema.fromJsonString(Schema.Union([FileV1, FileV2, FileV3])),
 );
 
 export interface DeviceEnvironment extends EnvironmentNames {
   readonly origin: string;
+  // The person left the switch on: it goes on again at the app's next start.
+  readonly on?: true;
 }
 
 // An Environment as a file lists it, before its names are checked.
@@ -50,16 +62,18 @@ interface Listed {
   readonly origin: string;
   readonly name?: string | undefined;
   readonly organization?: string | undefined;
+  readonly on?: boolean | undefined;
 }
 
-// Only the names that are still names for people.
-const withNames = ({ origin, ...names }: Listed): DeviceEnvironment => {
+// Only the names that are still names for people, and the switch only when on.
+const withNames = ({ origin, on, ...names }: Listed): DeviceEnvironment => {
   const name = nameText(names.name);
   const organization = nameText(names.organization);
   return {
     origin,
     ...(name === undefined ? {} : { name }),
     ...(organization === undefined ? {} : { organization }),
+    ...(on === true ? { on } : {}),
   };
 };
 
@@ -81,7 +95,7 @@ export const environmentsFrom = (text: Option.Option<string>): ReadonlyArray<Dev
 };
 
 const encodeEnvironments = (environments: ReadonlyArray<DeviceEnvironment>): string =>
-  `${JSON.stringify({ version: 2, environments }, null, 2)}\n`;
+  `${JSON.stringify({ version: 3, environments }, null, 2)}\n`;
 
 export interface DeviceEnvironments {
   readonly origins: () => ReadonlyArray<string>;
@@ -95,6 +109,10 @@ export interface DeviceEnvironments {
     origin: string,
     names: EnvironmentNames,
   ) => Effect.Effect<void, DeviceEnvironmentsError>;
+  // Whether the person left the listed Environment's switch on; false for another.
+  readonly leftOn: (origin: string) => boolean;
+  // Keeps whether the person left the switch on; nothing for an Environment not listed.
+  readonly setLeftOn: (origin: string, on: boolean) => Effect.Effect<void, DeviceEnvironmentsError>;
 }
 
 export const open = Effect.fn("DeviceEnvironments.open")(function* (path: string) {
@@ -126,7 +144,7 @@ export const open = Effect.fn("DeviceEnvironments.open")(function* (path: string
   const environments: DeviceEnvironments = {
     origins: () => listed.map((environment) => environment.origin),
     names: (origin) => {
-      const { name, organization } = listed.find((each) => each.origin === origin) ?? { origin };
+      const { name, organization } = listed.find((each) => each.origin === origin) ?? {};
       return {
         ...(name === undefined ? {} : { name }),
         ...(organization === undefined ? {} : { organization }),
@@ -140,11 +158,21 @@ export const open = Effect.fn("DeviceEnvironments.open")(function* (path: string
       ),
     setNames: (origin, names) =>
       change((current) => {
-        const next = withNames({ ...names, origin });
         const known = current.find((each) => each.origin === origin);
         if (known === undefined) return undefined;
+        const next = withNames({ ...names, origin, on: known.on });
         if (known.name === next.name && known.organization === next.organization) return undefined;
         return current.map((each) => (each.origin === origin ? next : each));
+      }),
+    leftOn: (origin) => listed.some((each) => each.origin === origin && each.on === true),
+    setLeftOn: (origin, on) =>
+      change((current) => {
+        const known = current.find((each) => each.origin === origin);
+        if (known === undefined || (known.on === true) === on) return undefined;
+        const { on: _was, ...rest } = known;
+        return current.map((each) =>
+          each.origin === origin ? { ...rest, ...(on ? { on } : {}) } : each,
+        );
       }),
   };
   return environments;
