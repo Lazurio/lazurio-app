@@ -320,7 +320,7 @@ const cs: Text = {
   addresses: "Adresy v síti",
   networkBar: "Síť vaší Organizace zatím není nastavená.",
   networkHelp: "Co dělat",
-  networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Přihlaste se tlačítkem Přihlásit se účtem Lazurio, a to účtem, se kterým vás Admin přidal do Organizace. ${APP_NAME} pak sítě vašich Organizací načte a sama se spustí znovu. Když k účtu žádná síť nepatří, požádejte Admina své Organizace, aby vás přidal, a ${APP_NAME} spusťte znovu. Síť může nastavit i IT, nebo vám Admin pošle soubor se sítí.`,
+  networkMissing: `Síť vaší Organizace zatím není nastavená, a proto se ${APP_NAME} k Prostředím nepřipojí. Přihlaste se účtem Lazurio, se kterým vás Admin přidal do Organizace; ${APP_NAME} pak síť načte a sama se spustí znovu. Když k účtu žádná síť nepatří, požádejte Admina své Organizace, aby vás přidal, a ${APP_NAME} spusťte znovu.`,
   networkFound: `Síť vaší Organizace je nastavená. ${APP_NAME} se teď spustí znovu a připojí se.`,
   networksChanged: `Sítě vašeho účtu Lazurio se změnily. ${APP_NAME} se teď spustí znovu.`,
   networkBarSteps: {
@@ -625,7 +625,7 @@ const en: Text = {
   addresses: "Addresses in the network",
   networkBar: "Your Organization's network is not set up yet.",
   networkHelp: "What to do",
-  networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Sign in with the button Sign in with Lazurio, using the account your Admin added to the Organization. ${APP_NAME} then reads your Organizations' networks and starts again by itself. If no network belongs to the account, ask your Organization's Admin to add you, then start ${APP_NAME} again. IT can also set the network, or your Admin sends you a file with it.`,
+  networkMissing: `Your Organization's network is not set up yet, so ${APP_NAME} does not connect to Environments. Sign in with the Lazurio account your Admin added to the Organization; ${APP_NAME} then reads the network and starts again by itself. If no network belongs to the account, ask your Organization's Admin to add you, then start ${APP_NAME} again.`,
   networkFound: `Your Organization's network is set up. ${APP_NAME} starts again now and connects.`,
   networksChanged: `The networks of your Lazurio account changed. ${APP_NAME} starts again now.`,
   networkBarSteps: {
