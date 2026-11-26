@@ -13,9 +13,9 @@ import * as TailnetDirectory from "./TailnetDirectory.ts";
 
 const CONTROL_SERVER_PREFIX = "headscale.";
 
-// A network's DNS suffix: Auth answers only `https://headscale.<label>.lazurio.io`, whose names lie
-// in `<label>.lazurio.io`; any other address gets none, so TailnetDirectory refuses it. A network
-// serving Organizations in other zones needs the suffixes from Auth (a later field of v1).
+// A network's DNS suffix when Auth answers no `domains` for it (the contract's fallback): the one
+// suffix of `https://headscale.<label>.lazurio.io`; any other address gets none, so
+// TailnetDirectory refuses it.
 const domainsOf = (controlUrl: string): ReadonlyArray<string> => {
   const host = URL.parse(controlUrl)?.hostname ?? "";
   return host.startsWith(CONTROL_SERVER_PREFIX) ? [host.slice(CONTROL_SERVER_PREFIX.length)] : [];

@@ -19,6 +19,7 @@ import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as References from "effect/References";
+import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -40,7 +41,9 @@ import {
   type HandOver,
 } from "./AuthClient.ts";
 import { openOrOffer } from "./BrowserOpen.ts";
+import { textOf } from "./NetworkDirectory.ts";
 import type { Keystore } from "./NodeKeys.ts";
+import * as TailnetDirectory from "./TailnetDirectory.ts";
 
 const isSignInError = Schema.is(SignInError);
 const isSignedOut = Schema.is(SignedOutError);
@@ -1469,3 +1472,96 @@ describe("AuthClient's secrets", () => {
     ),
   );
 });
+
+// Every case of Lazurio Auth's table for the network directory (Auth's docs/network-directory-read.md
+// and workspace/network-directory-cases.json), when LAZURIO_AUTH_NETWORK_DIRECTORY_CASES names a
+// copy of it: the table lives in Auth's own repository and is not copied here.
+const CASES_PATH = process.env["LAZURIO_AUTH_NETWORK_DIRECTORY_CASES"];
+
+interface ContractNetwork {
+  readonly tailnet: string;
+  readonly controlUrl: string;
+  readonly domains?: ReadonlyArray<string>;
+}
+
+interface ContractRead {
+  readonly id: string;
+  readonly expected: { readonly status: number; readonly body?: unknown };
+}
+
+const contractReads = Effect.gen(function* () {
+  if (CASES_PATH === undefined) return [];
+  const text = yield* (yield* FileSystem.FileSystem).readFileString(CASES_PATH);
+  return (JSON.parse(text) as { reads: ReadonlyArray<ContractRead> }).reads;
+});
+
+// What the app makes of each refusal: Auth's 401, its two 503s by their code, and anything else.
+const contractReason = (status: number, body: unknown): string => {
+  if (status === 401) return "unauthorized";
+  if (status === 503) {
+    const code = (body as { error?: string } | undefined)?.error;
+    return code === "network_directory_inconsistent" ? "inconsistent" : "unavailable";
+  }
+  return "unexpected";
+};
+
+describe.skipIf(CASES_PATH === undefined)(
+  "AuthClient.networks against Auth's table of cases",
+  () => {
+    it.effect("takes each case's answer as the contract asks", () =>
+      withHarness(({ fake, opened, client }) =>
+        Effect.gen(function* () {
+          const auth = yield* client();
+          yield* signInThroughBrowser(auth, opened);
+          const reads = yield* contractReads;
+          assert.isAbove(reads.length, 0);
+          for (const read of reads) {
+            fake.settings.networksStatus = read.expected.status;
+            fake.settings.networksBody = read.expected.body;
+            const outcome = yield* Effect.result(auth.networks);
+            if (read.expected.status !== 200) {
+              const error = Result.isFailure(outcome) ? outcome.failure : undefined;
+              const got: ReadonlyArray<unknown> = isNetworkDirectoryError(error)
+                ? [error.reason, error.status]
+                : [error];
+              assert.deepStrictEqual(
+                got,
+                [contractReason(read.expected.status, read.expected.body), read.expected.status],
+                read.id,
+              );
+              continue;
+            }
+            assert.isTrue(Result.isSuccess(outcome), read.id);
+            if (!Result.isSuccess(outcome)) continue;
+            const answered = (read.expected.body as { networks: Array<ContractNetwork> }).networks;
+            // The whole list, each network joined at its own control server and routed by the
+            // domains it answers, else by its control server's one suffix.
+            const directory = yield* TailnetDirectory.fromText(
+              textOf(outcome.success),
+              "Desktop-1",
+            );
+            assert.deepStrictEqual(directory.refused, [], read.id);
+            assert.deepStrictEqual(
+              [...directory.tailnets]
+                .map(({ tailnet, controlUrl, domains }) => ({ tailnet, controlUrl, domains }))
+                .sort((a, b) => a.tailnet.localeCompare(b.tailnet)),
+              answered
+                .map(({ tailnet, controlUrl, domains }) => ({
+                  tailnet,
+                  controlUrl,
+                  domains:
+                    domains !== undefined && domains.length > 0
+                      ? domains
+                      : [new URL(controlUrl).hostname.replace(/^headscale\./u, "")],
+                }))
+                .sort((a, b) => a.tailnet.localeCompare(b.tailnet)),
+              read.id,
+            );
+          }
+          // One GET each, with the bearer of exactly the directory's scope.
+          assert.strictEqual(fake.networksRequests.length, reads.length);
+        }),
+      ),
+    );
+  },
+);
