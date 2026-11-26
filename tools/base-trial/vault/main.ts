@@ -71,8 +71,32 @@ async function trial() {
   vault.setCertificateVerifyProc((request, callback) =>
     callback(["127.0.0.1", "localhost"].includes(request.hostname) ? 0 : -3),
   );
-  const extensions = new ElectronChromeExtensions({ session: vault });
+  // Windows the extension opens (its passkey popout uses chrome.windows.create).
+  const extensionWindows: BrowserWindow[] = [];
+  const extensions = new ElectronChromeExtensions({
+    session: vault,
+    createWindow: async (details) => {
+      const window = new BrowserWindow({
+        width: 420,
+        height: 640,
+        webPreferences: { session: vault, sandbox: true, contextIsolation: true },
+      });
+      extensionWindows.push(window);
+      step(`extension window ${String(details.url ?? "").slice(0, 120)}`);
+      const url = Array.isArray(details.url) ? details.url[0] : details.url;
+      if (url) await window.loadURL(url.startsWith("chrome-extension:") || url.includes("://") ? url : `chrome-extension://${extensionId}/${url}`);
+      return window;
+    },
+    createTab: async (details) => {
+      const window = new BrowserWindow({ width: 1000, height: 760, webPreferences: { session: vault, sandbox: true, contextIsolation: true } });
+      step(`extension tab ${String(details.url ?? "").slice(0, 120)}`);
+      if (details.url) await window.loadURL(details.url);
+      return [window.webContents, window];
+    },
+  });
+  let extensionId = "";
   const extension = await vault.extensions.loadExtension(env("BITWARDEN_DIR"));
+  extensionId = extension.id;
   step(`extension ${extension.id} ${extension.version}`);
 
   const server = NodeHttp.createServer((request, response) => {
@@ -80,6 +104,34 @@ async function trial() {
     response.end(request.url === "/" ? SIGN_IN : "<p>signed in</p>");
   });
   await new Promise<void>((resolve) => server.listen(Number(env("PAGE_PORT")), "127.0.0.1", resolve));
+  // A relying party for passkeys: WebAuthn wants a domain, so https://localhost with the trial's
+  // loopback certificate.
+  const PASSKEY_PAGE = `<!doctype html><html lang="en"><title>Passkey</title><p id="state">ready</p>
+<script>
+window.register = () => navigator.credentials.create({ publicKey: {
+  rp: { id: "localhost", name: "Lazurio trial" },
+  user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "trial-user", displayName: "Trial user" },
+  challenge: crypto.getRandomValues(new Uint8Array(32)),
+  pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+  authenticatorSelection: { residentKey: "required", userVerification: "preferred" },
+  timeout: 60000,
+} }).then((c) => (window.created = { id: c.id, type: c.type, attachment: c.authenticatorAttachment ?? null }), (e) => (window.created = { error: e.name + ": " + e.message }));
+window.signIn = () => navigator.credentials.get({ publicKey: {
+  rpId: "localhost", challenge: crypto.getRandomValues(new Uint8Array(32)), userVerification: "preferred", timeout: 60000,
+} }).then((c) => (window.got = { id: c.id, type: c.type }), (e) => (window.got = { error: e.name + ": " + e.message }));
+</script></html>`;
+  const https = await import("node:https");
+  const secure = https.createServer(
+    {
+      cert: NodeFS.readFileSync(NodePath.join(env("SSL_DIR") || "/work/ssl", "cert.pem")),
+      key: NodeFS.readFileSync(NodePath.join(env("SSL_DIR") || "/work/ssl", "key.pem")),
+    },
+    (_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(PASSKEY_PAGE);
+    },
+  );
+  await new Promise<void>((resolve) => secure.listen(Number(env("PASSKEY_PORT") || "18091"), "127.0.0.1", resolve));
   const page = new BrowserWindow({
     width: 1000,
     height: 760,
@@ -144,12 +196,51 @@ async function trial() {
       trace.push({ action, done, text: now });
     }
     NodeFS.writeFileSync(NodePath.join(out, "trace.json"), JSON.stringify(trace, null, 2));
+    if (env("TRIAL_PASSKEY") === "1") {
+      await page.loadURL(`https://localhost:${env("PASSKEY_PORT") || "18091"}/`);
+      await wait(2_000);
+      void page.webContents.executeJavaScript("window.register()", true);
+      await until(() => extensionWindows.length, (n) => n > 0, 15_000);
+      await wait(4_000);
+      const popout = extensionWindows[0];
+      const passkey: Record<string, unknown> = { windows: extensionWindows.length };
+      if (popout && !popout.isDestroyed()) {
+        passkey["popoutText"] = await text(popout.webContents);
+        passkey["popoutControls"] = await popout.webContents.executeJavaScript(CONTROLS);
+        await shot("passkey-popout", popout.webContents);
+        for (const action of JSON.parse(env("PASSKEY_STEPS") || "[]") as Record<string, string>[]) {
+          if (popout.isDestroyed()) break;
+          passkey[`step ${JSON.stringify(action)}`] = await act(popout.webContents, action);
+          await wait(2_000);
+        }
+      }
+      await wait(3_000);
+      passkey["created"] = await page.webContents.executeJavaScript("window.created ?? 'pending'");
+      // Sign in with the passkey just saved: Bitwarden asks in a popout which one to use.
+      const before = extensionWindows.length;
+      void page.webContents.executeJavaScript("window.signIn()", true);
+      await until(() => extensionWindows.length, (n) => n > before, 15_000);
+      await wait(4_000);
+      const chooser = extensionWindows[before];
+      if (chooser && !chooser.isDestroyed()) {
+        passkey["chooserText"] = await text(chooser.webContents);
+        passkey["chooserControls"] = await chooser.webContents.executeJavaScript(CONTROLS);
+        for (const action of JSON.parse(env("PASSKEY_GET_STEPS") || "[]") as Record<string, string>[]) {
+          if (chooser.isDestroyed()) break;
+          passkey[`get ${JSON.stringify(action)}`] = await act(chooser.webContents, action);
+          await wait(2_000);
+        }
+      }
+      await wait(3_000);
+      passkey["got"] = await page.webContents.executeJavaScript("window.got ?? 'pending'");
+      NodeFS.writeFileSync(NodePath.join(out, "passkey.json"), JSON.stringify(passkey, null, 2));
+    }
     NodeFS.writeFileSync(
       NodePath.join(out, "page.json"),
       JSON.stringify(
         await page.webContents.executeJavaScript(`({
-          username: document.getElementById("username").value,
-          password: document.getElementById("password").value,
+          username: document.getElementById("username")?.value ?? null,
+          password: document.getElementById("password")?.value ?? null,
           extensionFrames: [...document.querySelectorAll("iframe")].map((f) => f.src.slice(0, 60)),
           bitwardenElements: [...document.querySelectorAll("*")].filter((e) => e.tagName.includes("-")).map((e) => e.tagName.toLowerCase()).slice(0, 10),
         })`),
