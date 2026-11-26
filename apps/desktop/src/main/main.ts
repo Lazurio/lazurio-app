@@ -956,13 +956,11 @@ const program = Effect.gen(function* () {
     ),
     signInAddress: tailnets.signInAddress,
     // Only addresses the app kept, each on its own tailnet's control server (Tailnet.isSafeLoginUrl).
-    openSignIns: Effect.sync(() => {
-      for (const tailnet of status().tailnets) {
-        if (tailnet.state !== "needs-login") continue;
-        const address = tailnets.signInAddress(tailnet.tailnet);
+    openSignIn: (tailnet) =>
+      Effect.sync(() => {
+        const address = tailnets.signInAddress(tailnet);
         if (Option.isSome(address)) hooks.observer.openExternally(address.value);
-      }
-    }),
+      }),
     networkHelp: Effect.promise(async () => {
       const options = {
         type: "info" as const,
@@ -1073,6 +1071,7 @@ const program = Effect.gen(function* () {
         broadcastStatus();
       },
       networkMissing: () => joining.networkMissing,
+      servingTailnet: (address) => Tailnet.servingTailnet(joining.tailnets, address),
       servedByTailnet: (address) => {
         const url = URL.parse(address);
         return url !== null && Option.isSome(tailnets.proxyFor(url.hostname));

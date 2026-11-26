@@ -61,8 +61,8 @@ const bridge: LazurioBridge = {
   copyTailnetSignIn: async (tailnet) => {
     await Electron.ipcRenderer.invoke(COPY_TAILNET_SIGN_IN_CHANNEL, tailnet);
   },
-  openTailnetSignIn: async () => {
-    await Electron.ipcRenderer.invoke(OPEN_TAILNET_SIGN_IN_CHANNEL);
+  openTailnetSignIn: async (tailnet) => {
+    await Electron.ipcRenderer.invoke(OPEN_TAILNET_SIGN_IN_CHANNEL, tailnet);
   },
   retryPage: async () => {
     await Electron.ipcRenderer.invoke(RETRY_PAGE_CHANNEL);

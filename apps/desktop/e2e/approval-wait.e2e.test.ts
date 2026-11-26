@@ -193,12 +193,17 @@ describe("Lazurio App GEN4 waiting for a tailnet's page", () => {
     await openedMoreThan(opened);
     assert.strictEqual(signInsOpened(), opened + 1, "the button opened the sign-in again");
 
-    // Signed in, the node runs while its tunnels still fail: the approval is what is left.
+    // Signed in, the node runs while its tunnels still fail: the page names approval as one
+    // possibility, not as the cause, and what to do if the computer is already approved.
     letRun();
-    await page.locator('main.waiting[data-waiting-step="approval"]').waitFor();
+    await page.locator('main.waiting[data-waiting-step="unreachable"]').waitFor();
     assert.match(
       await page.locator("main.waiting h1").innerText(),
-      /Waiting for approval by your Organization's Admin|Čeká na schválení Adminem Organizace/u,
+      /the Environment does not answer yet|Prostředí zatím neodpovídá/u,
+    );
+    assert.match(
+      await page.locator("main.waiting").innerText(),
+      /already approved|už je počítač schválený/u,
     );
     assert.strictEqual(await page.locator('[data-action="tailnet-sign-in-again"]').count(), 0);
     await shot(page, "waiting-approval.png");

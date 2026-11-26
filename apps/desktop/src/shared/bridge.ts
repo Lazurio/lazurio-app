@@ -281,7 +281,7 @@ export interface LazurioBridge {
   // the app holds none.
   readonly copyTailnetSignIn: (tailnet: string) => Promise<void>;
   // Opens again the sign-in of every tailnet that waits for one, in the system's browser.
-  readonly openTailnetSignIn: () => Promise<void>;
+  readonly openTailnetSignIn: (tailnet: string) => Promise<void>;
   // Loads the Environment's page again; settles once the attempt has shown or failed.
   readonly retryPage: () => Promise<void>;
   // Loads the window's first page, the Overview, instead; settles like retryPage.
