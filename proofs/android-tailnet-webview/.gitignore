@@ -1,0 +1,10 @@
+.gradle/
+build/
+app/build/
+local.properties
+# Built by build-helper.sh from helpers/tailnet, never committed.
+app/src/main/jniLibs/
+# Written by hostenv for one run: the test CA and the test tailnet's entry.
+app/src/main/res/raw/
+app/src/main/assets/tailnets/proof.json
+hostenv/out/
