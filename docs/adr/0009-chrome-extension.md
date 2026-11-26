@@ -47,15 +47,26 @@ PAC: a name of the Organization's tailnet?  ── yes ──▶ PROXY 127.0.0.1
    │                                                      │ CONNECT, password per start
    no                                                     ▼
    ▼                                              tailnet node ──▶ the Environment's gateway
-DIRECT (every other site, untouched)                       (TLS from the tab to the gateway, end to end)
+what the computer used before (DIRECT only        (TLS from the tab to the gateway, end to end)
+when it had no proxy; otherwise not taken over)
 ```
 
 - The app tells the extension, over the bridge, the proxy's port, its password for this run, and the tailnet's names. These are the same names the app's own window sends to the proxy.
-- The extension sets a PAC script with `chrome.proxy`. Only those names go to the proxy, and every other site goes direct, as before. The proxy's password goes in through `chrome.webRequest.onAuthRequired` (MV3: the permissions `webRequest` and `webRequestAuthProvider`) and never appears in a page.
+- The extension sets a PAC script with `chrome.proxy`, and only those names go to the proxy. The proxy's password goes in through `chrome.webRequest.onAuthRequired` (MV3: the permissions `webRequest` and `webRequestAuthProvider`) and never appears in a page.
+- **The proxy the computer already uses is kept, or the extension does not take over.** A PAC script set by an extension replaces Chrome's whole proxy setting, so returning `DIRECT` for other sites would bypass a system, corporate or VPN proxy and its checks. Before it sets anything, the extension asks the app, which reads the system's proxy for a test address of each kind:
+  - **no proxy:** the PAC script returns `DIRECT` for every other site, which is what Chrome did before;
+  - **a fixed proxy** (one host and port): the PAC script returns that same proxy for every other site;
+  - **a system PAC file, a proxy set by Chrome's policy, or anything the app cannot read with certainty:** the extension sets nothing, and it says that Lazurio's pages need the Admin. The Admin can add Lazurio's names to their own PAC file, or let the app's proxy in. Wrapping the Organization's own PAC file in ours is a later step, not version 1.
+  - `chrome.proxy.settings.get` tells the extension who controls the setting (`levelOfControl`). When a policy or another extension controls it, the extension does not try.
+  - Test before version 1: on a Mac and on Windows, with no proxy, with a fixed system proxy and with a system PAC file, compare which proxy Chrome uses for an ordinary site before and after the extension (`chrome://net-export`, or the proxy's own log).
 - **Certificates:** the tab's TLS runs inside the proxy's `CONNECT` tunnel, end to end to the Environment's gateway, with its public certificate. Nothing is installed in the system's trust store.
 - **Sign-in:** the person signs in to Lazurio in their Chrome as on a computer with the network. The gateway's cookies live in Chrome's profile, apart from the app's window.
-- **When the app does not run, it fails closed:** the PAC script keeps sending Lazurio's names to the proxy, so they fail and never go to the public internet. The extension says that Lazurio App is not running and offers to open it.
-- **Another extension that sets a proxy,** such as a corporate VPN extension, takes `chrome.proxy` from us. Chrome lets one extension control it. The extension shows that, and the person or the Admin decides.
+- **Failing closed, and where it is not possible:**
+  - **The app does not run:** the PAC script keeps sending Lazurio's names to the proxy. The connection fails, and the pages never go to the public internet. The extension says that Lazurio App is not running and offers to open it.
+  - **An invalid PAC script:** the extension sets it with `mandatory: true`. Chrome then fails a request rather than falling back to a direct connection, as it does with the default `false`.
+  - **Control lost to a policy or another extension** (a corporate VPN extension, for one): Chrome lets one extension control the proxy, and a policy wins over every extension. Our PAC script is then not used, and Lazurio's names follow the other setting. The extension cannot prevent that. It notices it (`chrome.proxy.settings.onChange` and `levelOfControl`) and says that Lazurio's pages are off.
+  - **What leaks then:** at most a lookup of a Lazurio name in public DNS, and a connection attempt that the Environment's gateway refuses, since it is not on the internet. No page content leaks. Only the Admin's policy can close that, by sending Lazurio's names to the app's proxy.
+  - Test before version 1: an invalid PAC script with `mandatory: true` leaves no direct connection, and a second extension that takes the proxy setting shows the warning.
 
 ### 3. An agent works in a tab the person hands over, through `chrome.debugger`
 
@@ -74,16 +85,20 @@ Agent in the Environment ──tools──▶ Agent Desktop channel ──▶ La
   - a small panel on that page with the Environment's name and Stop;
   - the app's bar, as for the desktop.
 - **Why `chrome.debugger` and not content scripts alone:** content scripts cannot produce real input events, see cross-origin frames or take screenshots of the page as the agent needs. Their events are also marked as synthetic, and many sites ignore them. Content scripts stay for the panel on the page.
-- **Permissions the extension asks for:** `nativeMessaging`, `proxy`, `webRequest`, `webRequestAuthProvider`, `debugger`, `tabs`, `storage`, `scripting`.
-  - Host permissions: Lazurio's names for the panel; for the debugger, only at the moment of a handover (`activeTab`).
-  - No permanent access to all sites.
+- **Permissions the extension asks for:** `nativeMessaging`, `proxy`, `webRequest`, `webRequestAuthProvider`, `debugger`, `tabs`, `storage`, `scripting`, and host permissions for Lazurio's names for the panel.
+  - **What `debugger` allows, plainly:** with it, the extension can attach to any ordinary tab. Chrome enforces no per-tab or per-site boundary for it, and `activeTab` does not limit it. The boundary of section 4 is enforced by the extension's own code, and only the Admin's `runtime_blocked_hosts` is enforced by Chrome. Chrome's install warning says as much, and the Web Store review will look at that code.
 
 ### 4. The security boundary: only what the person hands over
 
 The risk is an agent in the person's other tabs: the bank, mail, or another Organization's Lazurio.
 
 - **Default: nothing.** The agent sees no tab and no list of tabs until the person hands one over. They do it from the extension's button ("Předat tuto záložku agentovi z Prostředí X") or from a link the agent sends that opens a new tab, which the person confirms.
-- **A handed-over tab stays handed over only while it shows the same site.** Navigating to another site needs a new confirmation, except for the Organization's own Lazurio names. Closing the tab ends the handover.
+- **How the extension enforces it**, since Chrome does not (section 3):
+  - **One attach, one tab:** the extension calls `chrome.debugger.attach` only for the tab ID the person handed over, and keeps the handover (tab ID, site, Environment) only in the service worker's memory. A restart of the browser or of the extension ends every handover. No tool takes a tab ID from the agent; every tool runs on the handed-over tab.
+  - **Same site only, redirects too:** on attach the extension turns on CDP's `Fetch` for documents in that tab. Every top-level navigation, a redirect included, pauses before it is sent. A request to the handed-over site (the same scheme and registrable domain) or to the Organization's Lazurio names goes on. Any other is failed (`Fetch.failRequest`), and the person gets a prompt to hand the new site over too.
+  - **A second check after the fact:** if a commit to another site still happens, for example through a navigation CDP does not pause, `chrome.webNavigation.onCommitted` with a different site detaches at once. A tool refuses whenever the tab's current site is not the handed-over one.
+  - **Revoked by the person at once,** by any of: Stop in the app's bar, in the notification area or in the panel on the page; the extension's button; Chrome's own Cancel in the yellow bar; closing the tab; turning off the Agent Desktop switch. Each detaches (`chrome.debugger.detach`) and forgets the handover. Any later tool call is refused until a new handover.
+  - Tests before version 2: a redirect to another site, a link to another site, `window.location` from a script, a cross-site form post, and a new tab the page opens. Each must be refused or end the handover.
 - **Never silently everything.** No mode attaches to every tab, and the agent never gets the list of tabs, cookies or history.
 - **Blocked always:** the browser's own pages, the Chrome Web Store, other extensions' pages, and sites the Admin blocks (Chrome's `runtime_blocked_hosts` policy, which also stops `chrome.debugger.attach`).
 - **What the Organization's Admin sees and can do (proposal):**
