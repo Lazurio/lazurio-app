@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -191,10 +192,17 @@ const loadRemote = Effect.fn("MainWindow.loadRemote")(function* (
   view: Electron.WebContentsView,
   url: string,
   whenReachable: (url: string) => Effect.Effect<void>,
+  waitsForNetwork: () => void,
 ) {
   // The page loads only once its tailnet runs, so the first load does not fail while the node
-  // starts.
-  yield* whenReachable(url).pipe(
+  // starts. A node that is not running soon (it needs a sign-in, or waits) leaves no blank window:
+  // the app's waiting page says which step it is at.
+  const reachable = yield* whenReachable(url).pipe(Effect.timeoutOption(Duration.millis(500)));
+  if (Option.isNone(reachable)) {
+    waitsForNetwork();
+    yield* whenReachable(url);
+  }
+  yield* Effect.void.pipe(
     Effect.andThen(
       Effect.tryPromise({
         try: () => view.webContents.loadURL(url),
@@ -228,6 +236,8 @@ interface PageWatch {
   readonly retry: () => Promise<void>;
   readonly first: () => Promise<void>;
   readonly reload: () => void;
+  // The first load waits for its tailnet: the app's page says why, until a page shows.
+  readonly waitsForNetwork: () => void;
 }
 
 // The page never stays blank (#36): an unreachable tailnet's page waits and loads again every few
@@ -369,6 +379,9 @@ const watchPage = Effect.fn("MainWindow.watchPage")(function* (options: {
       if (contents.isDestroyed()) return;
       if (covered !== undefined) void retry();
       else contents.reload();
+    },
+    waitsForNetwork: () => {
+      if (covered === undefined && lastShown === undefined) showCover(`${LOCAL_ENTRY}#waiting`);
     },
   } satisfies PageWatch;
 });
@@ -721,7 +734,11 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
     layout();
     frontChanged();
     view.webContents.focus();
-    runFork(loadRemote(window, view, firstAddress, options.whenReachable));
+    runFork(
+      loadRemote(window, view, firstAddress, options.whenReachable, () =>
+        tab.watch?.waitsForNetwork(),
+      ),
+    );
   }
 
   let first: Tab | undefined;
@@ -814,7 +831,10 @@ export const open = Effect.fn("MainWindow.open")(function* (options: MainWindowO
   }
   if (options.showOnLoad()) window.show();
   if (first !== undefined && firstAddress !== undefined) {
-    yield* loadRemote(window, first.view, firstAddress, options.whenReachable);
+    const firstTab = first;
+    yield* loadRemote(window, first.view, firstAddress, options.whenReachable, () =>
+      firstTab.watch?.waitsForNetwork(),
+    );
   }
   return window;
 });

@@ -15,6 +15,7 @@ import {
   COPY_STATUS_CHANNEL,
   NETWORK_HELP_CHANNEL,
   COPY_TAILNET_SIGN_IN_CHANNEL,
+  OPEN_TAILNET_SIGN_IN_CHANNEL,
   RETRY_PAGE_CHANNEL,
   FIRST_PAGE_CHANNEL,
   SET_UPDATE_CHANNEL_CHANNEL,
@@ -59,6 +60,9 @@ const bridge: LazurioBridge = {
   },
   copyTailnetSignIn: async (tailnet) => {
     await Electron.ipcRenderer.invoke(COPY_TAILNET_SIGN_IN_CHANNEL, tailnet);
+  },
+  openTailnetSignIn: async () => {
+    await Electron.ipcRenderer.invoke(OPEN_TAILNET_SIGN_IN_CHANNEL);
   },
   retryPage: async () => {
     await Electron.ipcRenderer.invoke(RETRY_PAGE_CHANNEL);

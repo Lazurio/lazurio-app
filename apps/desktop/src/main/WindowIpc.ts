@@ -7,6 +7,7 @@ import * as Electron from "electron";
 import {
   COPY_STATUS_CHANNEL,
   COPY_TAILNET_SIGN_IN_CHANNEL,
+  OPEN_TAILNET_SIGN_IN_CHANNEL,
   FIRST_PAGE_CHANNEL,
   NETWORK_HELP_CHANNEL,
   RETRY_PAGE_CHANNEL,
@@ -45,6 +46,8 @@ export interface WindowControls {
   readonly statusText: Effect.Effect<string>;
   // The sign-in address of a tailnet that waits for sign-in (Tailnets.signInAddress).
   readonly signInAddress: (tailnet: string) => Option.Option<string>;
+  // Opens again, in the system's browser, the sign-in of every tailnet that waits for one.
+  readonly openSignIns: Effect.Effect<void>;
   // Loads the Environment's page again, until the attempt has shown or failed.
   readonly retryPage: Effect.Effect<void>;
   // Loads the window's first page instead, until the attempt has shown or failed.
@@ -85,6 +88,7 @@ export const serve = Effect.fn("WindowIpc.serve")(function* (controls: WindowCon
       ),
     ),
   );
+  yield* handle(OPEN_TAILNET_SIGN_IN_CHANNEL, () => controls.openSignIns);
   yield* handle(RETRY_PAGE_CHANNEL, () => controls.retryPage);
   yield* handle(FIRST_PAGE_CHANNEL, () => controls.firstPage);
   yield* handle(NETWORK_HELP_CHANNEL, () => controls.networkHelp);

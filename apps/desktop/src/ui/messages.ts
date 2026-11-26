@@ -41,7 +41,22 @@ export interface Text {
   readonly updates: UpdatesText;
   readonly device: DeviceText;
   // The remote page's place while a tailnet's page cannot be reached yet (Waiting.tsx).
-  readonly waiting: { readonly title: string; readonly lead: string; readonly showStatus: string };
+  readonly waiting: {
+    readonly title: string;
+    readonly lead: string;
+    readonly showStatus: string;
+    // The step the page waits for, from the tailnets' state (shared/waitingStep.ts).
+    readonly signInTitle: string;
+    readonly signInLead: string;
+    readonly signInAgain: string;
+    readonly connectingTitle: string;
+    readonly connectingLead: string;
+    readonly approvalTitle: string;
+    readonly approvalLead: string;
+    readonly approvalAfter: string;
+    readonly keyTitle: string;
+    readonly keyLead: string;
+  };
   // The remote page's place when its load failed, with the reason and Retry (Waiting.tsx).
   readonly page: PageText;
   readonly tray: TrayText;
@@ -309,6 +324,19 @@ const cs: Text = {
     title: "Prostředí se zatím nenačetlo",
     lead: `Toto zařízení nejspíš čeká na schválení v Organizaci, nebo se síť ještě nepřipojila. Jakmile bude Prostředí dostupné, ${APP_NAME} ho načte sama.`,
     showStatus: "Zobrazit stav aplikace",
+    signInTitle: "Přihlaste se k síti Organizace",
+    signInLead:
+      "Přihlášení k síti vaší Organizace se otevřelo ve vašem prohlížeči. Přihlaste se Lazurio účtem, se kterým vás Admin přidal do Organizace. Když prohlížeč napíše, že účet do Organizace nepatří, požádejte Admina své Organizace, aby vás přidal, a pak se přihlaste znovu.",
+    signInAgain: "Otevřít přihlášení znovu",
+    connectingTitle: "Připojuje se k síti Organizace",
+    connectingLead: `Chvíli to potrvá. Jakmile bude síť připojená, ${APP_NAME} načte Prostředí sama.`,
+    approvalTitle: "Čeká na schválení Adminem Organizace",
+    approvalLead:
+      "Počítač je přihlášený do sítě vaší Organizace. Než se Prostředí otevře, musí tento počítač schválit Admin Organizace. Potom se Prostředí načte samo, nic dalšího dělat nemusíte.",
+    approvalAfter:
+      "Když už je počítač schválený a Prostředí se stejně nenačte, zkuste to znovu nebo napište svému kontaktu v Lazuriu.",
+    keyTitle: "Síť Organizace se nespustila",
+    keyLead: `Systém nepovolil ${APP_NAME} otevřít klíč sítě. Na Macu se to stane, když se dotaz Klíčenky zamítne. Ukončete ${APP_NAME}, spusťte ji znovu a na dotaz Klíčenky zadejte heslo k Macu a zvolte Vždy povolit. Když to nepomůže, otevřete stav aplikace: najdete v něm postup, jak síť obnovit.`,
   },
   page: {
     retry: "Zkusit znovu",
@@ -587,6 +615,19 @@ const en: Text = {
     title: "The Environment has not loaded yet",
     lead: `This device most likely waits for its approval in the Organization, or the network has not connected yet. ${APP_NAME} loads the Environment by itself once it can be reached.`,
     showStatus: "Show the app's status",
+    signInTitle: "Sign in to your Organization's network",
+    signInLead:
+      "The sign-in to your Organization's network opened in your browser. Sign in with the Lazurio account your Admin added to the Organization. If the browser says that the account does not belong to the Organization, ask your Organization's Admin to add you, then sign in again.",
+    signInAgain: "Open the sign-in again",
+    connectingTitle: "Connecting to your Organization's network",
+    connectingLead: `This takes a moment. Once the network is connected, ${APP_NAME} loads the Environment by itself.`,
+    approvalTitle: "Waiting for approval by your Organization's Admin",
+    approvalLead:
+      "This computer is signed in to your Organization's network. Before the Environment opens, your Organization's Admin has to approve this computer. The Environment then loads by itself; there is nothing more to do.",
+    approvalAfter:
+      "If the computer is already approved and the Environment still does not load, try again or write to your contact at Lazurio.",
+    keyTitle: "Your Organization's network did not start",
+    keyLead: `The system did not let ${APP_NAME} open the network's key. On a Mac this happens when the Keychain's prompt was denied. Quit ${APP_NAME}, start it again, and at the Keychain's prompt enter your Mac's password and choose Always Allow. If that does not help, open the app's status: it shows how to restore the network.`,
   },
   page: {
     retry: "Try again",

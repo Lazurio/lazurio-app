@@ -30,6 +30,8 @@ export const NETWORK_HELP_CHANNEL = "lazurio:network-help";
 // Copies the sign-in address of a tailnet that waits for sign-in; the address stays in the main
 // process.
 export const COPY_TAILNET_SIGN_IN_CHANNEL = "lazurio:copy-tailnet-sign-in";
+// Opens again, in the system's browser, the sign-in of every tailnet that waits for one.
+export const OPEN_TAILNET_SIGN_IN_CHANNEL = "lazurio:open-tailnet-sign-in";
 // Loads the Environment's page again from the page that says why it did not show.
 export const RETRY_PAGE_CHANNEL = "lazurio:retry-page";
 // Leaves that page for the window's first page, the Overview (#68).
@@ -278,6 +280,8 @@ export interface LazurioBridge {
   // Copies the sign-in address of a tailnet that waits for sign-in to the clipboard; fails when
   // the app holds none.
   readonly copyTailnetSignIn: (tailnet: string) => Promise<void>;
+  // Opens again the sign-in of every tailnet that waits for one, in the system's browser.
+  readonly openTailnetSignIn: () => Promise<void>;
   // Loads the Environment's page again; settles once the attempt has shown or failed.
   readonly retryPage: () => Promise<void>;
   // Loads the window's first page, the Overview, instead; settles like retryPage.

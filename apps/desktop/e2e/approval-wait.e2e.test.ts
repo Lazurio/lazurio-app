@@ -12,12 +12,12 @@ import * as NodeHttps from "node:https";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The test resolves the app on disk.
 import * as NodePath from "node:path";
 
-import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
+import { afterAll, assert, beforeAll, describe, expect, it } from "@effect/vitest";
 import { _electron, type ElectronApplication } from "playwright-core";
 
 import { selfSigned } from "./certificate.ts";
 import { removeUserData, temporaryUserData } from "./user-data.ts";
-import { columnPage } from "./local-page.ts";
+import { columnPage, localPage } from "./local-page.ts";
 
 const PAGE = "https://launchpad.e2e.lazurio.io/";
 // Longer than MainWindow's five seconds between attempts.
@@ -28,6 +28,12 @@ let control: NodeHttp.Server;
 let userData: string;
 let refuse: string;
 let app: ElectronApplication;
+const output: Array<string> = [];
+// The node runs once the test lets the control server answer: until then it needs a sign-in.
+let letRun: () => void = () => {};
+const running = new Promise<void>((resolve) => {
+  letRun = resolve;
+});
 
 beforeAll(async () => {
   const { cert, key } = selfSigned(["launchpad.e2e.lazurio.io"]);
@@ -48,8 +54,10 @@ beforeAll(async () => {
   const address = pageServer.address();
   if (address === null || typeof address === "string") throw new Error("no server address");
 
-  // The node runs at once; only its tunnels fail.
-  control = NodeHttp.createServer((_request, response) => response.end());
+  // The node needs a sign-in until the test lets it run; then only its tunnels fail.
+  control = NodeHttp.createServer((_request, response) => {
+    void running.then(() => response.end());
+  });
   await new Promise<void>((resolve) => control.listen(0, "127.0.0.1", resolve));
   const controlAddress = control.address();
   if (controlAddress === null || typeof controlAddress === "string") {
@@ -89,6 +97,7 @@ beforeAll(async () => {
       ]),
     },
   });
+  app.process().stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString("utf8")));
   await columnPage(app);
 });
 
@@ -126,19 +135,73 @@ const viewsOnceShowing = (expected: "waiting" | "page") =>
     return state;
   }, expected);
 
+// A screenshot of the waiting page, when the run asks for them.
+const shot = async (page: import("playwright-core").Page, name: string) => {
+  const directory = process.env["LAZURIO_APP_E2E_SCREENSHOTS"];
+  if (directory !== undefined && directory !== "") {
+    await page.screenshot({ path: NodePath.join(directory, name) });
+  }
+};
+
+// Whether the window shows the app's waiting page in the remote page's place (the third view).
+const waitingShown = () =>
+  app.evaluate(({ BaseWindow }) => {
+    const views = BaseWindow.getAllWindows()[0]?.contentView.children ?? [];
+    return views[2]?.getVisible() === true && views[1]?.getVisible() === false;
+  });
+
+// How often the app opened the node's sign-in in the system's browser.
+const signInsOpened = () =>
+  output
+    .join("")
+    .split("lazurio-app-e2e system-browser https://headscale.e2e.lazurio.invalid/register/e2e")
+    .length - 1;
+
+// Resolves once the app opened the sign-in more than `times` times.
+const openedMoreThan = (times: number) =>
+  new Promise<void>((resolve) => {
+    const check = () => {
+      if (signInsOpened() <= times) return;
+      app.process().stdout?.off("data", check);
+      resolve();
+    };
+    app.process().stdout?.on("data", check);
+    check();
+  });
+
 describe("Lazurio App GEN4 waiting for a tailnet's page", () => {
   it("shows its waiting page while the tunnel fails, and the page once it works", async () => {
-    const waiting = await viewsOnceShowing("waiting");
-    assert.deepStrictEqual(
-      { remoteVisible: waiting.remoteVisible, waitingVisible: waiting.waitingVisible },
-      { remoteVisible: false, waitingVisible: true },
-    );
-    const page = app.windows().find((window) => window.url().endsWith("#waiting"));
-    if (page === undefined) throw new Error("no waiting page");
+    // The node needs a sign-in, so the page does not load yet: the window shows the app's page
+    // in the page's place, not a blank one.
+    const page = await localPage(app, "#waiting");
+    await expect.poll(waitingShown).toBe(true);
+
+    // The node needs a sign-in: the page says so, the app opened it, and a button opens it again.
+    await page.locator('main.waiting[data-waiting-step="sign-in"]').waitFor();
     assert.match(
       await page.locator("main.waiting h1").innerText(),
-      /has not loaded yet|se zatím nenačetlo/u,
+      /Sign in to your Organization's network|Přihlaste se k síti Organizace/u,
     );
+    assert.match(
+      await page.locator("main.waiting").innerText(),
+      /does not belong to the Organization|do Organizace nepatří/u,
+    );
+    await shot(page, "waiting-sign-in.png");
+    const opened = signInsOpened();
+    assert.isAtLeast(opened, 1, "the app opened the sign-in by itself");
+    await page.locator('[data-action="tailnet-sign-in-again"]').click();
+    await openedMoreThan(opened);
+    assert.strictEqual(signInsOpened(), opened + 1, "the button opened the sign-in again");
+
+    // Signed in, the node runs while its tunnels still fail: the approval is what is left.
+    letRun();
+    await page.locator('main.waiting[data-waiting-step="approval"]').waitFor();
+    assert.match(
+      await page.locator("main.waiting h1").innerText(),
+      /Waiting for approval by your Organization's Admin|Čeká na schválení Adminem Organizace/u,
+    );
+    assert.strictEqual(await page.locator('[data-action="tailnet-sign-in-again"]').count(), 0);
+    await shot(page, "waiting-approval.png");
 
     // The Organization approves the Device: the tunnel works, and the page loads by itself.
     NodeFS.rmSync(refuse);
