@@ -48,4 +48,28 @@ describe("the address of the sign-in under way", () => {
       assert.isAbove(changes, 3);
     }),
   );
+
+  it.effect("keeps the running attempt's address when another window asks for a sign-in", () =>
+    Effect.gen(function* () {
+      const address = make(() => {});
+      const handedOver = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const first = yield* Effect.forkChild(
+        address.attempt(
+          Effect.sync(() => address.offer("https://auth/first")).pipe(
+            Effect.andThen(Deferred.succeed(handedOver, undefined)),
+            Effect.andThen(Deferred.await(proceed)),
+          ),
+        ),
+      );
+      yield* Deferred.await(handedOver);
+      // The network page asks while the bar's attempt waits; AuthClient refuses it.
+      const second = yield* Effect.flip(address.attempt(Effect.fail("in-progress" as const)));
+      assert.strictEqual(second, "in-progress");
+      assert.deepStrictEqual(address.current(), Option.some("https://auth/first"));
+      yield* Deferred.succeed(proceed, undefined);
+      yield* Fiber.join(first);
+      assert.isTrue(Option.isNone(address.current()));
+    }),
+  );
 });

@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 // ends without one, whatever ends it, so a copy never gives an earlier attempt's expired address.
 export const make = (changed: () => void) => {
   let address = Option.none<string>();
+  let running = false;
   const set = (next: Option.Option<string>) => {
     address = next;
     changed();
@@ -15,11 +16,23 @@ export const make = (changed: () => void) => {
     offer: (next: string) => set(Option.some(next)),
     // Forgets the address, for a sign-in that ended outside an attempt (the account changed).
     clear: () => set(Option.none()),
+    // One attempt owns the address from its start to its end. A request while it runs (the bar
+    // and the network page each have a button) leaves it alone: AuthClient refuses it as
+    // in-progress, and the running attempt's address stays to be copied.
     attempt: <A, E, R>(signIn: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
       Effect.suspend(() => {
+        if (running) return signIn;
+        running = true;
         set(Option.none());
-        return signIn;
-      }).pipe(Effect.ensuring(Effect.sync(() => set(Option.none())))),
+        return signIn.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              running = false;
+              set(Option.none());
+            }),
+          ),
+        );
+      }),
     current: (): Option.Option<string> => address,
   };
 };

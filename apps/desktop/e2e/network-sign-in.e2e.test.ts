@@ -234,6 +234,12 @@ describe("Lazurio App GEN4 at a first start without the Organization's network",
     const address = await handedToBrowser(from);
     // While the sign-in waits, the bar says so, and its address can be copied for another browser.
     await bar.locator('[data-action="networks-copy-sign-in"]').waitFor();
+    // The page in the Environment's place asks for a sign-in too while the bar's attempt waits:
+    // that attempt and its address stay.
+    const page = await localPage(app, "problem=network");
+    await page.locator('[data-action="networks-sign-in"]').click();
+    await page.locator('[data-action="networks-sign-in"]:not([disabled])').waitFor();
+    assert.strictEqual(await bar.locator('[data-action="networks-copy-sign-in"]').count(), 1);
     await fitsAtWidths(bar, "network-bar-signing-in");
     await bar.locator('[data-action="networks-copy-sign-in"]').click();
     await bar
