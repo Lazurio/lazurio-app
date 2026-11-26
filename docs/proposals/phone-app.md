@@ -101,8 +101,8 @@ Not taken over: the desktop window, tabs and frames as they are drawn (the phone
 
 From [HumanAndMachine-ai/HumanAndMachine-ai_GEN3#320](https://github.com/HumanAndMachine-ai/HumanAndMachine-ai_GEN3/issues/320), kept by the thread for signing apps:
 
-- **Google Play:** the developer account of the company is paid, the identity, website and phone are verified (17. 11. 2026), and the console offers "create the first app".
-- **Apple Developer:** the enrolment is pending (25. 11. 2026), and the membership is neither active nor paid.
+- **Google Play:** an account of the Organization (Human and Machine s.r.o., with a D-U-N-S number, public name Lazurio), paid and verified on 17. 11. 2026, so the rule of 12 testers for 14 days for new personal accounts does not apply. No app is created yet. (The thread for signing apps, 26. 11. 2026.)
+- **Apple Developer:** the enrolment is pending (25. 11. 2026), and the membership is neither active nor paid. After the membership is active, the signing agenda plans to register `io.lazurio.app`, an Apple Distribution certificate, a profile, App Store Connect and TestFlight; nothing is set up now.
 
 ### What it costs and how long it takes
 
@@ -125,7 +125,11 @@ The code, the simulator proof and the CI build for the simulator do not wait.
 
 ### One decision before the first Android build reaches anyone
 
-An Android app keeps its signing key for life: a phone installs an update only with the same signature. If named people get an APK before Google Play, Play's later build must carry the same signature, or they have to uninstall and lose their sign-in. Play App Signing allows uploading the company's own app signing key instead of Google's. **Recommended:** make that key once, keep it where the signing thread keeps the others, use it for the APKs and for Play.
+An Android app keeps its signing key for life: a phone installs an update only with the same signature. If named people get an APK before Google Play, Play's later build must carry the same signature and a higher `versionCode`.
+
+- **Recommended: Google generates and holds the app signing key** (Play App Signing's default for new apps, quantum-ready). The Organization holds only the upload key, which Google resets if it is lost. APKs for named people before the store are the "signed, universal APK" that Play Console and the Play Developer API give for a release on the internal track, so Play's later versions update them ([Google Play](https://support.google.com/googleplay/android-developer/answer/9842756)).
+- **The alternative:** the Organization's own key, handed to Play with PEPK before open testing. It can sign without Google Play, but a lost key "cannot be reset", and a leaked one stays leaked for older phones.
+- The upload key lives with the other signing identities and reaches CI only as a secret of an approved GitHub Environment, as ADR 0005 point 7 does for the desktop. Trial builds get their own application ID (`io.lazurio.app.trial`) and key.
 
 ## 6. An agent working on the phone
 
@@ -174,5 +178,5 @@ That is about two to three weeks of work to Android for named people and one to 
 1. **The shape:** an Expo app with one native module that GEN5 takes over **(recommended)**, or two thin native apps (Kotlin and Swift) without React Native, which are smaller now and mean more work at GEN5.
 2. **The languages:** Kotlin and Swift for the native module only, beside TypeScript and Go: a deviation from ADR 0001 forced by the platforms. Accept?
 3. **The place:** `apps/mobile` in this repository **(recommended)**, or a repository of its own.
-4. **Android before the store:** may named people get a signed APK before Google Play, with the company's own signing key that Play then uses too **(recommended)**?
+4. **The Android signing key:** let Google generate and hold it, with APKs for named people downloaded from Play Console **(recommended)**, or the Organization's own key?
 5. **An agent on Android:** pursue the separate app outside Google Play now, after the first version **(recommended)**, or not at all?
