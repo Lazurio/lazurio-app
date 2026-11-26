@@ -43,7 +43,14 @@ export const useNetworkSignIn = () => {
 
 // The sign-in button's words: the sign-in with the Lazurio account, also for a session from before
 // the app asked for the networks (nothing was signed in for them yet), or reading again.
-export const signInLabel = (step: NetworkBarStep, failed: boolean, words: Text): string =>
+export const signInLabel = (
+  step: NetworkBarStep,
+  failed: boolean,
+  words: Text,
+  length: "full" | "short" = "full",
+): string =>
   failed || step === "not-read" || step === "empty"
     ? words.networkBarSteps.tryAgain
-    : words.networksSignIn;
+    : length === "short"
+      ? words.networkBarSteps.signInShort
+      : words.networksSignIn;

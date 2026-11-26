@@ -307,6 +307,7 @@ describe("Lazurio App GEN4", () => {
       tailnetSource: "development",
       account: "signed-out",
       networksNotRead: false,
+      signInCopyable: false,
       updates: { channel: "latest", state: { phase: "off", reason: "unpackaged" } },
       page: { outcome: "none" },
     };

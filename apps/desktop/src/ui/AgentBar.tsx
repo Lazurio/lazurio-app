@@ -28,6 +28,16 @@ export function AgentBar() {
   const agent = workingAgent(status);
   if (agent === null && networkMissing && network.step !== undefined) {
     const signs = offersSignIn(network.step);
+    // While the sign-in waits in the browser, the bar says so and offers only to copy its
+    // address, once the attempt has one; otherwise the sentence, the sign-in and the help.
+    const sentence = network.signingIn
+      ? words.networkBarSteps.signingIn
+      : network.failed
+        ? words.networksSignInFailed
+        : barSentence(
+            networkBarSentence(network.step, (network.status?.tailnets.length ?? 0) > 0),
+            words,
+          );
     return (
       <div
         className="agent-bar"
@@ -35,48 +45,44 @@ export function AgentBar() {
         data-network-step={network.step}
         role="status"
       >
-        <p className="agent-bar__text">
-          {network.failed
-            ? words.networksSignInFailed
-            : barSentence(
-                networkBarSentence(network.step, (network.status?.tailnets.length ?? 0) > 0),
-                words,
-              )}
-        </p>
-        {signs ? (
-          <button
-            type="button"
-            data-action="networks-sign-in"
-            disabled={network.signingIn}
-            onClick={network.signIn}
-          >
-            {network.signingIn
-              ? words.networkBarSteps.signingIn
-              : signInLabel(network.step, network.failed, words)}
-          </button>
-        ) : null}
+        <p className="agent-bar__text">{sentence}</p>
         {network.signingIn ? (
-          <button
-            type="button"
-            className="agent-bar__secondary"
-            data-action="networks-copy-sign-in"
-            onClick={network.copySignIn}
-          >
-            {network.copied === "copied"
-              ? words.networkBarSteps.copied
-              : network.copied === "failed"
-                ? words.networkBarSteps.copyFailed
-                : words.networkBarSteps.copy}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className={signs ? "agent-bar__secondary" : undefined}
-          data-action="network-help"
-          onClick={() => void window.lazurio.showNetworkHelp()}
-        >
-          {words.networkHelp}
-        </button>
+          network.status?.signInCopyable === true ? (
+            <button
+              type="button"
+              className="agent-bar__secondary"
+              data-action="networks-copy-sign-in"
+              onClick={network.copySignIn}
+            >
+              {network.copied === "copied"
+                ? words.networkBarSteps.copied
+                : network.copied === "failed"
+                  ? words.networkBarSteps.copyFailed
+                  : words.networkBarSteps.copy}
+            </button>
+          ) : null
+        ) : (
+          <>
+            {signs ? (
+              <button type="button" data-action="networks-sign-in" onClick={network.signIn}>
+                <span className="agent-bar__long">
+                  {signInLabel(network.step, network.failed, words)}
+                </span>
+                <span className="agent-bar__short">
+                  {signInLabel(network.step, network.failed, words, "short")}
+                </span>
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={signs ? "agent-bar__secondary agent-bar__help" : "agent-bar__help"}
+              data-action="network-help"
+              onClick={() => void window.lazurio.showNetworkHelp()}
+            >
+              {words.networkHelp}
+            </button>
+          </>
+        )}
       </div>
     );
   }

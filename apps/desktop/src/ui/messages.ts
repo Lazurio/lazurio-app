@@ -38,6 +38,8 @@ export interface Text {
     readonly tryAgain: string;
     // The app joins the built-in Lazurio Example only: the sign-in brings the person's own.
     readonly ownNetworks: string;
+    // The sign-in button's words in a narrow window.
+    readonly signInShort: string;
     readonly copy: string;
     readonly copied: string;
     readonly copyFailed: string;
@@ -332,12 +334,13 @@ const cs: Text = {
     reading: "Načítají se sítě vašeho účtu Lazurio…",
     notRead: "Sítě vašeho účtu Lazurio se nepodařilo načíst.",
     empty: "K vašemu účtu Lazurio zatím nepatří žádná síť Organizace.",
-    signingIn: "Dokončete přihlášení v prohlížeči",
+    signingIn: "Dokončete přihlášení v prohlížeči.",
     tryAgain: "Zkusit znovu",
     ownNetworks: "Přihlaste se účtem Lazurio, ať aplikace zná sítě vašich Organizací.",
-    copy: "Kopírovat adresu přihlášení",
-    copied: "Adresa zkopírována",
-    copyFailed: "Adresu se nepodařilo zkopírovat",
+    signInShort: "Přihlásit se",
+    copy: "Kopírovat adresu",
+    copied: "Zkopírováno",
+    copyFailed: "Kopírování selhalo",
   },
   networksSignIn: "Přihlásit se účtem Lazurio",
   networksSignInHint: `Přihlaste se účtem Lazurio a ${APP_NAME} připojí sítě vašich Organizací.`,
@@ -641,12 +644,13 @@ const en: Text = {
     reading: "Reading the networks of your Lazurio account…",
     notRead: "The networks of your Lazurio account could not be read.",
     empty: "No Organization's network belongs to your Lazurio account yet.",
-    signingIn: "Finish the sign-in in your browser",
+    signingIn: "Finish the sign-in in your browser.",
     tryAgain: "Try again",
     ownNetworks: "Sign in with your Lazurio account so the app knows your Organizations' networks.",
-    copy: "Copy the sign-in address",
-    copied: "Address copied",
-    copyFailed: "The address could not be copied",
+    signInShort: "Sign in",
+    copy: "Copy address",
+    copied: "Copied",
+    copyFailed: "Copy failed",
   },
   networksSignIn: "Sign in with Lazurio",
   networksSignInHint: `Sign in with your Lazurio account and ${APP_NAME} joins your Organizations' networks.`,

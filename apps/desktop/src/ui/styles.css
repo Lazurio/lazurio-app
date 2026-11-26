@@ -403,6 +403,8 @@ body {
 }
 
 .agent-bar button {
+  flex: none;
+  white-space: nowrap;
   padding: 3px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -410,6 +412,33 @@ body {
   color: var(--surface);
   font: inherit;
   cursor: pointer;
+}
+
+/* A narrow window keeps the sentence and the next step; the page in the Environment's place says
+   what to do. */
+.agent-bar .agent-bar__short {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .agent-bar .agent-bar__help,
+  .agent-bar .agent-bar__long {
+    display: none;
+  }
+
+  .agent-bar .agent-bar__short {
+    display: inline;
+  }
+
+  /* Two lines of the sentence still fit the bar's 36 px. */
+  .agent-bar__text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    font-size: 12px;
+    line-height: 15px;
+    white-space: normal;
+  }
 }
 
 .agent-bar .agent-bar__secondary {

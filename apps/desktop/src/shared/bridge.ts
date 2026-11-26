@@ -248,6 +248,8 @@ export interface AppStatus {
   // The latest read of the person's networks failed (Auth out of reach, a refusal, or a list the
   // app does not take whole); the last complete list stays.
   readonly networksNotRead: boolean;
+  // The account's sign-in under way has handed its address to the browser, so it can be copied.
+  readonly signInCopyable: boolean;
   readonly updates: UpdatesStatus;
   readonly page: PageOutcome;
 }
