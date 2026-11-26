@@ -13,7 +13,7 @@ import { nameText } from "./ShellNames.ts";
 // left the switch on, their consent until revoked (docs/adr/0006), in agent-desktop-environments.json.
 // No secret. Versions 1 and 2 read as version 3 with every switch off; the next change writes 3.
 
-class DeviceEnvironmentsError extends Schema.TaggedError<DeviceEnvironmentsError>()(
+export class DeviceEnvironmentsError extends Schema.TaggedError<DeviceEnvironmentsError>()(
   "DeviceEnvironmentsError",
   { path: Schema.String },
 ) {

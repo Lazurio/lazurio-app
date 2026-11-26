@@ -512,17 +512,30 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       .setLeftOn(origin, false)
       .pipe(Effect.mapError(() => new DeviceSwitchError({ problem: "not-saved" })));
 
-  // The switches the person left on go on again once the helper is ready, once per run.
-  const ready = yield* Queue.unbounded<void>();
-  const helperReady = () => {
-    if (device.current().state === "ready") Queue.offerUnsafe(ready, undefined);
+  // The switches the person left on go on again once the helper is ready, once per run. A helper
+  // that failed or was lost before that cannot turn them on: each says so, so none hides.
+  const helperOutcome = yield* Queue.unbounded<"ready" | "unavailable">();
+  const watchHelper = () => {
+    const { state } = device.current();
+    if (state === "ready") Queue.offerUnsafe(helperOutcome, "ready");
+    else if (state === "failed" || state === "lost")
+      Queue.offerUnsafe(helperOutcome, "unavailable");
   };
-  const stopWatchingHelper = device.subscribe(helperReady);
+  const stopWatchingHelper = device.subscribe(watchHelper);
   yield* Effect.addFinalizer(() => Effect.sync(stopWatchingHelper));
-  helperReady();
-  yield* Queue.take(ready).pipe(
-    Effect.andThen(byPerson(resume())),
-    Effect.andThen(Effect.sync(stopWatchingHelper)),
+  watchHelper();
+  const helperUnavailable: DeviceSwitchProblem = { from: "app", reason: "helper-unavailable" };
+  yield* Queue.take(helperOutcome).pipe(
+    Effect.tap(() => Effect.sync(stopWatchingHelper)),
+    Effect.flatMap((outcome) =>
+      outcome === "ready"
+        ? byPerson(resume())
+        : Effect.forEach(
+            environments.origins().filter((origin) => environments.leftOn(origin)),
+            (origin) => offByItself(origin, helperUnavailable),
+            { discard: true },
+          ),
+    ),
     Effect.forkIn(scope),
   );
 
@@ -539,6 +552,7 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
       ...(organization === undefined ? {} : { organization }),
       switch: entries.get(origin)?.phase ?? OFF,
       channel,
+      ...(environments.leftOn(origin) ? { consent: true as const } : {}),
     };
   };
 
@@ -571,16 +585,21 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     stop: device.stop,
     // Off fails only when nothing confirmed the channel's end; after the helper's confirmed end the
     // switch is truly off and says why.
+    // Off stops the channel first, also when the consent cannot be saved as revoked; then that
+    // failure is reported. A stop nothing confirmed is reported before it.
     setSwitch: (origin, on) =>
       byPerson(
         on
           ? turnOn(origin)
-          : revoke(origin).pipe(
-              Effect.andThen(turnOff(origin)),
-              Effect.flatMap((outcome) =>
-                outcome === "unknown" ? Effect.fail(notConfirmed) : Effect.void,
-              ),
-            ),
+          : Effect.gen(function* () {
+              const outcome = yield* turnOff(origin);
+              const revoked = yield* Effect.exit(revoke(origin));
+              changed();
+              if (outcome === "unknown") return yield* notConfirmed;
+              if (Exit.isFailure(revoked)) {
+                return yield* new DeviceSwitchError({ problem: "not-saved" });
+              }
+            }),
       ),
     addEnvironment: (origin) =>
       byPerson(
@@ -616,17 +635,20 @@ export const run = Effect.fn("DeviceSwitches.run")(function* (options: DeviceSwi
     signOut: byPerson(
       Effect.gen(function* () {
         let allStopped = true;
+        let allRevoked = true;
         for (const origin of entries.keys()) {
-          // Signing out ends the consent of every switch, as turning each off would.
-          yield* revoke(origin).pipe(Effect.ignore);
           const outcome = yield* turnOff(origin);
           if (outcome !== "stopped" && outcome !== "was-off") allStopped = false;
+          // Signing out ends the consent of every switch, as turning each off would; a consent
+          // that cannot be saved as revoked makes the sign-out fail, after every channel stopped.
+          if (Exit.isFailure(yield* Effect.exit(revoke(origin)))) allRevoked = false;
         }
+        changed();
         if (Option.isSome(signInFiber)) yield* Fiber.interrupt(signInFiber.value);
         // Ending the session opens no channel, so it ends even when a stop was not confirmed.
         const signedOut = yield* Effect.result(auth.signOut);
         if (!allStopped) return yield* notConfirmed;
-        if (Result.isFailure(signedOut)) {
+        if (!allRevoked || Result.isFailure(signedOut)) {
           return yield* new DeviceSwitchError({ problem: "not-saved" });
         }
       }),

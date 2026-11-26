@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { ensure, installedBundle, LABEL, launchAgent } from "./MacLoginItem.ts";
+import { ensure, ensureOrTell, installedBundle, LABEL, launchAgent } from "./MacLoginItem.ts";
 
 const HOME = "/Users/bob";
 
@@ -52,6 +52,24 @@ describe("the start at the sign-in to the Mac", () => {
       );
       assert.isTrue(yield* ensure(home, `${home}/Applications/Lazurio App.app`));
       assert.isFalse(yield* fileSystem.exists(`${file}.new`));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("tells the person when the agent cannot be written", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const home = yield* fileSystem.makeTempDirectoryScoped();
+      // ~/Library is a file, so ~/Library/LaunchAgents cannot be made.
+      yield* fileSystem.writeFileString((yield* Path.Path).join(home, "Library"), "");
+      const told: Array<string> = [];
+      yield* ensureOrTell(
+        home,
+        "/Applications/Lazurio App.app",
+        Effect.sync(() => {
+          told.push("told");
+        }),
+      );
+      assert.deepStrictEqual(told, ["told"]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

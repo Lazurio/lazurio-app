@@ -94,7 +94,12 @@ const fakeAuth = (initial: AuthState) =>
     return { shape, state, signIns, handOverAnswers, handOverOrigins, signOutAnswers, calls };
   });
 
-const memoryEnvironments = (origins: ReadonlyArray<string>, leftOn: ReadonlyArray<string> = []) => {
+const memoryEnvironments = (
+  origins: ReadonlyArray<string>,
+  leftOn: ReadonlyArray<string> = [],
+  // The file cannot be written when a consent is revoked.
+  revokeFails = false,
+) => {
   let list = [...origins];
   const names = new Map<string, EnvironmentNames>();
   const on = new Set(leftOn);
@@ -116,11 +121,13 @@ const memoryEnvironments = (origins: ReadonlyArray<string>, leftOn: ReadonlyArra
       }),
     leftOn: (origin) => list.includes(origin) && on.has(origin),
     setLeftOn: (origin, next) =>
-      Effect.sync(() => {
-        if (!list.includes(origin)) return;
-        if (next) on.add(origin);
-        else on.delete(origin);
-      }),
+      !next && revokeFails
+        ? Effect.fail(new DeviceEnvironments.DeviceEnvironmentsError({ path: "/data/list.json" }))
+        : Effect.sync(() => {
+            if (!list.includes(origin)) return;
+            if (next) on.add(origin);
+            else on.delete(origin);
+          }),
   };
   return environments;
 };
@@ -183,10 +190,19 @@ const setUp = (options: {
   readonly origins?: ReadonlyArray<string>;
   readonly environments?: DeviceEnvironments.DeviceEnvironments;
   readonly permissions?: MacPermissions.MacPermissions;
+  // The helper refuses its configuration, so it never gets ready.
+  readonly helperFails?: boolean;
 }) =>
   Effect.gen(function* () {
     const helper = yield* fakeHelper;
     answerChannels(helper);
+    if (options.helperFails === true) {
+      helper.answers.unshift((kind) =>
+        kind.case === "configureDevice"
+          ? { case: "failure", value: { code: "internal", message: "could not start" } }
+          : undefined,
+      );
+    }
     const device = yield* DeviceService.run({
       connection: helper.connection,
       dataDirectory: "/data/device",
@@ -317,6 +333,8 @@ describe("DeviceSwitches", () => {
         host: HOST,
         switch: { phase: "channel" },
         channel: { state: "connected" },
+        // The click is the person's consent until they turn the switch off.
+        consent: true,
       });
     }).pipe(Effect.scoped),
   );
@@ -817,6 +835,62 @@ describe("DeviceSwitches", () => {
       assert.isDefined(switches.current().permissions, "the window shows the permissions");
       assert.lengthOf(startsOf(helper), 0);
       assert.isTrue(environments.leftOn(ORIGIN));
+    }),
+  );
+
+  it.effect("stops the channel when the consent cannot be saved as revoked, and says so", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN], [], true);
+      const { helper, switches } = yield* setUp({ account: "signedIn", environments });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      const off = yield* Effect.flip(switches.setSwitch(ORIGIN, false));
+      assert.strictEqual(off.problem, "not-saved");
+      assert.deepStrictEqual(stopsOf(helper), [ORIGIN], "the channel stopped anyway");
+      assert.strictEqual(switchOf(switches.current())?.switch.phase, "off");
+      // The window still shows the consent, so the person can try to revoke it again.
+      assert.strictEqual(switchOf(switches.current())?.consent, true);
+    }),
+  );
+
+  it.effect("fails the sign-out when a consent cannot be saved as revoked", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN], [], true);
+      const { helper, switches, auth } = yield* setUp({ account: "signedIn", environments });
+      yield* switches.setSwitch(ORIGIN, true);
+      yield* stateWhere(switches, phaseIs("channel"));
+      const out = yield* Effect.flip(switches.signOut);
+      assert.strictEqual(out.problem, "not-saved");
+      assert.deepStrictEqual(stopsOf(helper), [ORIGIN]);
+      assert.strictEqual(auth.calls.signOut, 1, "the session still ends");
+    }),
+  );
+
+  it.effect("shows a consent that outlasts a failed start, and revokes it without connecting", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN], [ORIGIN]);
+      const { helper, switches, notices } = yield* setUp({ account: "signedOut", environments });
+      yield* Queue.take(notices);
+      const shown = switchOf(switches.current());
+      assert.strictEqual(shown?.switch.phase, "off");
+      assert.strictEqual(shown?.consent, true, "on until revoked, though off now");
+      // The person's click on the switch that shows on revokes it: no sign-in, no channel.
+      yield* switches.setSwitch(ORIGIN, false);
+      assert.isUndefined(switchOf(switches.current())?.consent);
+      assert.isFalse(environments.leftOn(ORIGIN));
+      assert.lengthOf(startsOf(helper), 0);
+    }),
+  );
+
+  it.effect("says so for each switch left on when the Device helper does not start", () =>
+    Effect.gen(function* () {
+      const environments = memoryEnvironments([ORIGIN, OTHER], [ORIGIN]);
+      const { notices } = yield* setUp({ account: "signedIn", environments, helperFails: true });
+      assert.deepStrictEqual(yield* Queue.take(notices), {
+        origin: ORIGIN,
+        problem: { from: "app", reason: "helper-unavailable" },
+      });
+      assert.isTrue(environments.leftOn(ORIGIN), "the consent stays");
     }),
   );
 

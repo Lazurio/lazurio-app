@@ -171,7 +171,9 @@ function EnvironmentRow({
   const { name, organization } = namedEnvironment(entry.origin, entry);
   const state = rowState(entry);
   // On in every phase but Off; while it stops, or when nobody knows, it takes no click.
-  const on = entry.switch.phase !== "off";
+  // On while it works, and while the person's consent lasts although it is off with a problem: a
+  // click then revokes that consent instead of trying again.
+  const on = entry.switch.phase !== "off" || entry.consent === true;
   const settled = entry.switch.phase !== "stopping" && entry.switch.phase !== "unknown";
   const act = (call: () => Promise<void>) => {
     setBusy(true);

@@ -149,6 +149,8 @@ export interface DeviceText {
   // A system notice: a switch went off by itself, or one left on waits for macOS's permissions.
   readonly offNotice: string;
   readonly permissionsNotice: string;
+  // A system notice: the Mac's start at sign-in could not be set (MacLoginItem.ts).
+  readonly loginItemFailed: string;
   readonly starting: string;
   readonly failed: string;
   // The connection to the helper was lost: whether an agent works is unknown, or the helper had
@@ -371,6 +373,7 @@ const cs: Text = {
       "Agent Desktop se k Prostředí {name} nepřipojil a vypínač je vypnutý. Otevřete okno Agent Desktop, uvidíte proč.",
     permissionsNotice:
       "Agent Desktop se k Prostředí {name} nepřipojí, dokud macOS nepovolí Zpřístupnění a Nahrávání obrazovky. Otevřete okno Agent Desktop.",
+    loginItemFailed: `${APP_NAME} se po přihlášení k Macu sama nespustí, protože se to nepodařilo nastavit. Zapnuté vypínače se připojí, až ji otevřete.`,
     starting: "Spouští se…",
     failed: `Agent Desktop se nespustil. Spusťte ${APP_NAME} znovu.`,
     lost: "Nevíme, jestli agent ještě pracuje.",
@@ -653,6 +656,7 @@ const en: Text = {
       "Agent Desktop did not connect to the Environment {name}, and its switch is off. Open the Agent Desktop window to see why.",
     permissionsNotice:
       "Agent Desktop does not connect to the Environment {name} until macOS allows Accessibility and Screen Recording. Open the Agent Desktop window.",
+    loginItemFailed: `${APP_NAME} does not start by itself when you sign in to the Mac, because that could not be set. The switches that are on connect once you open it.`,
     starting: "Starting…",
     failed: `Agent Desktop did not start. Start ${APP_NAME} again.`,
     lost: "It is not known whether an agent is still working.",

@@ -53,6 +53,18 @@ export const launchAgent = (bundle: string): string =>
     "",
   ].join("\n");
 
+// `ensure`, and when the agent cannot be written, `tell` says so to the person: the app would not
+// start at the sign-in, so the switches they left on would not go on again by themselves.
+export const ensureOrTell = (home: string, bundle: string, tell: Effect.Effect<void>) =>
+  ensure(home, bundle).pipe(
+    Effect.asVoid,
+    Effect.catch((error) =>
+      Effect.logWarning("the start at the sign-in to the Mac could not be set", {
+        problem: String(error),
+      }).pipe(Effect.andThen(tell)),
+    ),
+  );
+
 // Writes the agent for `bundle` when it is missing or names another place; changes nothing else.
 export const ensure = Effect.fn("MacLoginItem.ensure")(function* (home: string, bundle: string) {
   const fileSystem = yield* FileSystem.FileSystem;

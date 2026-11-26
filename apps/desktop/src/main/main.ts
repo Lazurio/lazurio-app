@@ -587,12 +587,10 @@ const program = Effect.gen(function* () {
     const home = NodeOS.homedir();
     const bundle = MacLoginItem.installedBundle(process.execPath, home);
     if (Option.isSome(bundle)) {
-      yield* MacLoginItem.ensure(home, bundle.value).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("the start at the sign-in to the Mac could not be set", {
-            problem: String(error),
-          }),
-        ),
+      yield* MacLoginItem.ensureOrTell(
+        home,
+        bundle.value,
+        hooks.notice(messages[localeOf(Electron.app.getLocale())].device.loginItemFailed),
       );
     }
   }
@@ -716,6 +714,14 @@ const program = Effect.gen(function* () {
         }),
       )
     : Option.none<DeviceSwitches.DeviceSwitches>();
+  // Without a Device helper no switch can go on: each the person left on says so.
+  if (Option.isNone(device)) {
+    for (const origin of deviceEnvironments.origins()) {
+      if (deviceEnvironments.leftOn(origin)) {
+        yield* switchNotice(origin, { from: "app", reason: "helper-unavailable" });
+      }
+    }
+  }
   const noSwitch = Effect.fail(new DeviceSwitches.DeviceSwitchError({ problem: "not-listed" }));
   const openWindow = Effect.sync(openAgentDesktop);
   const permissionControls = {
