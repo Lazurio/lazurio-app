@@ -60,6 +60,9 @@ final class ProofViewController: UIViewController, WKNavigationDelegate {
         _ = SecRandomCopyBytes(kSecRandomDefault, key.count, &key)
         let stateDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("tailnets/\(tailnet)")
+        // A new key each start cannot open the state a previous start sealed, so the proof begins
+        // with a new node every time.
+        try? FileManager.default.removeItem(at: stateDirectory)
         try? FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
         let config: [String: Any] = [
             "tailnet": tailnet, "controlUrl": control, "hostname": "lazurio-app-iphone-simulator",
@@ -143,9 +146,19 @@ final class ProofViewController: UIViewController, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // The title property may still be empty here; the document's own title is not.
+        webView.evaluateJavaScript("document.title") { [weak self] value, _ in
+            self?.shown(webView, title: value as? String ?? "")
+        }
+    }
+
+    private var titles: [String] = []
+
+    private func shown(_ webView: WKWebView, title: String) {
         let url = webView.url?.absoluteString ?? "-"
-        note("page shown: \(url) – \"\(webView.title ?? "")\"")
+        note("page shown: \(url) – \"\(title)\"")
         visited.append(url)
+        titles.append(title)
         // A second navigation in the same view, because a later navigation was reported to bypass
         // a data store's proxy.
         if visited.count == 1, let next = URL(string: "second", relativeTo: startURL) {
@@ -153,7 +166,7 @@ final class ProofViewController: UIViewController, WKNavigationDelegate {
         } else {
             let host = startURL?.host ?? "?"
             let ok = visited.count == 2 && visited.allSatisfy { $0.contains(host) }
-                && webView.title?.contains("Lazurio Example") == true
+                && titles.allSatisfy { $0.contains("Lazurio Example") }
             note(ok ? "DONE PASS" : "DONE FAIL")
         }
     }

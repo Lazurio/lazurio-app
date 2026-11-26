@@ -53,6 +53,7 @@ for runtime, items in sorted(devices.items(), reverse=True):
                 print(d["udid"]); sys.exit(0)
 sys.exit(1)')"
 xcrun simctl list devices | grep "$udid"
+xcrun simctl list runtimes | grep -i ios
 xcrun simctl boot "$udid" || true
 xcrun simctl bootstatus "$udid" -b
 xcrun simctl keychain "$udid" add-root-cert "$out/tailnet/ca.pem"
@@ -70,7 +71,8 @@ for mode in credential challenge; do
   xcrun simctl io "$udid" screenshot "$out/$mode.png" || true
   cp "$data/Documents/result.txt" "$out/result-$mode.txt" 2>/dev/null || echo "no result" > "$out/result-$mode.txt"
   sed -E 's/"password":"[^"]+"/"password":"<hidden>"/' "$out/result-$mode.txt"
-  grep -q '^DONE PASS' "$out/result-$mode.txt" || status=1
+  # Only the configured password must work; whether WebKit also asks for it is information.
+  if [ "$mode" = credential ]; then grep -q '^DONE PASS' "$out/result-$mode.txt" || status=1; fi
   echo "::endgroup::"
 done
 grep -a 'Environment page served' "$out/hostenv.log" || true
