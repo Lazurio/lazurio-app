@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { AppStatus } from "../shared/bridge.ts";
 import { networkBarStep, type NetworkBarStep } from "../shared/networkBar.ts";
+import type { Text } from "./messages.ts";
 
 // The app's status and the sign-in with the Lazurio account for the main window's network bar and
 // the "network" page: the sign-in runs in the system's browser, and once Lazurio Auth answers the
@@ -30,3 +31,11 @@ export const useNetworkSignIn = () => {
     status === undefined ? undefined : networkBarStep(status);
   return { status, step, signingIn, failed, signIn };
 };
+
+// The sign-in button's words: a first sign-in, a new one for the scope, or reading again.
+export const signInLabel = (step: NetworkBarStep, failed: boolean, words: Text): string =>
+  failed || step === "not-read" || step === "empty"
+    ? words.networkBarSteps.tryAgain
+    : step === "sign-in-again"
+      ? words.networksSignInAgain
+      : words.networksSignIn;

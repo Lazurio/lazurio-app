@@ -4,7 +4,7 @@ import { workingAgent } from "../shared/agentBar.ts";
 import type { DeviceStatus } from "../shared/bridge.ts";
 import { offersSignIn, type NetworkBarStep } from "../shared/networkBar.ts";
 import { localeOf, messages, type Text } from "./messages.ts";
-import { useNetworkSignIn } from "./networkSignIn.ts";
+import { signInLabel, useNetworkSignIn } from "./networkSignIn.ts";
 
 // The bar across the top of the main window while an agent holds the computer (?view=agent-bar):
 // who works, Stop, and the Agent Desktop window. Without an agent, and without the Organization's
@@ -102,10 +102,3 @@ const barSentence = (step: NetworkBarStep, words: Text): string => {
       return words.networkBar;
   }
 };
-
-const signInLabel = (step: NetworkBarStep, failed: boolean, words: Text): string =>
-  failed || step === "not-read"
-    ? words.networkBarSteps.tryAgain
-    : step === "sign-in-again"
-      ? words.networksSignInAgain
-      : words.networksSignIn;

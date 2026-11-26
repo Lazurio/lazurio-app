@@ -1299,7 +1299,7 @@ describe("AuthClient.networks", () => {
         };
         const networks = yield* auth.networks;
         assert.deepStrictEqual(networks, [
-          { tailnet: NETWORK.tailnet, controlUrl: NETWORK.controlUrl, organizationCount: 1 },
+          { tailnet: NETWORK.tailnet, controlUrl: NETWORK.controlUrl },
         ]);
         assert.deepStrictEqual(fake.refreshScopes, [NETWORK_DIRECTORY_SCOPE]);
         assert.strictEqual(fake.networksRequests.length, 1);
@@ -1481,7 +1481,6 @@ const CASES_PATH = process.env["LAZURIO_AUTH_NETWORK_DIRECTORY_CASES"];
 interface ContractNetwork {
   readonly tailnet: string;
   readonly controlUrl: string;
-  readonly organizations: ReadonlyArray<{ readonly id: string }>;
   readonly domains?: ReadonlyArray<string>;
 }
 
@@ -1536,10 +1535,10 @@ describe.skipIf(CASES_PATH === undefined)(
             assert.isTrue(Result.isSuccess(outcome), read.id);
             if (!Result.isSuccess(outcome)) continue;
             const answered = (read.expected.body as { networks: Array<ContractNetwork> }).networks;
-            // A network of several of the person's Organizations without its zones keeps the last
-            // complete list (NetworkDirectory.follow), so it is never routed by one suffix.
+            // A network answered without its zones keeps the last complete list
+            // (NetworkDirectory.follow), so it is never routed by a guessed suffix.
             const shared = answered.filter(
-              (network) => network.domains === undefined && network.organizations.length > 1,
+              (network) => network.domains === undefined || network.domains.length === 0,
             );
             assert.deepStrictEqual(
               unroutable(outcome.success),
@@ -1551,7 +1550,7 @@ describe.skipIf(CASES_PATH === undefined)(
               continue;
             }
             // The whole list, each network joined at its own control server and routed by the
-            // domains it answers, else by its control server's one suffix.
+            // domains it answers.
             const directory = yield* TailnetDirectory.fromText(
               textOf(outcome.success),
               "Desktop-1",
@@ -1565,18 +1564,16 @@ describe.skipIf(CASES_PATH === undefined)(
                 .map(({ tailnet, controlUrl, domains }) => ({
                   tailnet,
                   controlUrl,
-                  domains:
-                    domains !== undefined && domains.length > 0
-                      ? domains
-                      : [new URL(controlUrl).hostname.replace(/^headscale\./u, "")],
+                  domains: domains ?? [],
                 }))
                 .sort((a, b) => a.tailnet.localeCompare(b.tailnet)),
               read.id,
             );
           }
-          // The table's case of a shared network with an Organization of unknown zone.
+          // The table's cases of a network with an Organization of unknown zone.
           assert.deepStrictEqual(unroutableCases, [
             "a-network-with-an-organization-of-unknown-zone-answers-without-domains",
+            "a-network-whose-zones-are-known-answers-them-beside-one-without",
           ]);
           // One GET each, with the bearer of exactly the directory's scope.
           assert.strictEqual(fake.networksRequests.length, reads.length);

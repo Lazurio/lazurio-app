@@ -42,12 +42,29 @@ describe("what the main window says without the Organization's network", () => {
       networksNotRead: false,
     });
     assert.strictEqual(empty, "empty");
-    assert.isFalse(offersSignIn(empty));
+    // Once the Admin added the person, a sign-in reads the list again.
+    assert.isTrue(offersSignIn(empty));
     for (const tailnetSource of ["policy", "user-setting", "development"] as const) {
       assert.strictEqual(
         networkBarStep({ tailnetSource, account: "signed-out", networksNotRead: false }),
         "help",
       );
     }
+  });
+
+  it("lets a saved empty list recover: signed out, a session without the scope, a failed read", () => {
+    const saved = { tailnetSource: "lazurio-auth" } as const;
+    assert.strictEqual(
+      networkBarStep({ ...saved, account: "signed-out", networksNotRead: false }),
+      "sign-in",
+    );
+    assert.strictEqual(
+      networkBarStep({ ...saved, account: "needs-sign-in", networksNotRead: false }),
+      "sign-in-again",
+    );
+    assert.strictEqual(
+      networkBarStep({ ...saved, account: "signed-in", networksNotRead: true }),
+      "not-read",
+    );
   });
 });

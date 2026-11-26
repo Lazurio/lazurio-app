@@ -29,16 +29,16 @@ import * as TailnetDirectory from "./TailnetDirectory.ts";
 const EXAMPLE: DirectoryNetwork = {
   tailnet: "lazurioexampleorganization",
   controlUrl: "https://headscale.lazurioexampleorganization.lazurio.io",
-  organizationCount: 1,
+  domains: ["lazurioexampleorganization.lazurio.io"],
 };
 const OTHER: DirectoryNetwork = {
   tailnet: "another-org",
   controlUrl: "https://headscale.another-org.lazurio.io",
-  organizationCount: 1,
+  domains: ["another-org.lazurio.io"],
 };
 
 describe("NetworkDirectory.textOf", () => {
-  it.effect("gives each network its zone as its suffix, in the built-in directory's form", () =>
+  it.effect("keeps each network's zones as its suffixes, in the built-in directory's form", () =>
     Effect.gen(function* () {
       const text = textOf([OTHER, EXAMPLE]);
       // The same networks in any order give the same text.
@@ -66,12 +66,10 @@ describe("NetworkDirectory.textOf", () => {
     }),
   );
 
-  it.effect("leaves a control server that is not headscale.<zone> without a suffix", () =>
+  it.effect("guesses no suffix for a network without zones, so it joins nothing", () =>
     Effect.gen(function* () {
       const directory = yield* TailnetDirectory.fromText(
-        textOf([
-          { tailnet: "odd", controlUrl: "https://control.odd.lazurio.io", organizationCount: 1 },
-        ]),
+        textOf([{ tailnet: "odd", controlUrl: "https://headscale.odd.lazurio.io" }]),
         "Desktop-1",
       );
       assert.deepStrictEqual(directory.tailnets, []);
@@ -185,7 +183,11 @@ describe("NetworkDirectory.follow", () => {
     const answers: Array<Effect.Effect<ReadonlyArray<DirectoryNetwork>, NetworkDirectoryError>> = [
       Effect.fail(new NetworkDirectoryError({ reason: "unavailable", status: 503 })),
       Effect.succeed([
-        { tailnet: "outside", controlUrl: "https://headscale.example.com", organizationCount: 1 },
+        {
+          tailnet: "outside",
+          controlUrl: "https://headscale.example.com",
+          domains: ["example.com"],
+        },
       ]),
     ];
     return withFollow(
@@ -238,7 +240,8 @@ describe("NetworkDirectory.follow", () => {
     ),
   );
 
-  it.effect("keeps the last complete list for a shared network answered without its zones", () =>
+  // The read names only the person's memberships: a shared network may show one Organization.
+  it.effect("keeps the last complete list for a network answered without its zones", () =>
     withFollow(
       () =>
         Effect.succeed([
@@ -246,7 +249,6 @@ describe("NetworkDirectory.follow", () => {
           {
             tailnet: "shared-host",
             controlUrl: "https://headscale.shared-host.lazurio.io",
-            organizationCount: 2,
           },
         ]),
       Option.some(textOf([EXAMPLE])),
@@ -263,16 +265,33 @@ describe("NetworkDirectory.follow", () => {
     ),
   );
 
-  it("routes a network of one Organization without zones by its control server's suffix", () => {
+  it("routes no network by its control server's suffix, even one listed with one Organization", () => {
     assert.deepStrictEqual(unroutable([EXAMPLE, OTHER]), []);
     assert.deepStrictEqual(
       unroutable([
-        { ...OTHER, organizationCount: 2 },
-        { ...EXAMPLE, organizationCount: 2, domains: ["a.lazurio.io", "b.lazurio.io"] },
+        { tailnet: OTHER.tailnet, controlUrl: OTHER.controlUrl },
+        { ...EXAMPLE, domains: [] },
+        { ...EXAMPLE, tailnet: "shared", domains: ["a.lazurio.io", "b.lazurio.io"] },
       ]),
-      ["another-org"],
+      ["another-org", "lazurioexampleorganization"],
     );
   });
+
+  it.effect("says the read failed when the list cannot be saved, and starts nothing again", () =>
+    withFollow(
+      () => Effect.succeed([EXAMPLE]),
+      Option.none(),
+      ({ auth, savedPath, changes, outcomes, handled }) =>
+        Effect.gen(function* () {
+          // A directory where the file goes: neither read nor written.
+          yield* (yield* FileSystem.FileSystem).makeDirectory(savedPath);
+          yield* auth.signIn;
+          yield* handled;
+          assert.deepStrictEqual(outcomes, ["not-read"]);
+          assert.strictEqual(changes(), 0);
+        }),
+    ),
+  );
 
   it.effect("reads again at each sign-in and never while signed out", () =>
     withFollow(
@@ -299,7 +318,7 @@ describe("NetworkDirectory.follow", () => {
           {
             tailnet: "outside",
             controlUrl: "https://headscale.outside.example.com",
-            organizationCount: 1,
+            domains: ["outside.example.com"],
           },
         ]),
       Option.some(textOf([EXAMPLE])),
@@ -344,7 +363,6 @@ describe("NetworkDirectory.follow", () => {
       const shared: DirectoryNetwork = {
         tailnet: "shared-host",
         controlUrl: "https://headscale.shared-host.lazurio.io",
-        organizationCount: 2,
         domains: ["first-org.lazurio.io", "second-org.lazurio.io"],
       };
       const directory = yield* TailnetDirectory.fromText(textOf([shared]), "Desktop-1");

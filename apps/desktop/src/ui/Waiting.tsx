@@ -4,7 +4,7 @@ import { offersSignIn } from "../shared/networkBar.ts";
 import { problemOf, reasonOf, servingTailnetOf, type PageProblem } from "../shared/pageProblem.ts";
 import { waitingStepFor, type WaitingStep } from "../shared/waitingStep.ts";
 import { localeOf, messages, type Text } from "./messages.ts";
-import { useNetworkSignIn } from "./networkSignIn.ts";
+import { signInLabel, useNetworkSignIn } from "./networkSignIn.ts";
 
 // What the window shows in the remote page's place while it cannot show (MainWindow.ts): why its
 // load failed, or, waiting for the tailnet that serves the page, the step the person is at with it
@@ -70,7 +70,9 @@ export function Waiting() {
             disabled={network.signingIn}
             onClick={network.signIn}
           >
-            {network.signingIn ? text.networkBarSteps.signingIn : text.networksSignIn}
+            {network.signingIn || network.step === undefined
+              ? text.networkBarSteps.signingIn
+              : signInLabel(network.step, network.failed, text)}
           </button>
         ) : null}
         <button

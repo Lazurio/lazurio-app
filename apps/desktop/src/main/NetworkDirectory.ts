@@ -13,26 +13,13 @@ import * as TailnetDirectory from "./TailnetDirectory.ts";
 // at each sign-in, kept as the last complete list so a connected computer needs Auth only for a
 // change. Being listed grants nothing; TailnetDirectory still takes only Lazurio's domains.
 
-const CONTROL_SERVER_PREFIX = "headscale.";
-
-// A network's DNS suffix when Auth answers no `domains` for it (the contract's fallback): the one
-// suffix of `https://headscale.<label>.lazurio.io`; any other address gets none, so
-// TailnetDirectory refuses it.
-const domainsOf = (controlUrl: string): ReadonlyArray<string> => {
-  const host = URL.parse(controlUrl)?.hostname ?? "";
-  return host.startsWith(CONTROL_SERVER_PREFIX) ? [host.slice(CONTROL_SERVER_PREFIX.length)] : [];
-};
-
-// The networks Auth answers without `domains` although each serves several of the person's
-// Organizations: the control server's one suffix would leave the others' Environments unrouted, so
-// such an answer keeps the last complete list instead (Auth's contract, case of an unknown zone).
+// The networks Auth answers without `domains`. The read names only the person's own memberships,
+// never the whole set a network serves, so not even a network listed with one Organization proves
+// that its control server's suffix is that Organization's zone: such an answer keeps the last
+// complete list, and the app never routes a network by a guessed suffix.
 export const unroutable = (networks: ReadonlyArray<DirectoryNetwork>): ReadonlyArray<string> =>
   networks
-    .filter(
-      (network) =>
-        (network.domains === undefined || network.domains.length === 0) &&
-        network.organizationCount > 1,
-    )
+    .filter((network) => network.domains === undefined || network.domains.length === 0)
     .map((network) => network.tailnet);
 
 // Starts the app again for a new list only once no agent works, or may (work not confirmed ended
@@ -54,11 +41,7 @@ export const textOf = (networks: ReadonlyArray<DirectoryNetwork>): string =>
   JSON.stringify(
     [...networks]
       .sort((a, b) => (a.tailnet < b.tailnet ? -1 : a.tailnet > b.tailnet ? 1 : 0))
-      .map(({ tailnet, controlUrl, domains }) => ({
-        tailnet,
-        controlUrl,
-        domains: domains !== undefined && domains.length > 0 ? domains : domainsOf(controlUrl),
-      })),
+      .map(({ tailnet, controlUrl, domains }) => ({ tailnet, controlUrl, domains: domains ?? [] })),
     null,
     2,
   );
@@ -113,7 +96,7 @@ export const follow = Effect.fn("NetworkDirectory.follow")(function* (options: R
         if (Option.isNone(networks)) return;
         const unrouted = unroutable(networks.value);
         if (unrouted.length > 0) {
-          yield* Effect.logWarning("network directory kept: a shared network without its zones", {
+          yield* Effect.logWarning("network directory kept: a network without its zones", {
             tailnets: unrouted,
           });
           return yield* options.onRead("not-read");
@@ -136,20 +119,25 @@ export const follow = Effect.fn("NetworkDirectory.follow")(function* (options: R
           });
           return yield* options.onRead("not-read");
         }
-        yield* options.onRead("read");
+        // The read counts as done only once the list is saved: a list that cannot be written is
+        // never used, so the window says the read failed and offers it again.
         const saved = yield* readSaved(options.savedPath);
         if (Option.isNone(saved) || saved.value !== text) {
-          yield* fileSystem.makeDirectory(path.dirname(options.savedPath), { recursive: true });
-          yield* fileSystem.writeFileString(options.savedPath, text);
+          const written = yield* Effect.gen(function* () {
+            yield* fileSystem.makeDirectory(path.dirname(options.savedPath), { recursive: true });
+            yield* fileSystem.writeFileString(options.savedPath, text);
+          }).pipe(
+            Effect.tapError((error) => Effect.logWarning("network directory not saved", error)),
+            Effect.option,
+          );
+          if (Option.isNone(written)) return yield* options.onRead("not-read");
           yield* Effect.logInfo("network directory saved", {
             tailnets: directory.value.tailnets.map((tailnet) => tailnet.tailnet),
           });
         }
+        yield* options.onRead("read");
         if (Option.isNone(options.inUse) || options.inUse.value !== text) yield* options.changed;
-      }).pipe(
-        Effect.catch((error) => Effect.logWarning("network directory not saved", error)),
-        Effect.andThen(options.handled ?? Effect.void),
-      ),
+      }).pipe(Effect.andThen(options.handled ?? Effect.void)),
     ),
     Effect.forkScoped,
   );
