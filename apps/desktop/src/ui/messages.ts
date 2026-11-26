@@ -50,9 +50,6 @@ export interface Text {
   readonly networksSignIn: string;
   readonly networksSignInHint: string;
   readonly networksSignInFailed: string;
-  // A sign-in from before the app asked for the person's networks.
-  readonly networksSignInAgain: string;
-  readonly networksSignInAgainHint: string;
   // The app's account while Agent Desktop does not show it.
   readonly accountSignedIn: string;
   readonly accountSignOut: string;
@@ -345,8 +342,6 @@ const cs: Text = {
   networksSignIn: "Přihlásit se účtem Lazurio",
   networksSignInHint: `Přihlaste se účtem Lazurio a ${APP_NAME} připojí sítě vašich Organizací.`,
   networksSignInFailed: "Přihlášení se nepovedlo. Zkuste to prosím znovu.",
-  networksSignInAgain: "Přihlásit se znovu",
-  networksSignInAgainHint: `Přihlaste se prosím znovu, aby ${APP_NAME} mohla načíst sítě vašich Organizací.`,
   accountSignedIn: "Přihlášeno k Lazuriu",
   accountSignOut: "Odhlásit",
   starting: "Připojuje se",
@@ -655,8 +650,6 @@ const en: Text = {
   networksSignIn: "Sign in with Lazurio",
   networksSignInHint: `Sign in with your Lazurio account and ${APP_NAME} joins your Organizations' networks.`,
   networksSignInFailed: "The sign-in did not work. Please try again.",
-  networksSignInAgain: "Sign in again",
-  networksSignInAgainHint: `Please sign in again so that ${APP_NAME} can read your Organizations' networks.`,
   accountSignedIn: "Signed in to Lazurio",
   accountSignOut: "Sign out",
   starting: "Connecting",

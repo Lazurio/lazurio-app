@@ -107,9 +107,11 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
         <h2>{text.tailnets}</h2>
         {offersSignIn ? (
           <div className="shell__sign-in" data-networks-sign-in={current.account}>
+            {/* As in the bar: with the built-in network joined, the sign-in brings the person's own
+                networks; a session from before the directory signed in for no network yet. */}
             <p>
-              {current.account === "needs-sign-in"
-                ? text.networksSignInAgainHint
+              {current.tailnets.length > 0
+                ? text.networkBarSteps.ownNetworks
                 : text.networksSignInHint}
             </p>
             <button
@@ -118,7 +120,7 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
               disabled={signingIn}
               onClick={signIn}
             >
-              {current.account === "needs-sign-in" ? text.networksSignInAgain : text.networksSignIn}
+              {text.networksSignIn}
             </button>
           </div>
         ) : null}
@@ -140,7 +142,7 @@ export function App({ status }: { readonly status: Promise<AppStatus> }) {
             {text.networksSignInFailed}
           </p>
         ) : null}
-        {current.networkMissing ? (
+        {current.networkMissing && current.tailnets.length === 0 ? (
           <p className="shell__reason" data-network-missing="">
             {text.networkMissing}
           </p>
