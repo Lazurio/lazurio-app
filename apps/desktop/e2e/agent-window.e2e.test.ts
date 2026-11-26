@@ -206,6 +206,12 @@ describe.each([
     NodeFS.writeFileSync(`${file}.new`, `${ENVIRONMENT}|Bob`);
     NodeFS.renameSync(`${file}.new`, file);
     await bar.locator(`[data-agent-bar="${ENVIRONMENT}"]`).waitFor();
+    // Playwright learns of a closed page over its own connection, later on Windows: the old
+    // window's page must be closed for it too, or the lookup below finds that page again.
+    const oldPanels = app.windows().filter((page) => page.url().includes("view=agent-desktop"));
+    const oldClosed = Promise.all(
+      oldPanels.map((page) => (page.isClosed() ? undefined : page.waitForEvent("close"))),
+    );
     await app.evaluate(async ({ BaseWindow }) => {
       const panels = BaseWindow.getAllWindows().filter((each) => each.getParentWindow() !== null);
       await Promise.all(
@@ -218,6 +224,7 @@ describe.each([
         ),
       );
     });
+    await oldClosed;
     const pid: unknown = await app.evaluate(() =>
       Reflect.get(Reflect.get(globalThis, "lazurioAppE2eHelperPids") ?? {}, "lazurio-device"),
     );
