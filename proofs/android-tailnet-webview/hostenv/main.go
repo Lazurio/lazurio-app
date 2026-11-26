@@ -46,6 +46,7 @@ func main() {
 	domain := flag.String("domain", "proof.lazurio.io", "the tailnet's MagicDNS domain")
 	envName := flag.String("env", "lazurio-example", "the test Environment's host name")
 	outDir := flag.String("out", "out", "folder for ca.pem and tailnet.json")
+	noAuth := flag.Bool("no-auth", false, "register every node without a sign-in, for unattended runs")
 	flag.Parse()
 	// On Linux a node binds its control and DERP dials to the default route's interface, which
 	// never reaches the Docker bridge; tsnet's own tests turn that off the same way.
@@ -67,7 +68,7 @@ func main() {
 		DERPMap:        derpMap,
 		DNSConfig:      &tailcfg.DNSConfig{Proxied: true},
 		MagicDNSDomain: *domain,
-		RequireAuth:    true,
+		RequireAuth:    !*noAuth,
 		Logf:           envLogf(),
 	}
 	controlURL := fmt.Sprintf("https://%s:%d", *bind, *controlPort)

@@ -1,0 +1,40 @@
+# The phone app's proof on the iOS simulator (proofs/ios-tailnet-webview). It runs only when the
+# proof changes and builds nothing that ships.
+name: Phone proof (iOS simulator)
+
+on:
+  pull_request:
+    paths:
+      - "proofs/ios-tailnet-webview/**"
+      - "proofs/android-tailnet-webview/hostenv/**"
+      - ".github/workflows/phone-proof-ios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phone-proof-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-simulator:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: |
+            helpers/tailnet/go.sum
+            proofs/android-tailnet-webview/hostenv/go.sum
+      - run: proofs/ios-tailnet-webview/run-in-ci.sh
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-proof
+          path: |
+            proofs/ios-tailnet-webview/out/*.png
+            proofs/ios-tailnet-webview/out/result-*.txt
+            proofs/ios-tailnet-webview/out/hostenv.log
