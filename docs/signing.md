@@ -8,7 +8,10 @@ They live in the GitHub Environment **`lazurio-app-signing`** of `Lazurio/lazuri
 
 **Deployment refs:** set the Environment to `main` and the tags `v*`, so that no pull request and no other branch can read it.
 
-The Environment has no required reviewer, since every nightly signs. Publication stays at the gate `lazurio-app-stable`.
+**Which channels sign** is set by the repository variable `LAZURIO_APP_SIGNED_CHANNELS`. A build of a channel not in it takes the Environment `lazurio-app-unsigned`, which holds no identity, and builds as before.
+
+- **`nightly stable`** (the default, also when the variable is unset): every nightly is signed. Whatever review lets into `main` comes out signed. `lazurio-app-signing` has no required reviewer, and Publication stays at the gate `lazurio-app-stable`.
+- **`stable`:** only a stable build signs. Stable builds run from a nightly's tag. Give `lazurio-app-signing` a required reviewer, so that no build reaches the identities before someone approves it.
 
 **Create the Environment with these rules before adding a secret.** A workflow run creates it by itself, but without any rules.
 

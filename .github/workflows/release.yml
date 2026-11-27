@@ -110,9 +110,13 @@ jobs:
             os: macos-15-intel
             targets: --mac dmg zip --x64
     runs-on: ${{ matrix.os }}
-    # The signing identities live in this Environment, open only to main and the v* tags
-    # (docs/signing.md). Without them each build is what it was: Windows unsigned, the Mac ad hoc.
-    environment: lazurio-app-signing
+    # The signing identities live in lazurio-app-signing, open only to main and the v* tags
+    # (docs/signing.md). The variable LAZURIO_APP_SIGNED_CHANNELS says which channels sign; a build
+    # of another channel takes lazurio-app-unsigned, which holds nothing. Without identities each
+    # build is what it was: Windows unsigned, the Mac ad hoc.
+    environment: >-
+      ${{ contains(format(' {0} ', vars.LAZURIO_APP_SIGNED_CHANNELS || 'nightly stable'),
+      format(' {0} ', needs.plan.outputs.channel)) && 'lazurio-app-signing' || 'lazurio-app-unsigned' }}
     # Each build attests what it built, from the run's own commit; the token also signs in to Azure.
     permissions:
       contents: read
