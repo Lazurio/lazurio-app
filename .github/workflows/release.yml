@@ -110,7 +110,14 @@ jobs:
             os: macos-15-intel
             targets: --mac dmg zip --x64
     runs-on: ${{ matrix.os }}
-    # Each build attests what it built, from the run's own commit.
+    # The signing identities live in lazurio-app-signing, open only to main and the v* tags
+    # (docs/signing.md). The variable LAZURIO_APP_SIGNED_CHANNELS says which channels sign; a build
+    # of another channel takes lazurio-app-unsigned, which holds nothing. Without identities each
+    # build is what it was: Windows unsigned, the Mac ad hoc.
+    environment: >-
+      ${{ contains(format(' {0} ', vars.LAZURIO_APP_SIGNED_CHANNELS || 'nightly stable'),
+      format(' {0} ', needs.plan.outputs.channel)) && 'lazurio-app-signing' || 'lazurio-app-unsigned' }}
+    # Each build attests what it built, from the run's own commit; the token also signs in to Azure.
     permissions:
       contents: read
       id-token: write
@@ -118,8 +125,7 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       CHANNEL: ${{ needs.plan.outputs.channel }}
-      # Until Lazurio's signing identities exist (task 802 of plan LZD-0017) the Windows build is
-      # unsigned and the Mac build is signed ad hoc after its fuses; no runner picks an identity.
+      # A runner never picks an identity of its own; only the Environment's certificate signs.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,22 +150,63 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: pnpm build:helpers --release --app-version "$VERSION"
       - run: pnpm --filter @lazurio/app-desktop build
+      # Windows: Artifact Signing signs through the Azure CLI's session, from GitHub's OIDC token,
+      # with no secret, once the Environment names the identity (docs/signing.md).
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        if: runner.os == 'Windows' && vars.AZURE_CLIENT_ID != ''
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
       # The channel is set, not left to electron-builder, which with --publish never writes latest*.yml
       # for a nightly too (#31): a nightly writes nightly*.yml, a stable latest*.yml. The feed is this
       # repository's GitHub Releases (electron-builder.yml).
+      # Signed and notarized on a Mac only with the Environment's Developer ID and notary key, ad hoc
+      # otherwise; signed on Windows only once the Artifact Signing identity is named.
       - name: Package
         shell: bash
         working-directory: apps/desktop
+        env:
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_API_KEY_P8: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY_P8 || '' }}
+          APPLE_API_KEY_ID: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PUBLISHER: ${{ vars.AZURE_SIGNING_PUBLISHER }}
         run: |
           set -euo pipefail
-          mac_ad_hoc=()
+          sign=()
           if [[ "${{ runner.os }}" == "macOS" ]]; then
-            mac_ad_hoc=(-c.mac.identity=- -c.mac.hardenedRuntime=false)
+            if [[ -n "$CSC_LINK" && -n "$APPLE_API_KEY_P8" ]]; then
+              # The notary key exists as a file only on this runner, for this step.
+              export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"
+              printf '%s' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY"
+              chmod 600 "$APPLE_API_KEY"
+              # Squirrel.Mac installs only a signed update, so only a signed build updates itself.
+              sign=(-c.mac.notarize=true -c.extraMetadata.macSelfUpdate=true)
+              echo "Mac: Developer ID with hardened runtime, notarized, self-updating"
+            else
+              unset CSC_LINK CSC_KEY_PASSWORD
+              sign=(-c.mac.identity=- -c.mac.hardenedRuntime=false)
+              echo "Mac: ad hoc, no Developer ID in the Environment"
+            fi
+          elif [[ "${{ runner.os }}" == "Windows" && -n "$AZURE_SIGNING_ENDPOINT" ]]; then
+            sign=(
+              -c.win.azureSignOptions.endpoint="$AZURE_SIGNING_ENDPOINT"
+              -c.win.azureSignOptions.codeSigningAccountName="$AZURE_SIGNING_ACCOUNT"
+              -c.win.azureSignOptions.certificateProfileName="$AZURE_SIGNING_PROFILE"
+              -c.win.azureSignOptions.publisherName="$AZURE_SIGNING_PUBLISHER"
+            )
+            echo "Windows: Artifact Signing as $AZURE_SIGNING_PUBLISHER"
           fi
           feed_channel=latest
           if [[ "$CHANNEL" == "nightly" ]]; then feed_channel=nightly; fi
           pnpm exec electron-builder ${{ matrix.targets }} --publish never \
-            -c.extraMetadata.version="$VERSION" -c.publish.channel="$feed_channel" "${mac_ad_hoc[@]}"
+            -c.extraMetadata.version="$VERSION" -c.publish.channel="$feed_channel" "${sign[@]}"
+          rm -f "$RUNNER_TEMP/notary-key.p8"
       - run: pnpm --filter @lazurio/app-desktop check:fuses
       # The packaged helpers say Hello as the release's version (#22).
       - name: Helper versions
@@ -173,6 +220,33 @@ jobs:
             mac-x64) helpers="release/mac/Lazurio App.app/Contents/Resources/helpers" ;;
           esac
           node scripts/check-helper-versions.ts "$helpers" "$VERSION"
+      # A signed build proves it to the system: the signature of the bundle and everything inside it,
+      # Gatekeeper's verdict and the notarization ticket stapled to the app.
+      - name: Signature
+        shell: bash
+        working-directory: apps/desktop
+        env:
+          SIGNED_MAC: ${{ runner.os == 'macOS' && secrets.CSC_LINK != '' && secrets.APPLE_API_KEY_P8 != '' }}
+          SIGNED_WINDOWS: ${{ runner.os == 'Windows' && vars.AZURE_SIGNING_ENDPOINT != '' }}
+        run: |
+          set -euo pipefail
+          case "${{ matrix.name }}" in
+            mac-arm64) app="release/mac-arm64/Lazurio App.app" ;;
+            mac-x64) app="release/mac/Lazurio App.app" ;;
+            *) app="" ;;
+          esac
+          if [[ "$SIGNED_MAC" == "true" ]]; then
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+            xcrun stapler validate "$app"
+          elif [[ "$SIGNED_WINDOWS" == "true" ]]; then
+            powershell -NoProfile -Command '
+              $s = Get-AuthenticodeSignature "release/Lazurio-App-Setup-$env:VERSION.exe"
+              if ($s.Status -ne "Valid") { throw "installer signature: $($s.Status)" }
+              $s.SignerCertificate.Subject'
+          else
+            echo "Not signed: no signing identity in the Environment"
+          fi
       # The release job merges the two Mac manifests into one per channel.
       - name: Collect the release files
         shell: bash

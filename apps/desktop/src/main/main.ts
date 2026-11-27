@@ -51,6 +51,7 @@ import * as AppMenu from "./AppMenu.ts";
 import * as Lifecycle from "./Lifecycle.ts";
 import * as LocalScheme from "./LocalScheme.ts";
 import * as MacPermissions from "./MacPermissions.ts";
+import * as MacSelfUpdate from "./MacSelfUpdate.ts";
 import * as MainWindow from "./MainWindow.ts";
 import * as NetworkDirectory from "./NetworkDirectory.ts";
 import type * as Tabs from "./Tabs.ts";
@@ -481,12 +482,20 @@ const electronPermissions: MacPermissions.PermissionSystem = {
 };
 
 // Why this system cannot update the app by itself (docs/adr/0005, point 7). Squirrel.Mac installs
-// only an app signed with a Developer ID, which Lazurio App does not have yet. On Linux, which GEN4
-// does not ship, only an AppImage updates itself; its runtime sets APPIMAGE, and electron-updater
-// reads it the same way.
+// only an app signed with a Developer ID: a Mac build updates itself only when the release signed
+// it and marked it so (MacSelfUpdate). On Linux, which GEN4 does not ship, only an AppImage updates
+// itself; its runtime sets APPIMAGE, and electron-updater reads it the same way.
 const selfUpdateUnsupported = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
-  if (platform === "darwin") return Option.some<UpdatesOffReason>("macos-unsigned");
+  if (platform === "darwin") {
+    const path = yield* Path.Path;
+    const packageJson = yield* (yield* FileSystem.FileSystem)
+      .readFileString(path.join(Electron.app.getAppPath(), "package.json"))
+      .pipe(Effect.orElseSucceed(() => ""));
+    return MacSelfUpdate.allowedBy(packageJson)
+      ? Option.none<UpdatesOffReason>()
+      : Option.some<UpdatesOffReason>("macos-unsigned");
+  }
   if (platform === "linux") {
     const appImage = yield* Config.option(Config.String("APPIMAGE"));
     return Option.isSome(appImage)

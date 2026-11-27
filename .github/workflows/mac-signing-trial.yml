@@ -1,0 +1,115 @@
+# The signing trial before the Developer ID exists (docs/signing.md): the Mac build signed the way
+# the release will sign it, with hardened runtime and the entitlements of build/, but with a
+# self-signed identity made on the runner and thrown away with it. It checks every Mach-O's runtime
+# flag and entitlements and that the app starts. Differences from a release: no notarization, no
+# Team ID (so the app and Electron's helper processes add disable-library-validation,
+# trial/entitlements.mac*.self-signed.plist), the trial identity io.lazurio.app.trial and an update
+# feed on the loopback. Nothing is published.
+name: Mac signing trial
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/mac-signing-trial.yml
+      - apps/desktop/build/entitlements.mac*.plist
+      - apps/desktop/trial/entitlements.mac*.self-signed.plist
+      - apps/desktop/trial/check-signature-macos.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-signing-trial-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRIAL_VERSION: 0.1.8-trial.1
+  TRIAL_NAME: Lazurio App
+
+jobs:
+  macos:
+    runs-on: macos-15
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers --release --app-version ${{ env.TRIAL_VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: pnpm --filter @lazurio/app-desktop build
+      # A code-signing identity of the runner's own, trusted only on this runner, named as
+      # electron-builder looks one up ("Developer ID Application: …"). Its key never leaves it.
+      - name: A self-signed identity
+        run: |
+          work="$RUNNER_TEMP/identity"
+          mkdir -p "$work"
+          cat >"$work/req.cnf" <<'CNF'
+          [req]
+          distinguished_name = dn
+          x509_extensions = ext
+          prompt = no
+          [dn]
+          CN = Developer ID Application: Lazurio Signing Trial
+          [ext]
+          basicConstraints = critical,CA:false
+          keyUsage = critical,digitalSignature
+          extendedKeyUsage = critical,codeSigning
+          CNF
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -config "$work/req.cnf" \
+            -keyout "$work/key.pem" -out "$work/cert.pem"
+          password="$(openssl rand -hex 16)"
+          openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" \
+            -out "$work/identity.p12" -passout "pass:$password"
+          keychain="$work/trial.keychain-db"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$work/identity.p12" -k "$keychain" -P "$password" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$work/cert.pem"
+          rm -f "$work/key.pem" "$work/identity.p12"
+          security find-identity -v -p codesigning
+      - name: Package, signed with hardened runtime
+        working-directory: apps/desktop
+        env:
+          CSC_FOR_PULL_REQUEST: "true"
+        run: |
+          pnpm exec electron-builder --config trial/electron-builder.trial.yml \
+            --mac zip --arm64 --publish never \
+            -c.appId=io.lazurio.app.trial \
+            "-c.mac.identity=Lazurio Signing Trial" \
+            -c.mac.hardenedRuntime=true \
+            -c.mac.entitlements=trial/entitlements.mac.self-signed.plist \
+            -c.mac.entitlementsInherit=trial/entitlements.mac.inherit.self-signed.plist \
+            -c.mac.notarize=false \
+            "-c.extraMetadata.version=$TRIAL_VERSION" \
+            -c.directories.output=trial/out/signed
+          node scripts/check-helper-versions.ts "trial/out/signed/mac-arm64/$TRIAL_NAME.app/Contents/Resources/helpers" "$TRIAL_VERSION"
+      - name: Runtime flag and entitlements of every helper
+        working-directory: apps/desktop/trial
+        run: ./check-signature-macos.sh "out/signed/mac-arm64/$TRIAL_NAME.app"
+      - name: The signed app starts
+        working-directory: apps/desktop/trial
+        run: ./launch-check-macos.sh "out/signed/mac-arm64/$TRIAL_NAME.app"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lazurio-app-macos-self-signed
+          path: apps/desktop/trial/out/signed/*.zip
+          retention-days: 7
+          if-no-files-found: error

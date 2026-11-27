@@ -3,7 +3,7 @@
 # packaging alone does not prove that macOS runs it. It starts the app's executable, waits for the
 # app's own record of its keystore check (KeystoreCheck.ts), and stops the app by its PID.
 #
-#   launch-check-macos.sh <path to Lazurio App.app>
+#   launch-check-macos.sh <path to the app bundle>
 set -euo pipefail
 app="$1"
 codesign --verify --deep --strict --verbose=2 "$app"
@@ -12,7 +12,8 @@ codesign --verify --strict --verbose=2 "$app/Contents/Frameworks/Electron Framew
 log="$(mktemp)"
 check="$HOME/Library/Application Support/Lazurio App/keystore-check.json"
 rm -f "$check"
-"$app/Contents/MacOS/Lazurio App" >"$log" 2>&1 &
+executable="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Contents/Info.plist")"
+"$app/Contents/MacOS/$executable" >"$log" 2>&1 &
 pid=$!
 deadline=$((SECONDS + 120))
 until [[ -f "$check" ]]; do
