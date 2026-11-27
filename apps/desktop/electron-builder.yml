@@ -57,6 +57,8 @@ mac:
   # (Lazurio App.app), and with it the Keychain item that seals the tailnets' keys.
   extendInfo:
     CFBundleDisplayName: Lazurio App (Alpha)
+    # macOS shows it when Agent Desktop's engine first asks to control another app (Automation).
+    NSAppleEventsUsageDescription: Lazurio App controls other apps for the agent while you allow it in Agent Desktop.
   hardenedRuntime: true
   target:
     - dmg
