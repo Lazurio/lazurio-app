@@ -2,10 +2,9 @@
 # the release will sign it, with hardened runtime and the entitlements of build/, but with a
 # self-signed identity made on the runner and thrown away with it. It checks every Mach-O's runtime
 # flag and entitlements and that the app starts. Differences from a release: no notarization, no
-# Team ID (so the app adds disable-library-validation, trial/entitlements.mac.self-signed.plist),
-# the trial identity io.lazurio.app.trial and its own name, so its data, single-instance lock and
-# Keychain item never meet an installed app's on a test Mac, and an update feed on the loopback.
-# Nothing is published.
+# Team ID (so the app and Electron's helper processes add disable-library-validation,
+# trial/entitlements.mac*.self-signed.plist), the trial identity io.lazurio.app.trial and an update
+# feed on the loopback. Nothing is published.
 name: Mac signing trial
 
 on:
@@ -13,7 +12,7 @@ on:
     paths:
       - .github/workflows/mac-signing-trial.yml
       - apps/desktop/build/entitlements.mac*.plist
-      - apps/desktop/trial/entitlements.mac.self-signed.plist
+      - apps/desktop/trial/entitlements.mac*.self-signed.plist
       - apps/desktop/trial/check-signature-macos.sh
   workflow_dispatch:
 
@@ -26,7 +25,7 @@ concurrency:
 
 env:
   TRIAL_VERSION: 0.1.8-trial.1
-  TRIAL_NAME: Lazurio App Signing Trial
+  TRIAL_NAME: Lazurio App
 
 jobs:
   macos:
@@ -94,10 +93,10 @@ jobs:
           pnpm exec electron-builder --config trial/electron-builder.trial.yml \
             --mac zip --arm64 --publish never \
             -c.appId=io.lazurio.app.trial \
-            "-c.productName=$TRIAL_NAME" \
             "-c.mac.identity=Lazurio Signing Trial" \
             -c.mac.hardenedRuntime=true \
             -c.mac.entitlements=trial/entitlements.mac.self-signed.plist \
+            -c.mac.entitlementsInherit=trial/entitlements.mac.inherit.self-signed.plist \
             -c.mac.notarize=false \
             "-c.extraMetadata.version=$TRIAL_VERSION" \
             -c.directories.output=trial/out/signed
