@@ -100,7 +100,8 @@ An update replaces the app's files and nothing else. Everything the person has l
 - The workflow signs when the signing secrets exist and builds unsigned otherwise, as T3 Code does, with `CSC_IDENTITY_AUTO_DISCOVERY=false` so that a runner never picks a random identity.
 - **The first signed Windows build installs over an unsigned one:** the unsigned app does not check the publisher yet. From then on an unsigned update is refused.
 - **On macOS the move to the first signed build is a manual update** (the unsigned app cannot self-update) and asks for the permissions once.
-- **Accounts and certificates are not set up here.** That belongs to the thread for signing apps (task 802 of plan LZD-0017). This repository only reads the signing secrets from the GitHub Environment of the release.
+- **Accounts and certificates are not set up here.** That belongs to the thread for signing apps (task 802 of plan LZD-0017). This repository only reads the signing identities from the GitHub Environment `lazurio-app-signing`, open to `main` and the `v*` tags. Its names and what the account holders supply are in [Signing Lazurio App](../signing.md).
+- **A Mac build updates itself only when it is signed:** the signed path builds with `macSelfUpdate=true`, an ad hoc build never does.
 
 ### 8. Electron Fuses and the integrity of an update
 
