@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The self-signed signing trial only (mac-signing-trial.yml): the app's own entitlements
+     (build/entitlements.mac.plist) plus disable-library-validation. A self-signed certificate gives
+     no Team ID, so hardened runtime would refuse Electron's framework; a Developer ID gives the app
+     and its framework one team, and the release never carries this. -->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>
