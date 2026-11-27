@@ -3,7 +3,9 @@
 # self-signed identity made on the runner and thrown away with it. It checks every Mach-O's runtime
 # flag and entitlements and that the app starts. Differences from a release: no notarization, no
 # Team ID (so the app adds disable-library-validation, trial/entitlements.mac.self-signed.plist),
-# the trial identity io.lazurio.app.trial and an update feed on the loopback. Nothing is published.
+# the trial identity io.lazurio.app.trial and its own name, so its data, single-instance lock and
+# Keychain item never meet an installed app's on a test Mac, and an update feed on the loopback.
+# Nothing is published.
 name: Mac signing trial
 
 on:
@@ -24,6 +26,7 @@ concurrency:
 
 env:
   TRIAL_VERSION: 0.1.8-trial.1
+  TRIAL_NAME: Lazurio App Signing Trial
 
 jobs:
   macos:
@@ -91,19 +94,20 @@ jobs:
           pnpm exec electron-builder --config trial/electron-builder.trial.yml \
             --mac zip --arm64 --publish never \
             -c.appId=io.lazurio.app.trial \
+            "-c.productName=$TRIAL_NAME" \
             "-c.mac.identity=Lazurio Signing Trial" \
             -c.mac.hardenedRuntime=true \
             -c.mac.entitlements=trial/entitlements.mac.self-signed.plist \
             -c.mac.notarize=false \
             "-c.extraMetadata.version=$TRIAL_VERSION" \
             -c.directories.output=trial/out/signed
-          node scripts/check-helper-versions.ts "trial/out/signed/mac-arm64/Lazurio App.app/Contents/Resources/helpers" "$TRIAL_VERSION"
+          node scripts/check-helper-versions.ts "trial/out/signed/mac-arm64/$TRIAL_NAME.app/Contents/Resources/helpers" "$TRIAL_VERSION"
       - name: Runtime flag and entitlements of every helper
         working-directory: apps/desktop/trial
-        run: ./check-signature-macos.sh "out/signed/mac-arm64/Lazurio App.app"
+        run: ./check-signature-macos.sh "out/signed/mac-arm64/$TRIAL_NAME.app"
       - name: The signed app starts
         working-directory: apps/desktop/trial
-        run: ./launch-check-macos.sh "out/signed/mac-arm64/Lazurio App.app"
+        run: ./launch-check-macos.sh "out/signed/mac-arm64/$TRIAL_NAME.app"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: lazurio-app-macos-self-signed
