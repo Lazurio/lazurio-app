@@ -3,7 +3,8 @@
 # LAZURIO_APP_TRIAL_SIGN_IN_FILE set, each address the app opens in the system's browser (the
 # account's sign-in and the network's) also goes to that file. The version carries no -nightly, so
 # a Windows build behaves as a stable one (no built-in network). Its update feed is on the loopback
-# (trial/electron-builder.trial.yml), so it never updates itself. On a Mac it has the trial identity
+# (trial/electron-builder.trial.yml), so it never updates itself. With LAZURIO_APP_TRIAL_LOG_FILE
+# set, the app's log also goes to that file, the run after a restart included. On a Mac it has the trial identity
 # io.lazurio.app.trial and an ad hoc signature. Nothing is signed beyond that, tagged or published.
 name: Trial build with the sign-in file
 
@@ -21,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TRIAL_VERSION: 0.1.7-trial.1
+  TRIAL_VERSION: 0.1.7-trial.2
 
 jobs:
   windows:
