@@ -1,0 +1,114 @@
+# Trial only (not for merge): builds of the pull request's head for the onboarding rehearsal on a
+# Windows notebook and a Mac (Apple silicon), as a run's artifacts. With
+# LAZURIO_APP_TRIAL_SIGN_IN_FILE set, each address the app opens in the system's browser (the
+# account's sign-in and the network's) also goes to that file. The version carries no -nightly, so
+# a Windows build behaves as a stable one (no built-in network). Its update feed is on the loopback
+# (trial/electron-builder.trial.yml), so it never updates itself. With LAZURIO_APP_TRIAL_LOG_FILE
+# set, the app's log also goes to that file, the run after a restart included. On a Mac it has the trial identity
+# io.lazurio.app.trial and an ad hoc signature. Nothing is signed beyond that, tagged or published.
+name: Trial build with the sign-in file
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/trial-sign-in-file.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trial-sign-in-file-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRIAL_VERSION: 0.1.7-trial.2
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers --release --app-version ${{ env.TRIAL_VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: pnpm --filter @lazurio/app-desktop build
+      - name: Package
+        shell: pwsh
+        working-directory: apps/desktop
+        run: |
+          pnpm exec electron-builder --config trial/electron-builder.trial.yml `
+            --win nsis --x64 --publish never `
+            "-c.extraMetadata.version=$env:TRIAL_VERSION" `
+            "-c.directories.output=trial/out/sign-in-file" `
+            "-c.nsis.differentialPackage=false"
+          if ($LASTEXITCODE -ne 0) { throw "Packaging failed." }
+          node scripts/check-helper-versions.ts "trial/out/sign-in-file/win-unpacked/resources/helpers" $env:TRIAL_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "The helpers name another version." }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lazurio-app-windows-sign-in-file
+          path: apps/desktop/trial/out/sign-in-file/Lazurio-App-Setup-*.exe
+          retention-days: 14
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: helpers/tailnet/go.mod
+          cache-dependency-path: helpers/tailnet/go.sum
+      - run: rustup toolchain install
+        working-directory: helpers/device
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lazurio/app-desktop ensure:electron
+      - run: pnpm build:helpers --release --app-version ${{ env.TRIAL_VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: pnpm --filter @lazurio/app-desktop build
+      - name: Package
+        working-directory: apps/desktop
+        env:
+          # electron-builder skips signing on pull requests, even the ad hoc signature, which uses no
+          # secret (trial/electron-builder.trial.yml); this job holds no signing secret.
+          CSC_FOR_PULL_REQUEST: "true"
+        run: |
+          pnpm exec electron-builder --config trial/electron-builder.trial.yml \
+            --mac zip --arm64 --publish never \
+            -c.appId=io.lazurio.app.trial \
+            "-c.extraMetadata.version=$TRIAL_VERSION" \
+            -c.directories.output=trial/out/sign-in-file
+          node scripts/check-helper-versions.ts "trial/out/sign-in-file/mac-arm64/Lazurio App.app/Contents/Resources/helpers" "$TRIAL_VERSION"
+      - name: Signature and launch
+        working-directory: apps/desktop/trial
+        run: ./launch-check-macos.sh "out/sign-in-file/mac-arm64/Lazurio App.app"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lazurio-app-macos-sign-in-file
+          path: apps/desktop/trial/out/sign-in-file/*.zip
+          retention-days: 14
+          if-no-files-found: error

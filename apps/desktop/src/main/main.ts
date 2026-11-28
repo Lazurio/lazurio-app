@@ -97,13 +97,40 @@ const testHooks = Effect.gen(function* () {
     !Electron.app.isPackaged &&
     (yield* Config.Boolean("LAZURIO_APP_E2E").pipe(Config.withDefault(false)));
   if (!enabled) {
+    // Trial build only (never in main): each address the app opens in the system's browser, the
+    // account's sign-in and the network's, also goes to the file named here, for a rehearsal.
+    const signInFile = Option.getOrUndefined(
+      yield* Config.option(Config.String("LAZURIO_APP_TRIAL_SIGN_IN_FILE")),
+    );
+    const record = (kind: string, address: string) => {
+      if (signInFile === undefined) return;
+      try {
+        // @effect-diagnostics-next-line globalDate:off - A plain timestamp in a rehearsal's file.
+        NodeFS.appendFileSync(signInFile, `${new Date().toISOString()} ${kind} ${address}\n`, {
+          mode: 0o600,
+        });
+      } catch {
+        // A rehearsal's file that cannot be written changes nothing for the app.
+      }
+    };
+    const kindOf = (address: string) =>
+      URL.parse(address)?.hostname.startsWith("headscale.") === true ? "network" : "external";
     return {
-      observer: Hardening.electronObserver,
+      observer: {
+        ...Hardening.electronObserver,
+        openExternally: (address: string) => {
+          record(kindOf(address), address);
+          Hardening.electronObserver.openExternally(address);
+        },
+      },
       remoteUrl: Option.none<string>(),
       tailnetHelper: Option.none<Helpers.HelperBinary>(),
       deviceHelper: Option.none<Helpers.HelperBinary>(),
       authIssuer: Option.none<string>(),
-      openBrowser: openInSystemBrowser,
+      openBrowser: (address: string) => {
+        record("account", address);
+        return openInSystemBrowser(address);
+      },
       helperStarted: (_name: string, _pid: number) => {},
       fixtures: false,
       notice: systemNotice,
@@ -510,7 +537,30 @@ const deviceDirectory = Effect.gen(function* () {
 // GEN5 after it, opens the same sign-in, tailnet nodes and settings (docs/adr/0005, point 1).
 const DATA_FOLDER = "Lazurio App";
 
+// Trial build only (never in main): the app's log also goes to the file named here, the run that
+// starts again included, whose output a scheduled task does not keep. Each line carries its PID.
+const teeTrialLog = (file: string | undefined) => {
+  if (file === undefined || file === "") return;
+  for (const stream of [process.stdout, process.stderr]) {
+    const write = stream.write.bind(stream) as (...args: Array<unknown>) => boolean;
+    stream.write = ((chunk: unknown, ...rest: Array<unknown>) => {
+      try {
+        NodeFS.appendFileSync(file, `[${process.pid}] ${String(chunk)}`, { mode: 0o600 });
+      } catch {
+        // A rehearsal's file that cannot be written changes nothing for the app.
+      }
+      return write(chunk, ...rest);
+    }) as typeof stream.write;
+  }
+};
+
 const program = Effect.gen(function* () {
+  teeTrialLog(
+    Option.getOrUndefined(yield* Config.option(Config.String("LAZURIO_APP_TRIAL_LOG_FILE"))),
+  );
+  // Trial build only: where a start is, so a start that hangs shows its last step.
+  const step = (name: string) => Effect.logInfo("start step", { step: name, pid: process.pid });
+  yield* step("begin");
   const path = yield* Path.Path;
   Electron.app.setPath("userData", path.join(Electron.app.getPath("appData"), DATA_FOLDER));
   const hooks = yield* testHooks;
@@ -614,6 +664,7 @@ const program = Effect.gen(function* () {
       }),
   );
   yield* Effect.promise(() => Electron.app.whenReady());
+  yield* step("ready");
   // A packaged app on Windows starts, hidden, when the person signs in (Lifecycle.loginItem).
   const loginItem = Lifecycle.loginItem({ platform, packaged: Electron.app.isPackaged });
   if (Option.isSome(loginItem)) {
@@ -647,12 +698,14 @@ const program = Effect.gen(function* () {
   }
   const fileSystem = yield* FileSystem.FileSystem;
   const keystore = keystoreOn(yield* HostProcess.Platform, !Electron.app.isPackaged);
+  yield* step("helpers started");
   yield* KeystoreCheck.run({
     keystore,
     userData: Electron.app.getPath("userData"),
     appVersion: Electron.app.getVersion(),
     allowWithoutKeystore: !Electron.app.isPackaged,
   });
+  yield* step("keystore checked");
   const stateRoot = path.join(Electron.app.getPath("userData"), "tailnets");
   // The app's own sign-in with Lazurio Auth, one for the person's networks and Agent Desktop.
   // The address of the account's sign-in under way; a change reaches the windows' status.
@@ -676,7 +729,9 @@ const program = Effect.gen(function* () {
       }).pipe(Layer.provide(FetchHttpClient.layer)),
     ),
   );
+  yield* step("account opened");
   const joining = yield* tailnetsToJoin;
+  yield* step("tailnets chosen");
   // Without the Organization's network, a page of it says what is missing in the page's place
   // (MainWindow, kind "network"); the status column, a surface for support, stays hidden.
   const tailnetHelper = helpers.find((helper) => helper.status.name === "lazurio-tailnet");
@@ -696,6 +751,7 @@ const program = Effect.gen(function* () {
             }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
         })
       : Tailnet.noTailnets;
+  yield* step("tailnets run");
   // Agent Desktop (docs/adr/0006): the Device helper of the helpers list, if this build has it.
   // Its service reads the helper outside the helpers' scope, so the helper's last message after
   // Shutdown reaches the updater; without the helper the computer is always idle.
@@ -1165,6 +1221,7 @@ const program = Effect.gen(function* () {
     path.join(Electron.app.getPath("userData"), "tray.json"),
     hooks.notice(text.tray.hiddenNotice),
   );
+  yield* step("window opens");
   yield* Effect.raceFirst(
     MainWindow.open({
       preloadPath: path.join(appPath, "dist-electron", "preload.cjs"),
